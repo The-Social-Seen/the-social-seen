@@ -1,0 +1,66 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import fs from 'fs'
+import path from 'path'
+import GlobalError from '../error'
+
+describe('GlobalError', () => {
+  const defaultProps = {
+    error: new Error('test') as Error & { digest?: string },
+    reset: vi.fn(),
+  }
+
+  it('renders without crashing', () => {
+    const { container } = render(<GlobalError {...defaultProps} />)
+    expect(container.firstChild).toBeTruthy()
+  })
+
+  it('displays the heading text', () => {
+    render(<GlobalError {...defaultProps} />)
+    expect(
+      screen.getByRole('heading', { level: 1 }).textContent,
+    ).toBe('Something went wrong')
+  })
+
+  it('has a "Try Again" button', () => {
+    render(<GlobalError {...defaultProps} />)
+    expect(
+      screen.getByRole('button', { name: /try again/i }),
+    ).toBeDefined()
+  })
+
+  it('calls reset exactly once when "Try Again" is clicked', () => {
+    const reset = vi.fn()
+    render(<GlobalError error={new Error('test')} reset={reset} />)
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }))
+    expect(reset).toHaveBeenCalledTimes(1)
+  })
+
+  it('has a secondary nav link pointing to /', () => {
+    render(<GlobalError {...defaultProps} />)
+    const link = screen.getByRole('link', { name: /back to home/i })
+    expect(link.getAttribute('href')).toBe('/')
+  })
+
+  it('does NOT show digest when absent', () => {
+    render(<GlobalError {...defaultProps} />)
+    expect(screen.queryByText(/error ref/i)).toBeNull()
+  })
+
+  it('shows digest when present', () => {
+    const errorWithDigest = Object.assign(new Error('test'), {
+      digest: 'abc-123',
+    })
+    render(<GlobalError error={errorWithDigest} reset={vi.fn()} />)
+    expect(screen.getByText(/error ref:.*abc-123/i)).toBeDefined()
+  })
+
+  it('source file includes "use client" directive', () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, '../error.tsx'),
+      'utf-8',
+    )
+    expect(source).toContain("'use client'")
+  })
+})

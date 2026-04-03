@@ -72,7 +72,7 @@ describe('updateSession middleware', () => {
     await updateSession(req)
 
     expect(NextResponse.redirect).toHaveBeenCalledOnce()
-    const redirectUrl: URL = vi.mocked(NextResponse.redirect).mock.calls[0][0]
+    const redirectUrl = vi.mocked(NextResponse.redirect).mock.calls[0][0] as URL
     expect(redirectUrl.pathname).toBe('/login')
     expect(redirectUrl.searchParams.get('error')).toBe('configuration')
   })
@@ -94,7 +94,7 @@ describe('updateSession middleware', () => {
     await updateSession(makeRequest('/profile'))
 
     expect(NextResponse.redirect).toHaveBeenCalledOnce()
-    const redirectUrl: URL = vi.mocked(NextResponse.redirect).mock.calls[0][0]
+    const redirectUrl = vi.mocked(NextResponse.redirect).mock.calls[0][0] as URL
     expect(redirectUrl.pathname).toBe('/login')
   })
 
@@ -103,7 +103,7 @@ describe('updateSession middleware', () => {
 
     await updateSession(makeRequest('/profile'))
 
-    const redirectUrl: URL = vi.mocked(NextResponse.redirect).mock.calls[0][0]
+    const redirectUrl = vi.mocked(NextResponse.redirect).mock.calls[0][0] as URL
     expect(redirectUrl.searchParams.get('redirect')).toBe('/profile')
   })
 
@@ -113,7 +113,7 @@ describe('updateSession middleware', () => {
     await updateSession(makeRequest('/bookings'))
 
     expect(NextResponse.redirect).toHaveBeenCalledOnce()
-    const redirectUrl: URL = vi.mocked(NextResponse.redirect).mock.calls[0][0]
+    const redirectUrl = vi.mocked(NextResponse.redirect).mock.calls[0][0] as URL
     expect(redirectUrl.pathname).toBe('/login')
   })
 
@@ -123,7 +123,7 @@ describe('updateSession middleware', () => {
     await updateSession(makeRequest('/admin'))
 
     expect(NextResponse.redirect).toHaveBeenCalledOnce()
-    const redirectUrl: URL = vi.mocked(NextResponse.redirect).mock.calls[0][0]
+    const redirectUrl = vi.mocked(NextResponse.redirect).mock.calls[0][0] as URL
     expect(redirectUrl.pathname).toBe('/login')
   })
 
