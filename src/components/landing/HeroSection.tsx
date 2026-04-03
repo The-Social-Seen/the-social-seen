@@ -70,8 +70,8 @@ export function HeroSection() {
           variants={fadeUpVariants}
           className="mx-auto mb-12 max-w-2xl font-sans text-lg leading-relaxed text-white/80 md:text-xl"
         >
-          A curated community of London professionals who believe the best
-          things in life are experienced together.
+          Supper clubs. Gallery openings. Rooftop drinks. London&apos;s most
+          interesting professionals, one unforgettable evening at a time.
         </motion.p>
 
         {/* CTA Buttons */}
@@ -87,7 +87,7 @@ export function HeroSection() {
               "transition-all duration-300 hover:bg-gold/90 hover:shadow-lg hover:shadow-gold/25"
             )}
           >
-            Explore Events
+            See What&apos;s On
           </Link>
           <Link
             href="/join"
@@ -97,7 +97,7 @@ export function HeroSection() {
               "transition-all duration-300 hover:bg-gold/10"
             )}
           >
-            Join The Social Seen
+            Become a Member
           </Link>
         </motion.div>
       </motion.div>

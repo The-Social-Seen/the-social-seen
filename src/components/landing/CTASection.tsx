@@ -42,9 +42,9 @@ export function CTASection() {
           </h2>
 
           <p className="mx-auto mb-12 max-w-xl font-sans text-lg leading-relaxed text-white/60">
-            Join a community where every event is an opportunity to meet
-            fascinating people, try something new, and create memories that
-            last. Your next great story starts here.
+            Join 1,000+ London professionals who&apos;ve swapped small talk
+            for supper clubs, gallery openings, and rooftop drinks. Your
+            next great evening starts here.
           </p>
 
           <motion.div
@@ -63,7 +63,7 @@ export function CTASection() {
                 "active:scale-[0.98]"
               )}
             >
-              Join The Social Seen
+              Become a Member
             </Link>
           </motion.div>
 
@@ -74,7 +74,7 @@ export function CTASection() {
             transition={{ delay: 0.6, duration: 0.6 }}
             className="mt-6 font-sans text-sm text-white/40"
           >
-            Free to join. No commitments. Just great experiences.
+            Free to join. No commitments. Just great evenings.
           </motion.p>
         </motion.div>
       </div>

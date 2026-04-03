@@ -2,55 +2,46 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { motion, AnimatePresence } from "framer-motion";
+import { useRouter } from "next/navigation";
 import { Sun, Moon, Menu, X } from "lucide-react";
+import type { User } from "@supabase/supabase-js";
 import { useTheme } from "@/components/layout/ThemeProvider";
+import { AvatarDropdown } from "@/components/layout/AvatarDropdown";
+import { MobileMenu } from "@/components/layout/MobileMenu";
+import { NAV_LINKS_PUBLIC, NAV_LINKS_MEMBER } from "@/lib/constants";
 import { cn } from "@/lib/utils/cn";
 
-const navLinks = [
-  { label: "Events", href: "#events" },
-  { label: "Gallery", href: "#gallery" },
-  { label: "About", href: "#about" },
-  { label: "Join", href: "#join" },
-];
+function getInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return (parts[0]?.[0] ?? "?").toUpperCase();
+}
 
-const menuVariants = {
-  closed: {
-    x: "100%",
-    transition: {
-      type: "spring" as const,
-      stiffness: 400,
-      damping: 40,
-    },
-  },
-  open: {
-    x: "0%",
-    transition: {
-      type: "spring" as const,
-      stiffness: 400,
-      damping: 40,
-    },
-  },
-};
-
-const menuItemVariants = {
-  closed: { opacity: 0, x: 50 },
-  open: (i: number) => ({
-    opacity: 1,
-    x: 0,
-    transition: {
-      delay: 0.1 + i * 0.08,
-      type: "spring" as const,
-      stiffness: 300,
-      damping: 30,
-    },
-  }),
-};
+function ThemeToggle({ theme, onToggle, className }: {
+  theme: string; onToggle: () => void; className?: string;
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      className={cn(
+        "flex h-11 w-11 items-center justify-center rounded-full",
+        "border border-border transition-all duration-200",
+        "hover:border-gold hover:text-gold text-text-secondary",
+        className
+      )}
+      aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+    >
+      {theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+    </button>
+  );
+}
 
 export function Header() {
   const { theme, toggleTheme } = useTheme();
+  const router = useRouter();
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
 
   const handleScroll = useCallback(() => {
     setIsScrolled(window.scrollY > 20);
@@ -61,19 +52,67 @@ export function Header() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, [handleScroll]);
 
+  // Auth state
+  useEffect(() => {
+    let subscription: { unsubscribe: () => void } | undefined;
+
+    async function initAuth() {
+      try {
+        const { createClient } = await import("@/lib/supabase/client");
+        const supabase = createClient();
+
+        const {
+          data: { user: currentUser },
+        } = await supabase.auth.getUser();
+        setUser(currentUser);
+
+        const {
+          data: { subscription: sub },
+        } = supabase.auth.onAuthStateChange((_event, session) => {
+          setUser(session?.user ?? null);
+        });
+        subscription = sub;
+      } catch {
+        setUser(null);
+      }
+    }
+
+    initAuth();
+    return () => subscription?.unsubscribe();
+  }, []);
+
   // Lock body scroll when mobile menu is open
   useEffect(() => {
-    if (isMobileMenuOpen) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
+    document.body.style.overflow = isMobileMenuOpen ? "hidden" : "";
     return () => {
       document.body.style.overflow = "";
     };
   }, [isMobileMenuOpen]);
 
   const closeMobileMenu = () => setIsMobileMenuOpen(false);
+
+  const handleSignOut = async () => {
+    try {
+      const { createClient } = await import("@/lib/supabase/client");
+      const supabase = createClient();
+      await supabase.auth.signOut();
+      setUser(null);
+      closeMobileMenu();
+      router.push("/");
+      router.refresh();
+    } catch {
+      // Ignore sign-out errors
+    }
+  };
+
+  const navLinks = user
+    ? NAV_LINKS_MEMBER
+    : NAV_LINKS_PUBLIC.filter((l) => l.label !== "Sign In");
+
+  const userFullName =
+    user?.user_metadata?.full_name ?? user?.email ?? "Member";
+  const userInitials = getInitials(userFullName);
+  const avatarUrl = (user?.user_metadata?.avatar_url as string) ?? null;
 
   return (
     <>
@@ -116,50 +155,40 @@ export function Header() {
                 </Link>
               ))}
 
-              {/* Theme Toggle */}
-              <button
-                onClick={toggleTheme}
-                className={cn(
-                  "ml-4 flex h-9 w-9 items-center justify-center rounded-full",
-                  "border border-border transition-all duration-200",
-                  "hover:border-gold hover:text-gold",
-                  "text-text-secondary"
-                )}
-                aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
-              >
-                {theme === "light" ? (
-                  <Moon className="h-4 w-4" />
-                ) : (
-                  <Sun className="h-4 w-4" />
-                )}
-              </button>
+              <ThemeToggle theme={theme} onToggle={toggleTheme} className="ml-4" />
+
+              {/* Auth: Avatar dropdown or Sign In */}
+              {user ? (
+                <div className="ml-2">
+                  <AvatarDropdown
+                    avatarUrl={avatarUrl}
+                    initials={userInitials}
+                    onSignOut={handleSignOut}
+                  />
+                </div>
+              ) : (
+                <Link
+                  href="/login"
+                  className={cn(
+                    "ml-2 inline-flex items-center justify-center rounded-full px-5 py-2",
+                    "border border-border text-sm font-medium text-text-secondary",
+                    "transition-all duration-200",
+                    "hover:border-gold hover:text-gold"
+                  )}
+                >
+                  Sign In
+                </Link>
+              )}
             </nav>
 
             {/* Mobile Controls */}
             <div className="flex items-center gap-3 md:hidden">
-              {/* Theme Toggle (Mobile) */}
-              <button
-                onClick={toggleTheme}
-                className={cn(
-                  "flex h-9 w-9 items-center justify-center rounded-full",
-                  "border border-border transition-all duration-200",
-                  "hover:border-gold hover:text-gold",
-                  "text-text-secondary"
-                )}
-                aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
-              >
-                {theme === "light" ? (
-                  <Moon className="h-4 w-4" />
-                ) : (
-                  <Sun className="h-4 w-4" />
-                )}
-              </button>
+              <ThemeToggle theme={theme} onToggle={toggleTheme} />
 
-              {/* Hamburger Button */}
               <button
                 onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
                 className={cn(
-                  "flex h-9 w-9 items-center justify-center rounded-full",
+                  "flex h-11 w-11 items-center justify-center rounded-full",
                   "border border-border transition-all duration-200",
                   "hover:border-gold hover:text-gold",
                   "text-text-secondary"
@@ -178,88 +207,16 @@ export function Header() {
         </div>
       </header>
 
-      {/* Mobile Menu Overlay */}
-      <AnimatePresence>
-        {isMobileMenuOpen && (
-          <>
-            {/* Backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="fixed inset-0 z-40 bg-[var(--color-overlay)]"
-              onClick={closeMobileMenu}
-              aria-hidden="true"
-            />
-
-            {/* Slide-over Drawer */}
-            <motion.div
-              variants={menuVariants}
-              initial="closed"
-              animate="open"
-              exit="closed"
-              className={cn(
-                "fixed inset-y-0 right-0 z-50 w-full max-w-sm",
-                "bg-bg-primary shadow-2xl",
-                "flex flex-col"
-              )}
-            >
-              {/* Drawer Header */}
-              <div className="flex h-16 items-center justify-between border-b border-border px-6 sm:h-20">
-                <span className="font-serif text-xl font-bold tracking-tight text-text-primary">
-                  The Social <span className="text-gold">Seen</span>
-                </span>
-                <button
-                  onClick={closeMobileMenu}
-                  className={cn(
-                    "flex h-9 w-9 items-center justify-center rounded-full",
-                    "border border-border transition-all duration-200",
-                    "hover:border-gold hover:text-gold",
-                    "text-text-secondary"
-                  )}
-                  aria-label="Close menu"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-
-              {/* Drawer Nav Links */}
-              <nav className="flex flex-1 flex-col justify-center gap-2 px-6">
-                {navLinks.map((link, i) => (
-                  <motion.div
-                    key={link.label}
-                    variants={menuItemVariants}
-                    custom={i}
-                    initial="closed"
-                    animate="open"
-                    exit="closed"
-                  >
-                    <Link
-                      href={link.href}
-                      onClick={closeMobileMenu}
-                      className={cn(
-                        "block rounded-xl px-4 py-4 font-serif text-2xl font-semibold",
-                        "text-text-primary transition-all duration-200",
-                        "hover:bg-bg-secondary hover:text-gold"
-                      )}
-                    >
-                      {link.label}
-                    </Link>
-                  </motion.div>
-                ))}
-              </nav>
-
-              {/* Drawer Footer */}
-              <div className="border-t border-border px-6 py-6">
-                <p className="text-center text-sm text-text-tertiary">
-                  Where Connections Become Stories
-                </p>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+      <MobileMenu
+        isOpen={isMobileMenuOpen}
+        onClose={closeMobileMenu}
+        user={user}
+        navLinks={navLinks}
+        userFullName={userFullName}
+        userInitials={userInitials}
+        avatarUrl={avatarUrl}
+        onSignOut={handleSignOut}
+      />
     </>
   );
 }

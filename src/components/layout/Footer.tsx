@@ -5,26 +5,27 @@ import { Instagram, Twitter, Linkedin, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 
 const quickLinks = [
-  { label: "Events", href: "#events" },
-  { label: "Gallery", href: "#gallery" },
-  { label: "Join", href: "#join" },
-  { label: "Login", href: "/login" },
+  { label: "Events", href: "/events" },
+  { label: "Gallery", href: "/gallery" },
+  { label: "About", href: "/about" },
+  { label: "Join", href: "/join" },
+  { label: "Sign In", href: "/login" },
 ];
 
 const socialLinks = [
   {
     label: "Instagram",
-    href: "https://instagram.com",
+    href: "#",
     icon: Instagram,
   },
   {
     label: "X (Twitter)",
-    href: "https://x.com",
+    href: "#",
     icon: Twitter,
   },
   {
     label: "LinkedIn",
-    href: "https://linkedin.com",
+    href: "#",
     icon: Linkedin,
   },
 ];
@@ -44,8 +45,8 @@ export function Footer() {
               </h3>
             </Link>
             <p className="max-w-xs text-sm leading-relaxed text-text-secondary">
-              A curated community for those who believe the best moments are
-              experienced together. Where connections become stories.
+              Curated experiences for London&apos;s most interesting
+              professionals.
             </p>
 
             {/* Social Icons */}
@@ -54,8 +55,10 @@ export function Footer() {
                 <a
                   key={social.label}
                   href={social.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  {...(social.href !== "#" && {
+                    target: "_blank",
+                    rel: "noopener noreferrer",
+                  })}
                   className={cn(
                     "flex h-10 w-10 items-center justify-center rounded-full",
                     "border border-border transition-all duration-200",
