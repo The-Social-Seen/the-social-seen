@@ -6,3 +6,5 @@ export {
   getRelatedEvents,
   getUserBookingForEvent,
 } from './events'
+
+export { getProfile, getMyBookings } from './profile'
