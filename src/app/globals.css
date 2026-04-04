@@ -1,26 +1,301 @@
 @import "tailwindcss";
 
+/* ============================================
+   THE SOCIAL SEEN - Global Styles
+   Brand: Soho House meets Time Out
+   ============================================ */
+
+/* --- Light Mode (Default) --- */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --color-bg-primary: #FAF7F2;
+  --color-bg-secondary: #F3EDE4;
+  --color-bg-tertiary: #E8E0D4;
+  --color-bg-card: #FFFFFF;
+  --color-bg-elevated: #FFFFFF;
+
+  --color-text-primary: #1C1C1E;
+  --color-text-secondary: #4A4A4C;
+  --color-text-tertiary: #8E8E93;
+  --color-text-inverse: #FAF7F2;
+
+  --color-gold: #C9A96E;
+  --color-gold-light: #D4B97F;
+  --color-gold-dark: #B8944F;
+  --color-blush: #E8D5C4;
+  --color-blush-light: #F0E3D6;
+  --color-blush-dark: #D4BCA8;
+
+  --color-border: #E0D8CC;
+  --color-border-light: #EDE7DD;
+  --color-border-focus: #C9A96E;
+
+  --color-overlay: rgba(28, 28, 30, 0.5);
+  --color-shadow: rgba(28, 28, 30, 0.08);
+
+  --header-bg: rgba(250, 247, 242, 0.8);
+  --header-border: rgba(224, 216, 204, 0.6);
 }
 
+/* --- Dark Mode --- */
+.dark {
+  --color-bg-primary: #1C1C1E;
+  --color-bg-secondary: #2C2C2E;
+  --color-bg-tertiary: #3A3A3C;
+  --color-bg-card: #2C2C2E;
+  --color-bg-elevated: #3A3A3C;
+
+  --color-text-primary: #FAF7F2;
+  --color-text-secondary: #C7C7CC;
+  --color-text-tertiary: #8E8E93;
+  --color-text-inverse: #1C1C1E;
+
+  --color-gold: #C9A96E;
+  --color-gold-light: #D4B97F;
+  --color-gold-dark: #B8944F;
+  --color-blush: #E8D5C4;
+  --color-blush-light: #F0E3D6;
+  --color-blush-dark: #D4BCA8;
+
+  --color-border: #3A3A3C;
+  --color-border-light: #48484A;
+  --color-border-focus: #C9A96E;
+
+  --color-overlay: rgba(0, 0, 0, 0.6);
+  --color-shadow: rgba(0, 0, 0, 0.3);
+
+  --header-bg: rgba(28, 28, 30, 0.8);
+  --header-border: rgba(58, 58, 60, 0.6);
+}
+
+/* --- Tailwind v4 Theme Mapping --- */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* Background colors */
+  --color-bg-primary: var(--color-bg-primary);
+  --color-bg-secondary: var(--color-bg-secondary);
+  --color-bg-tertiary: var(--color-bg-tertiary);
+  --color-bg-card: var(--color-bg-card);
+  --color-bg-elevated: var(--color-bg-elevated);
+
+  /* Text colors */
+  --color-text-primary: var(--color-text-primary);
+  --color-text-secondary: var(--color-text-secondary);
+  --color-text-tertiary: var(--color-text-tertiary);
+  --color-text-inverse: var(--color-text-inverse);
+
+  /* Brand accent colors */
+  --color-gold: var(--color-gold);
+  --color-gold-light: var(--color-gold-light);
+  --color-gold-dark: var(--color-gold-dark);
+  --color-blush: var(--color-blush);
+  --color-blush-light: var(--color-blush-light);
+  --color-blush-dark: var(--color-blush-dark);
+
+  /* Border colors */
+  --color-border: var(--color-border);
+  --color-border-light: var(--color-border-light);
+  --color-border-focus: var(--color-border-focus);
+
+  /* Explicit brand colors */
+  --color-charcoal: #1C1C1E;
+  --color-cream: #FAF7F2;
+
+  /* Fonts */
+  --font-serif: var(--font-playfair);
+  --font-sans: var(--font-dm-sans);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ============================================
+   BASE STYLES
+   ============================================ */
+
+*,
+*::before,
+*::after {
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.2s ease;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: var(--font-dm-sans), system-ui, sans-serif;
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+/* --- Typography --- */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-playfair), Georgia, serif;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+h1 { font-size: 3.5rem; }
+h2 { font-size: 2.5rem; }
+h3 { font-size: 1.75rem; }
+h4 { font-size: 1.25rem; }
+
+p {
+  color: var(--color-text-secondary);
+  line-height: 1.7;
+}
+
+a {
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+/* --- Selection --- */
+::selection {
+  background-color: var(--color-gold);
+  color: var(--color-text-inverse);
+}
+
+/* ============================================
+   CUSTOM SCROLLBAR
+   ============================================ */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-gold);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-gold-dark);
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-gold) var(--color-bg-secondary);
+}
+
+/* ============================================
+   GRADIENT UTILITIES
+   ============================================ */
+
+.gradient-gold {
+  background: linear-gradient(135deg, var(--color-gold-dark) 0%, var(--color-gold) 50%, var(--color-gold-light) 100%);
+}
+
+.gradient-gold-text {
+  background: linear-gradient(135deg, var(--color-gold-dark) 0%, var(--color-gold) 50%, var(--color-gold-light) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.gradient-hero {
+  background: linear-gradient(180deg, transparent 0%, var(--color-bg-primary) 100%);
+}
+
+.gradient-card {
+  background: linear-gradient(
+    160deg,
+    var(--color-bg-card) 0%,
+    var(--color-bg-secondary) 100%
+  );
+}
+
+.gradient-warm {
+  background: linear-gradient(
+    135deg,
+    var(--color-blush-light) 0%,
+    var(--color-gold-light) 50%,
+    var(--color-blush) 100%
+  );
+}
+
+.gradient-dark-overlay {
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(28, 28, 30, 0.4) 50%,
+    rgba(28, 28, 30, 0.85) 100%
+  );
+}
+
+.gradient-border {
+  border-image: linear-gradient(135deg, var(--color-gold-dark), var(--color-gold-light)) 1;
+}
+
+/* ============================================
+   ANIMATION UTILITIES
+   ============================================ */
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-bg-secondary) 25%,
+    var(--color-bg-tertiary) 50%,
+    var(--color-bg-secondary) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.6s ease-out forwards;
+}
+
+@keyframes gold-shimmer {
+  0%, 100% { box-shadow: 0 0 8px 0 rgba(201, 169, 110, 0.15); }
+  50% { box-shadow: 0 0 24px 4px rgba(201, 169, 110, 0.3); }
+}
+
+.gold-shimmer {
+  animation: gold-shimmer 3s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gold-shimmer {
+    animation: none;
+  }
+}
+
+/* ============================================
+   FOCUS & ACCESSIBILITY
+   ============================================ */
+
+:focus-visible {
+  outline: 2px solid var(--color-gold);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Remove transition for users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
