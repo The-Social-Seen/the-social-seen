@@ -65,6 +65,17 @@ export const INTEREST_OPTIONS = [
 
 export type InterestValue = (typeof INTEREST_OPTIONS)[number]['value']
 
+// ── "How did you hear about us?" options (registration Step 1) ───────────────
+
+export const HEAR_ABOUT_OPTIONS = [
+  'A friend or colleague',
+  'Instagram',
+  'LinkedIn',
+  'Attended an event',
+  'Google search',
+  'Other',
+] as const
+
 // ── Pricing ───────────────────────────────────────────────────────────────────
 
 /** Prices are stored in pence. This constant makes intent explicit. */

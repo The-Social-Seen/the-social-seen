@@ -4,7 +4,7 @@
     {
       "name": "dev",
       "runtimeExecutable": "/usr/local/bin/node",
-      "runtimeArgs": ["node_modules/.bin/next", "dev", "--webpack", "--port", "6500"],
+      "runtimeArgs": ["node_modules/next/dist/bin/next", "dev", "--port", "6500"],
       "port": 6500,
       "env": {
         "PATH": "/usr/local/bin:/usr/bin:/bin"

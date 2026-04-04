@@ -263,6 +263,21 @@ a {
   animation: fade-in 0.6s ease-out forwards;
 }
 
+@keyframes gold-shimmer {
+  0%, 100% { box-shadow: 0 0 8px 0 rgba(201, 169, 110, 0.15); }
+  50% { box-shadow: 0 0 24px 4px rgba(201, 169, 110, 0.3); }
+}
+
+.gold-shimmer {
+  animation: gold-shimmer 3s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gold-shimmer {
+    animation: none;
+  }
+}
+
 /* ============================================
    FOCUS & ACCESSIBILITY
    ============================================ */
