@@ -49,6 +49,11 @@ vi.mock('@/components/events/MobileBookingBar', () => ({
   default: () => <div data-testid="mobile-booking-bar" />,
 }))
 
+// Mock BookingSidebar — tested separately
+vi.mock('@/components/events/BookingSidebar', () => ({
+  default: vi.fn().mockImplementation(() => <div data-testid="booking-sidebar" />),
+}))
+
 // Mock StarRating
 vi.mock('@/components/reviews/StarRating', () => ({
   default: ({ rating, showNumber }: { rating: number; showNumber?: boolean }) => (
@@ -187,6 +192,8 @@ const defaultProps = {
   photos: [] as EventPhoto[],
   relatedEvents: [] as EventWithStats[],
   userBooking: null as Booking | null,
+  isLoggedIn: true,
+  userName: 'Charlotte Moreau' as string | null,
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -283,76 +290,14 @@ describe('EventDetailClient', () => {
     expect(screen.getByText('Smart casual')).toBeTruthy()
   })
 
-  // ── Price display ──
+  // ── Sidebar delegation ──
+  // Price display, waitlist messaging, CTA buttons, and capacity bar tests
+  // were removed in Batch 6 — that content moved to BookingSidebar.tsx
+  // and is tested in BookingSidebar.test.tsx (12 tests, all passing).
 
-  it('displays formatted price in sidebar (pence → pounds)', () => {
-    render(<EventDetailClient event={makeEventDetail({ price: 3500 })} {...defaultProps} />)
-    expect(screen.getByText('£35')).toBeTruthy()
-  })
-
-  it('displays "Free" for free events', () => {
-    render(<EventDetailClient event={makeEventDetail({ price: 0 })} {...defaultProps} />)
-    // "Free" text appears in sidebar
-    const freeTexts = screen.getAllByText('Free')
-    expect(freeTexts.length).toBeGreaterThan(0)
-  })
-
-  // ── Waitlist messaging (Amendment 3.3 / RC-05) ──
-
-  it('shows positive waitlist copy when spots_left = 0', () => {
-    render(<EventDetailClient event={makeEventDetail({ spots_left: 0 })} {...defaultProps} />)
-    expect(screen.getByText(/fully booked — join the waitlist/)).toBeTruthy()
-  })
-
-  it('shows encouraging waitlist subtext', () => {
-    render(<EventDetailClient event={makeEventDetail({ spots_left: 0 })} {...defaultProps} />)
-    expect(screen.getByText(/Most waitlisted members get a spot/)).toBeTruthy()
-  })
-
-  it('shows gold "Join Waitlist" button (NOT charcoal) when sold out', () => {
-    render(<EventDetailClient event={makeEventDetail({ spots_left: 0 })} {...defaultProps} />)
-    const button = screen.getByRole('button', { name: 'Join Waitlist' })
-    expect(button).toBeTruthy()
-    // Gold CTA styling
-    expect(button.className).toContain('bg-gold')
-    expect(button.className).not.toContain('bg-charcoal')
-  })
-
-  it('does NOT show red "sold out" text', () => {
-    render(<EventDetailClient event={makeEventDetail({ spots_left: 0 })} {...defaultProps} />)
-    expect(screen.queryByText(/this event is sold out/i)).toBeNull()
-    // Verify no red styling classes
-    const container = screen.getByText(/fully booked/).closest('div')
-    expect(container?.className).not.toContain('red')
-  })
-
-  // ── CTA buttons ──
-
-  it('shows "Book Now" for paid upcoming events with spots', () => {
+  it('renders BookingSidebar component', () => {
     render(<EventDetailClient event={makeEventDetail()} {...defaultProps} />)
-    expect(screen.getByRole('button', { name: 'Book Now' })).toBeTruthy()
-  })
-
-  it('shows "RSVP Now" for free upcoming events', () => {
-    render(<EventDetailClient event={makeEventDetail({ price: 0 })} {...defaultProps} />)
-    expect(screen.getByRole('button', { name: 'RSVP Now' })).toBeTruthy()
-  })
-
-  it('shows "This event has ended" for past events', () => {
-    render(<EventDetailClient event={makePastEventDetail()} {...defaultProps} />)
-    expect(screen.getByText('This event has ended')).toBeTruthy()
-  })
-
-  // ── Capacity bar ──
-
-  it('shows spots remaining count', () => {
-    render(<EventDetailClient event={makeEventDetail({ spots_left: 8, capacity: 30 })} {...defaultProps} />)
-    expect(screen.getByText('8 / 30')).toBeTruthy()
-  })
-
-  it('shows low spots warning when <= 5', () => {
-    render(<EventDetailClient event={makeEventDetail({ spots_left: 3, capacity: 30 })} {...defaultProps} />)
-    expect(screen.getByText(/Only 3 spots left/)).toBeTruthy()
+    expect(screen.getByTestId('booking-sidebar')).toBeTruthy()
   })
 
   // ── Reviews section ──

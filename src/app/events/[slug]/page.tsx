@@ -6,6 +6,7 @@ import {
   getRelatedEvents,
   getUserBookingForEvent,
 } from "@/lib/supabase/queries/events";
+import { createServerClient } from "@/lib/supabase/server";
 import { isPastEvent } from "@/lib/utils/dates";
 import { resolveEventImage } from "@/lib/utils/images";
 import EventDetailClient from "@/components/events/EventDetailClient";
@@ -51,13 +52,20 @@ export default async function EventDetailPage({ params }: PageProps) {
 
   const isPast = isPastEvent(event.date_time);
 
-  // Fetch additional data in parallel (Amendment 3.5)
-  const [reviews, photos, relatedEvents, userBooking] = await Promise.all([
-    isPast ? getEventReviews(event.id) : Promise.resolve([] as ReviewWithAuthor[]),
-    isPast ? getEventPhotos(event.id) : Promise.resolve([] as EventPhoto[]),
-    getRelatedEvents(event.category, event.id),
-    getUserBookingForEvent(event.id),
-  ]);
+  // Fetch auth state + additional data in parallel (Amendment 3.5)
+  const supabase = await createServerClient();
+  const [{ data: { user } }, reviews, photos, relatedEvents, userBooking] =
+    await Promise.all([
+      supabase.auth.getUser(),
+      isPast ? getEventReviews(event.id) : Promise.resolve([] as ReviewWithAuthor[]),
+      isPast ? getEventPhotos(event.id) : Promise.resolve([] as EventPhoto[]),
+      getRelatedEvents(event.category, event.id),
+      getUserBookingForEvent(event.id),
+    ]);
+
+  // Get display name from user metadata (set during signup)
+  const userName: string | null =
+    (user?.user_metadata?.full_name as string) ?? null;
 
   return (
     <EventDetailClient
@@ -66,6 +74,8 @@ export default async function EventDetailPage({ params }: PageProps) {
       photos={photos}
       relatedEvents={relatedEvents}
       userBooking={userBooking}
+      isLoggedIn={!!user}
+      userName={userName}
     />
   );
 }

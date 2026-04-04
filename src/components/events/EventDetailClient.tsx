@@ -16,9 +16,9 @@ import {
 } from "lucide-react";
 import * as LucideIcons from "lucide-react";
 import { formatDateCard, formatDateFull, formatTimeRange, isPastEvent } from "@/lib/utils/dates";
-import { formatPrice } from "@/lib/utils/currency";
 import { resolveEventImage, resolveAvatarUrl, getInitials } from "@/lib/utils/images";
 import BookingModal from "@/components/events/BookingModal";
+import BookingSidebar from "@/components/events/BookingSidebar";
 import StarRating from "@/components/reviews/StarRating";
 import ReviewCard from "@/components/reviews/ReviewCard";
 import EventCard from "@/components/events/EventCard";
@@ -37,6 +37,8 @@ interface EventDetailClientProps {
   photos: EventPhoto[];
   relatedEvents: EventWithStats[];
   userBooking: Booking | null;
+  isLoggedIn: boolean;
+  userName: string | null;
 }
 
 const fadeInUp = {
@@ -63,6 +65,9 @@ export default function EventDetailClient({
   reviews,
   photos,
   relatedEvents,
+  userBooking,
+  isLoggedIn,
+  userName,
 }: EventDetailClientProps) {
   const [bookingOpen, setBookingOpen] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
@@ -347,161 +352,16 @@ export default function EventDetailClient({
               )}
             </div>
 
-            {/* Right column (1/3) - Sticky Booking Card */}
-            <div className="lg:w-1/3">
-              <div className="sticky top-8" ref={sidebarRef}>
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.5, delay: 0.2 }}
-                  className="overflow-hidden rounded-2xl border border-blush/40 bg-bg-card shadow-lg shadow-charcoal/5"
-                >
-                  <div className="p-6">
-                    {/* Price */}
-                    <div className="mb-6">
-                      {isFree ? (
-                        <span className="text-3xl font-bold text-success">
-                          Free
-                        </span>
-                      ) : (
-                        <div className="flex items-baseline gap-1">
-                          <span className="text-3xl font-bold text-gold">
-                            {formatPrice(event.price)}
-                          </span>
-                          <span className="text-sm text-text-primary/50">
-                            per person
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Date & Time */}
-                    <div className="mb-4 space-y-3">
-                      <div className="flex items-start gap-3">
-                        <Calendar className="mt-0.5 h-4 w-4 flex-shrink-0 text-gold" />
-                        <div>
-                          <p className="text-sm font-semibold text-text-primary">
-                            {formatDateFull(event.date_time)}
-                          </p>
-                          <p className="text-sm text-text-primary/50">
-                            {formatTimeRange(event.date_time, event.end_time)}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-start gap-3">
-                        <MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-gold" />
-                        <div>
-                          <p className="text-sm font-semibold text-text-primary">
-                            {event.venue_name}
-                          </p>
-                          <p className="text-sm text-text-primary/50">
-                            {event.venue_address}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Attendees */}
-                    <div className="mb-6 flex items-center gap-3 rounded-xl bg-bg-primary p-3">
-                      <Users className="h-4 w-4 text-gold" />
-                      <span className="text-sm text-text-primary/70">
-                        {event.confirmed_count} people going
-                      </span>
-                    </div>
-
-                    {/* Spots left / Waitlist messaging */}
-                    {!isPast && (
-                      <div className="mb-6">
-                        {event.spots_left !== null && event.spots_left > 0 ? (
-                          <div>
-                            <div className="mb-2 flex items-center justify-between text-sm">
-                              <span className="text-text-primary/60">
-                                Spots remaining
-                              </span>
-                              <span className="font-semibold text-text-primary">
-                                {event.spots_left} / {event.capacity}
-                              </span>
-                            </div>
-                            {/* Capacity bar: gold fill, cream track */}
-                            <div className="h-2 overflow-hidden rounded-full bg-cream">
-                              <div
-                                className="h-full rounded-full bg-gold transition-all"
-                                style={{
-                                  width: `${
-                                    event.capacity
-                                      ? ((event.capacity - event.spots_left) /
-                                          event.capacity) *
-                                        100
-                                      : 0
-                                  }%`,
-                                }}
-                              />
-                            </div>
-                            {event.spots_left <= 5 && (
-                              <p className="mt-2 text-xs font-medium text-gold">
-                                Only {event.spots_left} spots left — book soon!
-                              </p>
-                            )}
-                          </div>
-                        ) : event.spots_left === null ? null : (
-                          /* Positive waitlist messaging (Amendment 3.3 / RC-05) */
-                          <div className="rounded-xl bg-gold/5 border border-gold/20 p-4 text-center">
-                            <p className="text-sm font-semibold text-text-primary">
-                              This event is fully booked — join the waitlist
-                            </p>
-                            <p className="mt-1 text-xs text-text-primary/60">
-                              Most waitlisted members get a spot — we&apos;ll let you know the moment one opens
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* CTA Button */}
-                    {!isPast && (
-                      <>
-                        {!isSoldOut ? (
-                          <button
-                            onClick={() => setBookingOpen(true)}
-                            className="w-full rounded-2xl bg-gold py-4 text-sm font-semibold text-white shadow-lg shadow-gold/25 transition-all hover:bg-gold-dark hover:shadow-xl hover:shadow-gold/30 active:scale-[0.98]"
-                          >
-                            {isFree ? "RSVP Now" : "Book Now"}
-                          </button>
-                        ) : (
-                          /* Waitlist CTA: GOLD button (Amendment 3.3) */
-                          <button
-                            onClick={() => setBookingOpen(true)}
-                            className="w-full rounded-2xl bg-gold py-4 text-sm font-semibold text-white shadow-lg shadow-gold/25 transition-all hover:bg-gold-dark hover:shadow-xl hover:shadow-gold/30 active:scale-[0.98]"
-                          >
-                            Join Waitlist
-                          </button>
-                        )}
-                      </>
-                    )}
-
-                    {/* Past event badge */}
-                    {isPast && (
-                      <div className="rounded-xl bg-bg-primary p-4 text-center">
-                        <p className="text-sm font-medium text-text-primary/50">
-                          This event has ended
-                        </p>
-                        {event.avg_rating > 0 && (
-                          <div className="mt-2 flex items-center justify-center gap-2">
-                            <StarRating
-                              rating={event.avg_rating}
-                              size="sm"
-                            />
-                            <span className="text-sm font-semibold text-text-primary">
-                              {event.avg_rating.toFixed(1)}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </motion.div>
-              </div>
-            </div>
+            {/* Right column (1/3) - Booking Sidebar */}
+            <BookingSidebar
+              ref={sidebarRef}
+              event={event}
+              userBooking={userBooking}
+              isPast={isPast}
+              isLoggedIn={isLoggedIn}
+              userName={userName}
+              onBookClick={() => setBookingOpen(true)}
+            />
           </div>
         </section>
 
@@ -584,12 +444,12 @@ export default function EventDetailClient({
         sidebarRef={sidebarRef}
       />
 
-      {/* Booking Modal — uses legacy SocialEvent type, will be rewritten in Batch 6.
-          Cast needed until then; the modal displays mock data anyway. */}
+      {/* Booking Modal */}
       <BookingModal
-        event={event as never}
+        event={event}
         isOpen={bookingOpen}
         onClose={() => setBookingOpen(false)}
+        userName={userName}
       />
     </>
   );
