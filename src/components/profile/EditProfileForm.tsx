@@ -51,7 +51,18 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
       return next
     })
     setAvatarFile(file)
-    setAvatarPreview(URL.createObjectURL(file))
+    setAvatarPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return URL.createObjectURL(file)
+    })
+  }
+
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen && avatarPreview) {
+      URL.revokeObjectURL(avatarPreview)
+      setAvatarPreview(null)
+    }
+    onOpenChange(nextOpen)
   }
 
   function toggleInterest(value: string) {
@@ -126,7 +137,7 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-charcoal/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <Dialog.Content className="fixed inset-x-4 bottom-0 z-50 mx-auto max-h-[90vh] max-w-lg overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl dark:bg-dark-surface sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl">
@@ -301,7 +312,7 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
             <div className="flex gap-3 pt-2">
               <button
                 type="button"
-                onClick={() => onOpenChange(false)}
+                onClick={() => handleOpenChange(false)}
                 className="flex-1 rounded-full border border-border px-6 py-3 text-sm font-medium text-charcoal transition-colors hover:bg-cream dark:border-dark-border dark:text-dark-text dark:hover:bg-dark-border"
               >
                 Cancel

@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase/server'
 import { getProfile, getMyBookings } from '@/lib/supabase/queries/profile'
-import { isPastEvent } from '@/lib/utils/dates'
+import { splitBookings } from '@/lib/utils/bookings'
 import { ProfilePageClient } from '@/components/profile/ProfilePageClient'
 import type { Metadata } from 'next'
 
@@ -24,16 +24,7 @@ export default async function ProfilePage() {
 
   if (!profile) redirect('/login')
 
-  // Split bookings into upcoming / past / waitlisted
-  const upcoming = bookings.filter(
-    (b) => b.status === 'confirmed' && !isPastEvent(b.event.date_time),
-  )
-  const past = bookings.filter(
-    (b) =>
-      (b.status === 'confirmed' || b.status === 'no_show') &&
-      isPastEvent(b.event.date_time),
-  )
-  const waitlisted = bookings.filter((b) => b.status === 'waitlisted')
+  const { upcoming, past, waitlisted } = splitBookings(bookings)
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6 md:py-20">
