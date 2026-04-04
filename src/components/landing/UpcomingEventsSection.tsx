@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
-import { upcomingEvents } from "@/data/events";
 import { EventCard } from "@/components/events/EventCard";
+import type { EventWithStats } from "@/types";
 
 const containerVariants = {
   hidden: {},
@@ -24,9 +24,11 @@ const itemVariants = {
   },
 };
 
-export function UpcomingEventsSection() {
-  const displayEvents = upcomingEvents.slice(0, 3);
+interface UpcomingEventsSectionProps {
+  events: EventWithStats[];
+}
 
+export function UpcomingEventsSection({ events }: UpcomingEventsSectionProps) {
   return (
     <section className="bg-white px-6 py-24 md:py-32">
       <div className="mx-auto max-w-6xl">
@@ -58,7 +60,7 @@ export function UpcomingEventsSection() {
           whileInView="visible"
           viewport={{ once: true, margin: "-50px" }}
         >
-          {displayEvents.map((event) => (
+          {events.map((event) => (
             <motion.div key={event.id} variants={itemVariants}>
               <EventCard event={event} />
             </motion.div>
