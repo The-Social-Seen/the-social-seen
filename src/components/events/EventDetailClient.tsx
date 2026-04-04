@@ -1,10 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { SocialEvent } from "@/types";
-import { events } from "@/data/events";
-import { cn } from "@/lib/utils/cn";
-import { format } from "date-fns";
+import { useState, useRef } from "react";
+
 import { motion } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
@@ -17,13 +14,29 @@ import {
   ArrowLeft,
   ChevronRight,
 } from "lucide-react";
+import * as LucideIcons from "lucide-react";
+import { formatDateCard, formatDateFull, formatTimeRange, isPastEvent } from "@/lib/utils/dates";
+import { formatPrice } from "@/lib/utils/currency";
+import { resolveEventImage, resolveAvatarUrl, getInitials } from "@/lib/utils/images";
 import BookingModal from "@/components/events/BookingModal";
 import StarRating from "@/components/reviews/StarRating";
 import ReviewCard from "@/components/reviews/ReviewCard";
 import EventCard from "@/components/events/EventCard";
+import MobileBookingBar from "@/components/events/MobileBookingBar";
+import type {
+  EventDetail,
+  ReviewWithAuthor,
+  EventPhoto,
+  EventWithStats,
+  Booking,
+} from "@/types";
 
 interface EventDetailClientProps {
-  event: SocialEvent;
+  event: EventDetail;
+  reviews: ReviewWithAuthor[];
+  photos: EventPhoto[];
+  relatedEvents: EventWithStats[];
+  userBooking: Booking | null;
 }
 
 const fadeInUp = {
@@ -33,34 +46,52 @@ const fadeInUp = {
   transition: { duration: 0.5 },
 };
 
-export default function EventDetailClient({ event }: EventDetailClientProps) {
+function getLucideIcon(name: string | null): React.ComponentType<{ className?: string }> | null {
+  if (!name) return null;
+  // Convert kebab-case to PascalCase for Lucide icon lookup
+  const pascalName = name
+    .split("-")
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+    .join("");
+  const Icon = (LucideIcons as Record<string, unknown>)[pascalName];
+  if (typeof Icon === "function") return Icon as React.ComponentType<{ className?: string }>;
+  return null;
+}
+
+export default function EventDetailClient({
+  event,
+  reviews,
+  photos,
+  relatedEvents,
+}: EventDetailClientProps) {
   const [bookingOpen, setBookingOpen] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const sidebarRef = useRef<HTMLDivElement>(null);
 
+  const isPast = isPastEvent(event.date_time);
   const isFree = event.price === 0;
-  const isSoldOut = event.spotsLeft === 0 && !event.isPast;
-  const hasReviews = event.isPast && event.reviews && event.reviews.length > 0;
-  const hasGallery =
-    event.isPast && event.galleryImages && event.galleryImages.length > 0;
-
-  // Related events from same category, excluding current
-  const relatedEvents = events
-    .filter((e) => e.category === event.category && e.id !== event.id)
-    .slice(0, 3);
+  const isSoldOut = !isPast && event.spots_left !== null && event.spots_left === 0;
+  const hasReviews = reviews.length > 0;
+  const hasGallery = photos.length > 0;
+  const heroImage = resolveEventImage(event.image_url);
 
   return (
     <>
       <main className="min-h-screen bg-bg-primary">
         {/* Hero Section */}
         <section className="relative h-[50vh] min-h-[400px] overflow-hidden">
-          <Image
-            src={event.imageUrl}
-            alt={event.title}
-            fill
-            className="object-cover"
-            priority
-            sizes="100vw"
-          />
+          {heroImage ? (
+            <Image
+              src={heroImage}
+              alt={event.title}
+              fill
+              className="object-cover"
+              priority
+              sizes="100vw"
+            />
+          ) : (
+            <div className="h-full bg-charcoal" />
+          )}
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-black/10" />
 
           {/* Back button */}
@@ -86,14 +117,9 @@ export default function EventDetailClient({ event }: EventDetailClientProps) {
                   <span className="rounded-full bg-white/20 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
                     {event.category}
                   </span>
-                  {event.isPast && (
+                  {isPast && (
                     <span className="rounded-full bg-white/20 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
                       Past Event
-                    </span>
-                  )}
-                  {isSoldOut && (
-                    <span className="rounded-full bg-red-500/80 px-3 py-1 text-xs font-semibold text-white">
-                      Sold Out
                     </span>
                   )}
                 </div>
@@ -122,7 +148,7 @@ export default function EventDetailClient({ event }: EventDetailClientProps) {
                   <div>
                     <p className="text-xs text-text-primary/50">Date</p>
                     <p className="text-sm font-semibold text-text-primary">
-                      {format(new Date(event.dateTime), "EEE d MMM yyyy")}
+                      {formatDateCard(event.date_time)}
                     </p>
                   </div>
                 </div>
@@ -133,8 +159,7 @@ export default function EventDetailClient({ event }: EventDetailClientProps) {
                   <div>
                     <p className="text-xs text-text-primary/50">Time</p>
                     <p className="text-sm font-semibold text-text-primary">
-                      {format(new Date(event.dateTime), "h:mm a")} &ndash;{" "}
-                      {format(new Date(event.endTime), "h:mm a")}
+                      {formatTimeRange(event.date_time, event.end_time)}
                     </p>
                   </div>
                 </div>
@@ -145,7 +170,7 @@ export default function EventDetailClient({ event }: EventDetailClientProps) {
                   <div>
                     <p className="text-xs text-text-primary/50">Attendees</p>
                     <p className="text-sm font-semibold text-text-primary">
-                      {event.attendeeCount} people going
+                      {event.confirmed_count} people going
                     </p>
                   </div>
                 </div>
@@ -162,76 +187,101 @@ export default function EventDetailClient({ event }: EventDetailClientProps) {
               </motion.div>
 
               {/* What's Included */}
-              {event.whatsIncluded && event.whatsIncluded.length > 0 && (
+              {event.inclusions.length > 0 && (
                 <motion.div {...fadeInUp} className="mb-10">
                   <h2 className="mb-4 text-2xl font-bold text-text-primary">
                     What&apos;s Included
                   </h2>
                   <div className="grid gap-3 sm:grid-cols-2">
-                    {event.whatsIncluded.map((item, idx) => (
-                      <div
-                        key={idx}
-                        className="flex items-center gap-3 rounded-xl bg-bg-card p-4 shadow-sm"
-                      >
-                        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-emerald-100">
-                          <Check className="h-4 w-4 text-emerald-600" />
+                    {event.inclusions.map((inclusion) => {
+                      const IconComponent = getLucideIcon(inclusion.icon);
+                      return (
+                        <div
+                          key={inclusion.id}
+                          className="flex items-center gap-3 rounded-xl bg-bg-card p-4 shadow-sm"
+                        >
+                          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-gold/10">
+                            {IconComponent ? (
+                              <IconComponent className="h-4 w-4 text-gold" />
+                            ) : (
+                              <Check className="h-4 w-4 text-gold" />
+                            )}
+                          </div>
+                          <span className="text-sm font-medium text-text-primary">
+                            {inclusion.label}
+                          </span>
                         </div>
-                        <span className="text-sm font-medium text-text-primary">
-                          {item}
-                        </span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </motion.div>
               )}
 
               {/* Dress Code */}
-              {event.dressCode && (
+              {event.dress_code && (
                 <motion.div {...fadeInUp} className="mb-10">
                   <h2 className="mb-4 text-2xl font-bold text-text-primary">
                     Dress Code
                   </h2>
                   <div className="inline-flex items-center gap-2 rounded-xl bg-bg-card px-5 py-3 shadow-sm">
                     <span className="text-sm font-medium text-text-primary">
-                      {event.dressCode}
+                      {event.dress_code}
                     </span>
                   </div>
                 </motion.div>
               )}
 
               {/* Host Section */}
-              <motion.div
-                {...fadeInUp}
-                className="mb-10 rounded-2xl border border-blush/40 bg-bg-card p-6"
-              >
-                <h2 className="mb-5 text-2xl font-bold text-text-primary">
-                  Your Host
-                </h2>
-                <div className="flex items-start gap-4">
-                  <div className="relative h-16 w-16 flex-shrink-0 overflow-hidden rounded-full ring-2 ring-gold/30">
-                    <Image
-                      src={event.hostAvatar}
-                      alt={event.hostName}
-                      fill
-                      className="object-cover"
-                      sizes="64px"
-                    />
+              {event.hosts.length > 0 && (
+                <motion.div
+                  {...fadeInUp}
+                  className="mb-10 rounded-2xl border border-blush/40 bg-bg-card p-6"
+                >
+                  <h2 className="mb-5 text-2xl font-bold text-text-primary">
+                    {event.hosts.length === 1 ? "Your Host" : "Your Hosts"}
+                  </h2>
+                  <div className="space-y-6">
+                    {event.hosts.map((host) => {
+                      const avatarUrl = resolveAvatarUrl(host.profile.avatar_url);
+                      const initials = getInitials(host.profile.full_name);
+                      return (
+                        <div key={host.id} className="flex items-start gap-4">
+                          <div className="relative h-16 w-16 flex-shrink-0 overflow-hidden rounded-full ring-2 ring-gold/30">
+                            {avatarUrl ? (
+                              <Image
+                                src={avatarUrl}
+                                alt={host.profile.full_name}
+                                fill
+                                className="object-cover"
+                                sizes="64px"
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center bg-gold/10 text-sm font-semibold text-gold">
+                                {initials}
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <h3 className="text-lg font-semibold text-text-primary">
+                              {host.profile.full_name}
+                            </h3>
+                            <p className="mb-2 text-sm font-medium text-gold">
+                              {host.role_label}
+                            </p>
+                            {host.profile.bio && (
+                              <p className="text-sm leading-relaxed text-text-primary/60">
+                                {host.profile.bio}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <div>
-                    <h3 className="text-lg font-semibold text-text-primary">
-                      {event.hostName}
-                    </h3>
-                    <p className="mb-2 text-sm font-medium text-gold">
-                      {event.hostRole}
-                    </p>
-                    <p className="text-sm leading-relaxed text-text-primary/60">
-                      {event.hostBio}
-                    </p>
-                  </div>
-                </div>
-              </motion.div>
+                </motion.div>
+              )}
 
-              {/* Reviews Section (Past events only) */}
+              {/* Reviews Section (Past events with reviews) */}
               {hasReviews && (
                 <motion.div {...fadeInUp} className="mb-10">
                   <div className="mb-6 flex items-center gap-4">
@@ -240,54 +290,58 @@ export default function EventDetailClient({ event }: EventDetailClientProps) {
                     </h2>
                     <div className="flex items-center gap-2">
                       <StarRating
-                        rating={event.averageRating!}
+                        rating={event.avg_rating}
                         size="md"
                         showNumber
                       />
                       <span className="text-sm text-text-primary/50">
-                        ({event.totalReviews}{" "}
-                        {event.totalReviews === 1 ? "review" : "reviews"})
+                        ({event.review_count}{" "}
+                        {event.review_count === 1 ? "review" : "reviews"})
                       </span>
                     </div>
                   </div>
                   <div className="grid gap-4 md:grid-cols-2">
-                    {event.reviews!.map((review) => (
+                    {reviews.map((review) => (
                       <ReviewCard key={review.id} review={review} />
                     ))}
                   </div>
                 </motion.div>
               )}
 
-              {/* Gallery Section (Past events only) */}
+              {/* Gallery Section (Past events with photos) */}
               {hasGallery && (
                 <motion.div {...fadeInUp} className="mb-10">
                   <h2 className="mb-6 text-2xl font-bold text-text-primary">
                     Event Gallery
                   </h2>
                   <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-                    {event.galleryImages!.map((photo) => (
-                      <button
-                        key={photo.id}
-                        onClick={() => setLightboxImage(photo.imageUrl)}
-                        className="group relative aspect-square overflow-hidden rounded-xl"
-                      >
-                        <Image
-                          src={photo.imageUrl}
-                          alt={photo.caption || "Event photo"}
-                          fill
-                          className="object-cover transition-transform duration-300 group-hover:scale-105"
-                          sizes="(max-width: 768px) 50vw, 33vw"
-                        />
-                        <div className="absolute inset-0 bg-black/0 transition-all group-hover:bg-black/30" />
-                        {photo.caption && (
-                          <div className="absolute inset-x-0 bottom-0 translate-y-full p-3 transition-transform group-hover:translate-y-0">
-                            <p className="text-xs font-medium text-white">
-                              {photo.caption}
-                            </p>
-                          </div>
-                        )}
-                      </button>
-                    ))}
+                    {photos.map((photo) => {
+                      const photoUrl = resolveEventImage(photo.image_url);
+                      if (!photoUrl) return null;
+                      return (
+                        <button
+                          key={photo.id}
+                          onClick={() => setLightboxImage(photoUrl)}
+                          className="group relative aspect-square overflow-hidden rounded-xl"
+                        >
+                          <Image
+                            src={photoUrl}
+                            alt={photo.caption || "Event photo"}
+                            fill
+                            className="object-cover transition-transform duration-300 group-hover:scale-105"
+                            sizes="(max-width: 768px) 50vw, 33vw"
+                          />
+                          <div className="absolute inset-0 bg-black/0 transition-all group-hover:bg-black/30" />
+                          {photo.caption && (
+                            <div className="absolute inset-x-0 bottom-0 translate-y-full p-3 transition-transform group-hover:translate-y-0">
+                              <p className="text-xs font-medium text-white">
+                                {photo.caption}
+                              </p>
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 </motion.div>
               )}
@@ -295,7 +349,7 @@ export default function EventDetailClient({ event }: EventDetailClientProps) {
 
             {/* Right column (1/3) - Sticky Booking Card */}
             <div className="lg:w-1/3">
-              <div className="sticky top-8">
+              <div className="sticky top-8" ref={sidebarRef}>
                 <motion.div
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -306,13 +360,13 @@ export default function EventDetailClient({ event }: EventDetailClientProps) {
                     {/* Price */}
                     <div className="mb-6">
                       {isFree ? (
-                        <span className="text-3xl font-bold text-emerald-600">
+                        <span className="text-3xl font-bold text-success">
                           Free
                         </span>
                       ) : (
                         <div className="flex items-baseline gap-1">
                           <span className="text-3xl font-bold text-gold">
-                            {"\u00A3"}{event.price}
+                            {formatPrice(event.price)}
                           </span>
                           <span className="text-sm text-text-primary/50">
                             per person
@@ -327,15 +381,10 @@ export default function EventDetailClient({ event }: EventDetailClientProps) {
                         <Calendar className="mt-0.5 h-4 w-4 flex-shrink-0 text-gold" />
                         <div>
                           <p className="text-sm font-semibold text-text-primary">
-                            {format(
-                              new Date(event.dateTime),
-                              "EEEE d MMMM yyyy"
-                            )}
+                            {formatDateFull(event.date_time)}
                           </p>
                           <p className="text-sm text-text-primary/50">
-                            {format(new Date(event.dateTime), "h:mm a")}{" "}
-                            &ndash;{" "}
-                            {format(new Date(event.endTime), "h:mm a")}
+                            {formatTimeRange(event.date_time, event.end_time)}
                           </p>
                         </div>
                       </div>
@@ -343,10 +392,10 @@ export default function EventDetailClient({ event }: EventDetailClientProps) {
                         <MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-gold" />
                         <div>
                           <p className="text-sm font-semibold text-text-primary">
-                            {event.venueName}
+                            {event.venue_name}
                           </p>
                           <p className="text-sm text-text-primary/50">
-                            {event.venueAddress}
+                            {event.venue_address}
                           </p>
                         </div>
                       </div>
@@ -356,50 +405,52 @@ export default function EventDetailClient({ event }: EventDetailClientProps) {
                     <div className="mb-6 flex items-center gap-3 rounded-xl bg-bg-primary p-3">
                       <Users className="h-4 w-4 text-gold" />
                       <span className="text-sm text-text-primary/70">
-                        {event.attendeeCount} people going
+                        {event.confirmed_count} people going
                       </span>
                     </div>
 
-                    {/* Spots left */}
-                    {!event.isPast && (
+                    {/* Spots left / Waitlist messaging */}
+                    {!isPast && (
                       <div className="mb-6">
-                        {event.spotsLeft > 0 ? (
+                        {event.spots_left !== null && event.spots_left > 0 ? (
                           <div>
                             <div className="mb-2 flex items-center justify-between text-sm">
                               <span className="text-text-primary/60">
                                 Spots remaining
                               </span>
                               <span className="font-semibold text-text-primary">
-                                {event.spotsLeft} / {event.capacity}
+                                {event.spots_left} / {event.capacity}
                               </span>
                             </div>
-                            <div className="h-2 overflow-hidden rounded-full bg-blush/30">
+                            {/* Capacity bar: gold fill, cream track */}
+                            <div className="h-2 overflow-hidden rounded-full bg-cream">
                               <div
-                                className={cn(
-                                  "h-full rounded-full transition-all",
-                                  event.spotsLeft <= 5
-                                    ? "bg-amber-500"
-                                    : "bg-gold"
-                                )}
+                                className="h-full rounded-full bg-gold transition-all"
                                 style={{
                                   width: `${
-                                    ((event.capacity - event.spotsLeft) /
-                                      event.capacity) *
-                                    100
+                                    event.capacity
+                                      ? ((event.capacity - event.spots_left) /
+                                          event.capacity) *
+                                        100
+                                      : 0
                                   }%`,
                                 }}
                               />
                             </div>
-                            {event.spotsLeft <= 5 && (
-                              <p className="mt-2 text-xs font-medium text-amber-600">
-                                Only {event.spotsLeft} spots left — book soon!
+                            {event.spots_left <= 5 && (
+                              <p className="mt-2 text-xs font-medium text-gold">
+                                Only {event.spots_left} spots left — book soon!
                               </p>
                             )}
                           </div>
-                        ) : (
-                          <div className="rounded-xl bg-red-50 p-3 text-center">
-                            <p className="text-sm font-semibold text-red-600">
-                              This event is sold out
+                        ) : event.spots_left === null ? null : (
+                          /* Positive waitlist messaging (Amendment 3.3 / RC-05) */
+                          <div className="rounded-xl bg-gold/5 border border-gold/20 p-4 text-center">
+                            <p className="text-sm font-semibold text-text-primary">
+                              This event is fully booked — join the waitlist
+                            </p>
+                            <p className="mt-1 text-xs text-text-primary/60">
+                              Most waitlisted members get a spot — we&apos;ll let you know the moment one opens
                             </p>
                           </div>
                         )}
@@ -407,9 +458,9 @@ export default function EventDetailClient({ event }: EventDetailClientProps) {
                     )}
 
                     {/* CTA Button */}
-                    {!event.isPast && (
+                    {!isPast && (
                       <>
-                        {event.spotsLeft > 0 ? (
+                        {!isSoldOut ? (
                           <button
                             onClick={() => setBookingOpen(true)}
                             className="w-full rounded-2xl bg-gold py-4 text-sm font-semibold text-white shadow-lg shadow-gold/25 transition-all hover:bg-gold-dark hover:shadow-xl hover:shadow-gold/30 active:scale-[0.98]"
@@ -417,35 +468,31 @@ export default function EventDetailClient({ event }: EventDetailClientProps) {
                             {isFree ? "RSVP Now" : "Book Now"}
                           </button>
                         ) : (
-                          <div>
-                            <button
-                              onClick={() => setBookingOpen(true)}
-                              className="w-full rounded-2xl border-2 border-charcoal bg-charcoal py-4 text-sm font-semibold text-white transition-all hover:bg-charcoal/90 active:scale-[0.98]"
-                            >
-                              Join Waitlist
-                            </button>
-                            <p className="mt-2 text-center text-xs text-text-primary/50">
-                              You&apos;ll be notified when a spot opens up
-                            </p>
-                          </div>
+                          /* Waitlist CTA: GOLD button (Amendment 3.3) */
+                          <button
+                            onClick={() => setBookingOpen(true)}
+                            className="w-full rounded-2xl bg-gold py-4 text-sm font-semibold text-white shadow-lg shadow-gold/25 transition-all hover:bg-gold-dark hover:shadow-xl hover:shadow-gold/30 active:scale-[0.98]"
+                          >
+                            Join Waitlist
+                          </button>
                         )}
                       </>
                     )}
 
                     {/* Past event badge */}
-                    {event.isPast && (
+                    {isPast && (
                       <div className="rounded-xl bg-bg-primary p-4 text-center">
                         <p className="text-sm font-medium text-text-primary/50">
                           This event has ended
                         </p>
-                        {event.averageRating && (
+                        {event.avg_rating > 0 && (
                           <div className="mt-2 flex items-center justify-center gap-2">
                             <StarRating
-                              rating={event.averageRating}
+                              rating={event.avg_rating}
                               size="sm"
                             />
                             <span className="text-sm font-semibold text-text-primary">
-                              {event.averageRating.toFixed(1)}
+                              {event.avg_rating.toFixed(1)}
                             </span>
                           </div>
                         )}
@@ -498,6 +545,7 @@ export default function EventDetailClient({ event }: EventDetailClientProps) {
           <button
             onClick={() => setLightboxImage(null)}
             className="absolute top-6 right-6 z-10 rounded-full bg-white/10 p-3 text-white transition-colors hover:bg-white/20"
+            aria-label="Close lightbox"
           >
             <svg
               className="h-5 w-5"
@@ -525,9 +573,21 @@ export default function EventDetailClient({ event }: EventDetailClientProps) {
         </motion.div>
       )}
 
-      {/* Booking Modal */}
+      {/* Mobile Booking Bar (Amendment 3.2 / CF-03) */}
+      <MobileBookingBar
+        price={event.price}
+        spotsLeft={event.spots_left}
+        isFree={isFree}
+        isSoldOut={isSoldOut}
+        isPast={isPast}
+        onBookClick={() => setBookingOpen(true)}
+        sidebarRef={sidebarRef}
+      />
+
+      {/* Booking Modal — uses legacy SocialEvent type, will be rewritten in Batch 6.
+          Cast needed until then; the modal displays mock data anyway. */}
       <BookingModal
-        event={event}
+        event={event as never}
         isOpen={bookingOpen}
         onClose={() => setBookingOpen(false)}
       />
