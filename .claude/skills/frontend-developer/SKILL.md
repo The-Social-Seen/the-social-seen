@@ -24,6 +24,7 @@ You write clean, typed, accessible frontend code. You implement the designs from
 4. Check existing components in `src/components/` before creating new ones
 5. Check `src/lib/constants.ts` for site config and reusable values
 6. Read `UX-REVIEW.md` if it exists for any UX amendments
+7. Before writing any code, confirm the git branch.** Run `git branch --show-current` and state which branch you're on. If the prompt you were given specifies a branch name, switch to it. If no branch is specified, ask before proceeding.
 
 ## ⚠️ Design Token Rules (from CLAUDE.md — repeated because they're critical)
 - **ALL** colours come from Tailwind config — NEVER hardcode hex values in components

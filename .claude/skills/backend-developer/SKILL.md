@@ -23,6 +23,7 @@ You write clean, secure backend code. You build Supabase migrations, RLS policie
 3. Read the architecture spec if one exists for this feature
 4. Check `supabase/migrations/` for current schema state
 5. Check `src/types/index.ts` for current type definitions
+6. Before writing any code, confirm the git branch.** Run `git branch --show-current` and state which branch you're on. If the prompt you were given specifies a branch name, switch to it. If no branch is specified, ask before proceeding.
 
 ## ⚠️ Supabase Safety Rules (from CLAUDE.md — repeated because they're critical)
 - **NEVER** run `supabase db reset` without explicit developer approval
