@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase/server'
 import { getProfile, getMyBookings } from '@/lib/supabase/queries/profile'
+import { getReviewableEvents } from '@/lib/supabase/queries/reviews'
 import { splitBookings } from '@/lib/utils/bookings'
 import { ProfilePageClient } from '@/components/profile/ProfilePageClient'
 import type { Metadata } from 'next'
@@ -17,14 +18,16 @@ export default async function ProfilePage() {
 
   if (!user) redirect('/login')
 
-  const [profile, bookings] = await Promise.all([
+  const [profile, bookings, reviewableEvents] = await Promise.all([
     getProfile(user.id),
     getMyBookings(user.id),
+    getReviewableEvents(),
   ])
 
   if (!profile) redirect('/login')
 
   const { upcoming, past, waitlisted } = splitBookings(bookings)
+  const reviewableEventIds = new Set(reviewableEvents.map((e) => e.id))
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6 md:py-20">
@@ -35,6 +38,7 @@ export default async function ProfilePage() {
           upcoming={upcoming}
           past={past}
           waitlisted={waitlisted}
+          reviewableEventIds={reviewableEventIds}
         />
       </div>
     </div>

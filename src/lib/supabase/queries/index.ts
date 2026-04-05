@@ -8,3 +8,8 @@ export {
 } from './events'
 
 export { getProfile, getMyBookings } from './profile'
+
+export { getReviewableEvents } from './reviews'
+
+export { getAllGalleryPhotos, getGalleryEvents } from './gallery'
+export type { GalleryPhotoWithEvent, GalleryEvent } from './gallery'

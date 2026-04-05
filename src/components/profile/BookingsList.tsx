@@ -1,17 +1,25 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import Link from 'next/link'
 import * as Tabs from '@radix-ui/react-tabs'
-import { CalendarCheck, CalendarClock, Users, CalendarSearch } from 'lucide-react'
+import { CalendarCheck, CalendarClock, Users, CalendarSearch, Star } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
+import { formatDateCard } from '@/lib/utils/dates'
 import { BookingCard } from '@/components/profile/BookingCard'
+import ReviewForm from '@/components/reviews/ReviewForm'
 import type { BookingWithEvent } from '@/types'
 
 interface BookingsListProps {
   upcoming: BookingWithEvent[]
   past: BookingWithEvent[]
   waitlisted: BookingWithEvent[]
+  /** Event IDs the user can still review (past + confirmed + not yet reviewed) */
+  reviewableEventIds: Set<string>
+  /** User name for review preview */
+  userName: string
+  /** User avatar URL for review preview */
+  userAvatar?: string | null
 }
 
 type TabValue = 'upcoming' | 'past' | 'waitlisted'
@@ -26,8 +34,16 @@ const TAB_CONFIG: Array<{
   { value: 'waitlisted', label: 'Waitlisted', icon: Users },
 ]
 
-export function BookingsList({ upcoming, past, waitlisted }: BookingsListProps) {
+export function BookingsList({
+  upcoming,
+  past,
+  waitlisted,
+  reviewableEventIds,
+  userName,
+  userAvatar,
+}: BookingsListProps) {
   const [activeTab, setActiveTab] = useState<TabValue>('upcoming')
+  const [reviewTarget, setReviewTarget] = useState<BookingWithEvent | null>(null)
 
   const counts: Record<TabValue, number> = {
     upcoming: upcoming.length,
@@ -35,7 +51,34 @@ export function BookingsList({ upcoming, past, waitlisted }: BookingsListProps) 
     waitlisted: waitlisted.length,
   }
 
+  const handleReviewClose = useCallback(() => setReviewTarget(null), [])
+
+  // First reviewable past booking for the discovery banner (Amendment 7.2)
+  const firstReviewable = past.find((b) => reviewableEventIds.has(b.event_id))
+
   return (
+    <>
+    {/* Review discovery banner (Amendment 7.2) */}
+    {firstReviewable && (
+      <button
+        type="button"
+        onClick={() => setReviewTarget(firstReviewable)}
+        className="mb-6 flex w-full items-center gap-3 rounded-xl border border-gold/20 bg-gold/5 p-4 text-left transition-colors hover:bg-gold/10 dark:border-gold/15 dark:bg-gold/5"
+      >
+        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gold/10">
+          <Star className="h-5 w-5 text-gold" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-charcoal dark:text-dark-text">
+            How was {firstReviewable.event.title}?
+          </p>
+          <p className="text-xs text-muted dark:text-dark-muted">
+            Share your experience &rarr;
+          </p>
+        </div>
+      </button>
+    )}
+
     <Tabs.Root value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)}>
       {/* Tab triggers */}
       <Tabs.List className="mb-6 flex gap-1 rounded-xl border border-border bg-white p-1.5 shadow-sm dark:border-dark-border dark:bg-dark-surface">
@@ -94,7 +137,13 @@ export function BookingsList({ upcoming, past, waitlisted }: BookingsListProps) 
           />
         ) : (
           past.map((booking) => (
-            <BookingCard key={booking.id} booking={booking} variant="past" />
+            <BookingCard
+              key={booking.id}
+              booking={booking}
+              variant="past"
+              isReviewable={reviewableEventIds.has(booking.event_id)}
+              onReviewClick={() => setReviewTarget(booking)}
+            />
           ))
         )}
       </Tabs.Content>
@@ -112,6 +161,23 @@ export function BookingsList({ upcoming, past, waitlisted }: BookingsListProps) 
         )}
       </Tabs.Content>
     </Tabs.Root>
+
+    {/* Review modal */}
+    {reviewTarget && (
+      <ReviewForm
+        eventId={reviewTarget.event_id}
+        eventTitle={reviewTarget.event.title}
+        eventDate={formatDateCard(reviewTarget.event.date_time)}
+        userName={userName}
+        userAvatar={userAvatar}
+        onClose={handleReviewClose}
+        onSuccess={() => {
+          // After review, remove from reviewable set so UI updates instantly
+          reviewableEventIds.delete(reviewTarget.event_id)
+        }}
+      />
+    )}
+    </>
   )
 }
 

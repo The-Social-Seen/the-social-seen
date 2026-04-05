@@ -63,9 +63,18 @@ export default async function EventDetailPage({ params }: PageProps) {
       getUserBookingForEvent(event.id),
     ]);
 
-  // Get display name from user metadata (set during signup)
-  const userName: string | null =
-    (user?.user_metadata?.full_name as string) ?? null;
+  // Get user profile info for review form
+  let userName: string | null = null
+  let userAvatar: string | null = null
+  if (user) {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('full_name, avatar_url')
+      .eq('id', user.id)
+      .single()
+    userName = profile?.full_name ?? (user.user_metadata?.full_name as string) ?? null
+    userAvatar = profile?.avatar_url ?? null
+  }
 
   return (
     <EventDetailClient
@@ -76,6 +85,8 @@ export default async function EventDetailPage({ params }: PageProps) {
       userBooking={userBooking}
       isLoggedIn={!!user}
       userName={userName}
+      userAvatar={userAvatar}
+      userId={user?.id ?? null}
     />
   );
 }

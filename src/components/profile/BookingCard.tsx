@@ -12,9 +12,13 @@ import type { BookingWithEvent } from '@/types'
 interface BookingCardProps {
   booking: BookingWithEvent
   variant: 'upcoming' | 'past' | 'waitlisted'
+  /** Whether this past booking is eligible for a review */
+  isReviewable?: boolean
+  /** Callback when "Leave a Review" is clicked */
+  onReviewClick?: () => void
 }
 
-export function BookingCard({ booking, variant }: BookingCardProps) {
+export function BookingCard({ booking, variant, isReviewable, onReviewClick }: BookingCardProps) {
   const { event } = booking
   const imageUrl = resolveEventImage(event.image_url)
   const isSoon = variant === 'upcoming' && isWithin48Hours(event.date_time)
@@ -96,12 +100,21 @@ export function BookingCard({ booking, variant }: BookingCardProps) {
             >
               View Event
             </Link>
-            {variant === 'past' && (
-              <Link
-                href={`/events/${event.slug}#reviews`}
+            {variant === 'past' && isReviewable && onReviewClick && (
+              <button
+                type="button"
+                onClick={onReviewClick}
                 className="rounded-full border border-gold/20 px-3 py-1 text-xs font-medium text-gold transition-all hover:bg-gold/5"
               >
                 Leave a Review
+              </button>
+            )}
+            {variant === 'past' && !isReviewable && (
+              <Link
+                href={`/events/${event.slug}#reviews`}
+                className="rounded-full border border-gold/20 px-3 py-1 text-xs font-medium text-muted/50 dark:text-dark-muted/50 transition-all"
+              >
+                Reviewed
               </Link>
             )}
           </div>
