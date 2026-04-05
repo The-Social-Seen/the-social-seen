@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import React from 'react'
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import type { BookingWithEvent } from '@/types'
@@ -104,7 +105,6 @@ vi.mock('@radix-ui/react-tabs', () => {
   )
 
   // Simple context for tests
-  const React = require('react')
   const TabsContext = React.createContext<{
     value: string
     onValueChange: (v: string) => void

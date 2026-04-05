@@ -41,16 +41,16 @@ function applyTheme(theme: Theme) {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>("light");
+  const [theme, setTheme] = useState<Theme>(() =>
+    typeof window !== "undefined" ? getInitialTheme() : "light"
+  );
   const [mounted, setMounted] = useState(false);
 
-  // Initialize theme on mount
+  // Apply theme and mark mounted
   useEffect(() => {
-    const initial = getInitialTheme();
-    setTheme(initial);
-    applyTheme(initial);
+    applyTheme(theme);
     setMounted(true);
-  }, []);
+  }, [theme]);
 
   // Listen for system preference changes
   useEffect(() => {

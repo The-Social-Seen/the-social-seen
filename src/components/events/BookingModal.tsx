@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useTransition, useCallback } from "react";
+import Link from "next/link";
 import { cn } from "@/lib/utils/cn";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -632,12 +633,12 @@ function TicketCard({
       <div className="mt-5">
         {isWaitlisted ? (
           <div className="flex gap-3">
-            <a
+            <Link
               href="/events"
               className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-blush/60 py-3.5 text-sm font-semibold text-text-primary transition-all hover:bg-bg-primary"
             >
               Browse More Events
-            </a>
+            </Link>
             <button
               onClick={onClose}
               className="flex-1 rounded-2xl bg-gold py-3.5 text-sm font-semibold text-white transition-all hover:bg-gold-dark"
