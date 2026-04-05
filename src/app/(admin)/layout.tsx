@@ -1,10 +1,12 @@
 import { redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase/server'
+import AdminSidebar from '@/components/admin/AdminSidebar'
 
 /**
  * Admin layout — protects all routes under (admin)/.
  * Redirects unauthenticated users to /login.
  * Redirects non-admin users to /.
+ * Renders the sidebar + content shell.
  */
 export default async function AdminLayout({
   children,
@@ -21,7 +23,7 @@ export default async function AdminLayout({
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('role')
+    .select('role, full_name, avatar_url')
     .eq('id', user.id)
     .single()
 
@@ -29,5 +31,17 @@ export default async function AdminLayout({
     redirect('/')
   }
 
-  return <>{children}</>
+  return (
+    <div className="min-h-screen bg-bg-primary">
+      <AdminSidebar
+        adminName={profile.full_name ?? 'Admin'}
+        adminAvatarUrl={profile.avatar_url ?? null}
+      />
+
+      {/* Content area */}
+      <main className="lg:pl-64 pb-20 lg:pb-0">
+        <div className="p-6">{children}</div>
+      </main>
+    </div>
+  )
 }

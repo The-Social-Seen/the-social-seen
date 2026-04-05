@@ -46,12 +46,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   );
   const [mounted, setMounted] = useState(false);
 
-  // Apply theme to DOM and mark hydration complete
+  // Apply theme to DOM whenever it changes
   useEffect(() => {
     applyTheme(theme);
+  }, [theme]);
+
+  // Mark hydration complete — legitimate SSR hydration pattern
+  useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
-  }, [theme]);
+  }, []);
 
   // Listen for system preference changes
   useEffect(() => {
