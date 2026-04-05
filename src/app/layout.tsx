@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { Playfair_Display, DM_Sans } from "next/font/google";
 import { ThemeProvider } from "@/components/layout/ThemeProvider";
 import { Header } from "@/components/layout/Header";
@@ -64,11 +65,15 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const headerList = await headers();
+  const pathname = headerList.get("x-pathname") ?? "";
+  const isAdmin = pathname.startsWith("/admin");
+
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -93,9 +98,9 @@ export default function RootLayout({
         className={`${playfair.variable} ${dmSans.variable} font-sans antialiased`}
       >
         <ThemeProvider>
-          <Header />
+          {!isAdmin && <Header />}
           <main>{children}</main>
-          <Footer />
+          {!isAdmin && <Footer />}
         </ThemeProvider>
       </body>
     </html>
