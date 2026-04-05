@@ -194,6 +194,8 @@ const defaultProps = {
   userBooking: null as Booking | null,
   isLoggedIn: true,
   userName: 'Charlotte Moreau' as string | null,
+  userAvatar: null as string | null,
+  userId: 'user-001' as string | null,
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────

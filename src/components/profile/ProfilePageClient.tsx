@@ -12,6 +12,7 @@ interface ProfilePageClientProps {
   upcoming: BookingWithEvent[]
   past: BookingWithEvent[]
   waitlisted: BookingWithEvent[]
+  reviewableEventIds: Set<string>
 }
 
 export function ProfilePageClient({
@@ -19,6 +20,7 @@ export function ProfilePageClient({
   upcoming,
   past,
   waitlisted,
+  reviewableEventIds,
 }: ProfilePageClientProps) {
   const [editOpen, setEditOpen] = useState(false)
 
@@ -31,7 +33,14 @@ export function ProfilePageClient({
         <h2 className="mb-4 font-serif text-xl font-bold text-charcoal dark:text-dark-text">
           My Bookings
         </h2>
-        <BookingsList upcoming={upcoming} past={past} waitlisted={waitlisted} />
+        <BookingsList
+          upcoming={upcoming}
+          past={past}
+          waitlisted={waitlisted}
+          reviewableEventIds={reviewableEventIds}
+          userName={profile.full_name}
+          userAvatar={profile.avatar_url}
+        />
       </section>
 
       <EditProfileForm profile={profile} open={editOpen} onOpenChange={setEditOpen} />

@@ -17,6 +17,10 @@ vi.mock('next/link', () => ({
   ),
 }))
 
+vi.mock('@/components/reviews/ReviewForm', () => ({
+  default: () => <div data-testid="review-form" />,
+}))
+
 vi.mock('@/lib/utils/dates', () => ({
   formatDateCard: () => 'Sat 10 May',
   formatTime: () => '7:00 PM',
@@ -36,6 +40,7 @@ vi.mock('lucide-react', () => {
     Users: icon,
     Calendar: icon,
     MapPin: icon,
+    Star: icon,
   }
 })
 
@@ -148,7 +153,7 @@ function makeBooking(overrides: Partial<BookingWithEvent> & { id?: string } = {}
 
 describe('BookingsList', () => {
   it('renders three tab triggers', () => {
-    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} />)
+    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
 
     const tabs = screen.getAllByRole('tab')
     expect(tabs).toHaveLength(3)
@@ -160,7 +165,7 @@ describe('BookingsList', () => {
   it('shows correct counts on tabs', () => {
     const upcoming = [makeBooking({ id: 'b1' }), makeBooking({ id: 'b2' })]
 
-    render(<BookingsList upcoming={upcoming} past={[]} waitlisted={[]} />)
+    render(<BookingsList upcoming={upcoming} past={[]} waitlisted={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
 
     expect(screen.getByText('2')).toBeTruthy()
     const zeros = screen.getAllByText('0')
@@ -168,7 +173,7 @@ describe('BookingsList', () => {
   })
 
   it('shows upcoming empty state with CTA when no upcoming bookings', () => {
-    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} />)
+    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
 
     expect(screen.getByText(/Your next event awaits/)).toBeTruthy()
     const ctaLink = screen.getByText(/Browse what's coming up this month/)
@@ -176,7 +181,7 @@ describe('BookingsList', () => {
   })
 
   it('shows past empty state when past tab is clicked and empty', () => {
-    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} />)
+    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
 
     fireEvent.click(screen.getByRole('tab', { name: /Past/ }))
 
@@ -186,7 +191,7 @@ describe('BookingsList', () => {
   })
 
   it('shows waitlisted empty state when waitlisted tab is clicked and empty', () => {
-    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} />)
+    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
 
     fireEvent.click(screen.getByRole('tab', { name: /Waitlisted/ }))
 
@@ -198,7 +203,7 @@ describe('BookingsList', () => {
   it('renders BookingCards when upcoming bookings exist', () => {
     const upcoming = [makeBooking()]
 
-    render(<BookingsList upcoming={upcoming} past={[]} waitlisted={[]} />)
+    render(<BookingsList upcoming={upcoming} past={[]} waitlisted={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
 
     expect(screen.getByText('Wine & Wisdom')).toBeTruthy()
     expect(screen.getByText('Confirmed')).toBeTruthy()
@@ -208,6 +213,7 @@ describe('BookingsList', () => {
     const past = [
       makeBooking({
         id: 'past-1',
+        event_id: 'evt-2',
         event: {
           id: 'evt-2',
           slug: 'jazz-night',
@@ -222,7 +228,7 @@ describe('BookingsList', () => {
       }),
     ]
 
-    render(<BookingsList upcoming={[]} past={past} waitlisted={[]} />)
+    render(<BookingsList upcoming={[]} past={past} waitlisted={[]} reviewableEventIds={new Set(['evt-2'])} userName="Test User" userAvatar={null} />)
 
     fireEvent.click(screen.getByRole('tab', { name: /Past/ }))
 
@@ -239,7 +245,7 @@ describe('BookingsList', () => {
       }),
     ]
 
-    render(<BookingsList upcoming={[]} past={[]} waitlisted={waitlisted} />)
+    render(<BookingsList upcoming={[]} past={[]} waitlisted={waitlisted} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
 
     fireEvent.click(screen.getByRole('tab', { name: /Waitlisted/ }))
 

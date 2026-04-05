@@ -21,6 +21,7 @@ import BookingModal from "@/components/events/BookingModal";
 import BookingSidebar from "@/components/events/BookingSidebar";
 import StarRating from "@/components/reviews/StarRating";
 import ReviewCard from "@/components/reviews/ReviewCard";
+import ReviewForm from "@/components/reviews/ReviewForm";
 import EventCard from "@/components/events/EventCard";
 import MobileBookingBar from "@/components/events/MobileBookingBar";
 import type {
@@ -39,6 +40,8 @@ interface EventDetailClientProps {
   userBooking: Booking | null;
   isLoggedIn: boolean;
   userName: string | null;
+  userAvatar: string | null;
+  userId: string | null;
 }
 
 const fadeInUp = {
@@ -68,8 +71,11 @@ export default function EventDetailClient({
   userBooking,
   isLoggedIn,
   userName,
+  userAvatar,
+  userId,
 }: EventDetailClientProps) {
   const [bookingOpen, setBookingOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
 
@@ -79,6 +85,13 @@ export default function EventDetailClient({
   const hasReviews = reviews.length > 0;
   const hasGallery = photos.length > 0;
   const heroImage = resolveEventImage(event.image_url);
+
+  // Can the current user leave a review?
+  const userAttended = userBooking?.status === 'confirmed' && isPast;
+  const userAlreadyReviewed = userId != null && reviews.some(
+    (r) => r.author.id === userId
+  );
+  const canReview = userAttended && !userAlreadyReviewed;
 
   return (
     <>
@@ -286,41 +299,72 @@ export default function EventDetailClient({
                 </motion.div>
               )}
 
-              {/* Reviews Section (Past events with reviews) */}
-              {hasReviews && (
-                <motion.div {...fadeInUp} className="mb-10">
-                  <div className="mb-6 flex items-center gap-4">
-                    <h2 className="text-2xl font-bold text-text-primary">
-                      Reviews
-                    </h2>
-                    <div className="flex items-center gap-2">
-                      <StarRating
-                        rating={event.avg_rating}
-                        size="md"
-                        showNumber
-                      />
-                      <span className="text-sm text-text-primary/50">
-                        ({event.review_count}{" "}
-                        {event.review_count === 1 ? "review" : "reviews"})
-                      </span>
+              {/* Reviews Section (Past events) */}
+              {isPast && (hasReviews || canReview) && (
+                <motion.div {...fadeInUp} className="mb-10" id="reviews">
+                  <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+                    <div className="flex items-center gap-4">
+                      <h2 className="text-2xl font-bold text-text-primary">
+                        Reviews
+                      </h2>
+                      {hasReviews && (
+                        <div className="flex items-center gap-2">
+                          <StarRating
+                            rating={event.avg_rating}
+                            size="md"
+                            showNumber
+                          />
+                          <span className="text-sm text-text-primary/50">
+                            from {event.review_count}{" "}
+                            {event.review_count === 1 ? "review" : "reviews"}
+                          </span>
+                        </div>
+                      )}
                     </div>
+                    {canReview && (
+                      <button
+                        type="button"
+                        onClick={() => setReviewOpen(true)}
+                        className="rounded-full bg-gold px-6 py-2 text-sm font-semibold text-white transition-colors hover:bg-gold-hover active:scale-[0.98]"
+                      >
+                        Share your experience
+                      </button>
+                    )}
                   </div>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    {reviews.map((review) => (
-                      <ReviewCard key={review.id} review={review} />
-                    ))}
-                  </div>
+                  {hasReviews ? (
+                    <div className="grid gap-4 md:grid-cols-2">
+                      {reviews.map((review) => (
+                        <ReviewCard key={review.id} review={review} />
+                      ))}
+                    </div>
+                  ) : canReview ? (
+                    <div className="rounded-xl border border-blush/40 bg-bg-card p-8 text-center">
+                      <p className="text-sm text-text-primary/60">
+                        Be the first to review this event
+                      </p>
+                    </div>
+                  ) : null}
                 </motion.div>
               )}
 
               {/* Gallery Section (Past events with photos) */}
               {hasGallery && (
                 <motion.div {...fadeInUp} className="mb-10">
-                  <h2 className="mb-6 text-2xl font-bold text-text-primary">
-                    Event Gallery
-                  </h2>
-                  <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-                    {photos.map((photo) => {
+                  <div className="mb-6 flex items-center justify-between">
+                    <h2 className="text-2xl font-bold text-text-primary">
+                      Event Gallery
+                    </h2>
+                    {photos.length > 4 && (
+                      <Link
+                        href={`/gallery?event=${event.slug}`}
+                        className="text-sm font-medium text-gold transition-colors hover:text-gold-hover"
+                      >
+                        View all photos &rarr;
+                      </Link>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                    {photos.slice(0, 4).map((photo, idx) => {
                       const photoUrl = resolveEventImage(photo.image_url);
                       if (!photoUrl) return null;
                       return (
@@ -334,7 +378,7 @@ export default function EventDetailClient({
                             alt={photo.caption || "Event photo"}
                             fill
                             className="object-cover transition-transform duration-300 group-hover:scale-105"
-                            sizes="(max-width: 768px) 50vw, 33vw"
+                            sizes="(max-width: 768px) 50vw, 25vw"
                           />
                           <div className="absolute inset-0 bg-black/0 transition-all group-hover:bg-black/30" />
                           {photo.caption && (
@@ -342,6 +386,14 @@ export default function EventDetailClient({
                               <p className="text-xs font-medium text-white">
                                 {photo.caption}
                               </p>
+                            </div>
+                          )}
+                          {/* "+N more" overlay on last photo if there are more */}
+                          {idx === 3 && photos.length > 4 && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                              <span className="text-lg font-semibold text-white">
+                                +{photos.length - 4}
+                              </span>
                             </div>
                           )}
                         </button>
@@ -451,6 +503,18 @@ export default function EventDetailClient({
         onClose={() => setBookingOpen(false)}
         userName={userName}
       />
+
+      {/* Review Modal */}
+      {reviewOpen && canReview && userName && (
+        <ReviewForm
+          eventId={event.id}
+          eventTitle={event.title}
+          eventDate={formatDateCard(event.date_time)}
+          userName={userName}
+          userAvatar={userAvatar}
+          onClose={() => setReviewOpen(false)}
+        />
+      )}
     </>
   );
 }

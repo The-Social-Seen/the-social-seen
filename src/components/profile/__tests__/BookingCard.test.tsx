@@ -114,12 +114,22 @@ describe('BookingCard', () => {
     expect(screen.getByText('Cancelled')).toBeTruthy()
   })
 
-  it('shows "Leave a Review" link for past variant', () => {
+  it('shows "Leave a Review" button for reviewable past variant', () => {
+    const onReviewClick = vi.fn()
+    render(
+      <BookingCard booking={makeBooking()} variant="past" isReviewable onReviewClick={onReviewClick} />,
+    )
+
+    const reviewBtn = screen.getByText('Leave a Review')
+    expect(reviewBtn).toBeTruthy()
+    expect(reviewBtn.tagName).toBe('BUTTON')
+  })
+
+  it('shows "Reviewed" label for non-reviewable past variant', () => {
     render(<BookingCard booking={makeBooking()} variant="past" />)
 
-    const reviewLink = screen.getByText('Leave a Review')
-    expect(reviewLink).toBeTruthy()
-    expect(reviewLink.closest('a')?.getAttribute('href')).toBe('/events/wine-and-wisdom#reviews')
+    expect(screen.getByText('Reviewed')).toBeTruthy()
+    expect(screen.queryByText('Leave a Review')).toBeNull()
   })
 
   it('does not show "Leave a Review" for upcoming variant', () => {
