@@ -46,9 +46,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   );
   const [mounted, setMounted] = useState(false);
 
-  // Apply theme and mark mounted
+  // Apply theme to DOM and mark hydration complete
   useEffect(() => {
     applyTheme(theme);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
   }, [theme]);
 
