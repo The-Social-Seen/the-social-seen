@@ -18,7 +18,7 @@ vi.mock('next/link', () => ({
 }))
 
 // Mock dates module — control isWithin48Hours
-const mockIsWithin48Hours = vi.fn(() => false)
+const mockIsWithin48Hours = vi.fn((_date: unknown) => false)
 vi.mock('@/lib/utils/dates', () => ({
   formatDateCard: () => 'Sat 10 May',
   formatTime: () => '7:00 PM',
