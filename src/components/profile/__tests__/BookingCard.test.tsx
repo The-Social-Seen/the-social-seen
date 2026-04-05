@@ -22,7 +22,7 @@ const mockIsWithin48Hours = vi.fn(() => false)
 vi.mock('@/lib/utils/dates', () => ({
   formatDateCard: () => 'Sat 10 May',
   formatTime: () => '7:00 PM',
-  isWithin48Hours: (...args: unknown[]) => mockIsWithin48Hours(...args),
+  isWithin48Hours: (date: unknown) => mockIsWithin48Hours(date),
 }))
 
 vi.mock('@/lib/utils/images', () => ({
