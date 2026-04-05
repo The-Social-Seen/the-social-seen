@@ -761,7 +761,7 @@ export async function getAdminMembers(search?: string, sort?: string) {
     statsMap.set(b.user_id, stats)
   }
 
-  let result: MemberWithStats[] = profiles.map((p) => {
+  const result: MemberWithStats[] = profiles.map((p) => {
     const stats = statsMap.get(p.id) ?? { attended: 0, confirmed: 0, waitlisted: 0 }
     return {
       ...p,
