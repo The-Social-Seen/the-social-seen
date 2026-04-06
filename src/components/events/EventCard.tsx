@@ -82,7 +82,7 @@ export function EventCard({ event, showRating }: EventCardProps) {
 
           {/* Category badge */}
           <div className="absolute left-3 top-3">
-            <span className="inline-flex items-center rounded-full bg-white/90 px-3 py-1 font-sans text-xs font-semibold text-charcoal backdrop-blur-sm">
+            <span className="inline-flex items-center rounded-full bg-bg-card/90 px-3 py-1 font-sans text-xs font-semibold text-text-primary backdrop-blur-sm">
               {categoryLabel(event.category)}
             </span>
           </div>

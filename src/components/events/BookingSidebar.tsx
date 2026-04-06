@@ -151,7 +151,7 @@ function CapacitySection({ event }: { event: EventDetail }) {
             {event.spots_left} / {event.capacity}
           </span>
         </div>
-        <div className="h-2 overflow-hidden rounded-full bg-cream">
+        <div className="h-2 overflow-hidden rounded-full bg-bg-secondary">
           <div
             className="h-full rounded-full bg-gold transition-all"
             style={{

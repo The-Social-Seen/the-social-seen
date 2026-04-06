@@ -83,7 +83,7 @@ export function HeroSection() {
             href="/events"
             className={cn(
               "inline-flex items-center justify-center rounded-full px-8 py-4",
-              "bg-gold font-sans text-sm font-semibold uppercase tracking-wider text-charcoal",
+              "bg-gold font-sans text-sm font-semibold uppercase tracking-wider text-text-primary",
               "transition-all duration-300 hover:bg-gold/90 hover:shadow-lg hover:shadow-gold/25"
             )}
           >

@@ -30,7 +30,7 @@ interface UpcomingEventsSectionProps {
 
 export function UpcomingEventsSection({ events }: UpcomingEventsSectionProps) {
   return (
-    <section className="bg-white px-6 py-24 md:py-32">
+    <section className="bg-bg-card px-6 py-24 md:py-32">
       <div className="mx-auto max-w-6xl">
         {/* Section header */}
         <motion.div
@@ -43,10 +43,10 @@ export function UpcomingEventsSection({ events }: UpcomingEventsSectionProps) {
           <p className="mb-4 font-sans text-sm font-medium uppercase tracking-[0.2em] text-gold">
             Upcoming
           </p>
-          <h2 className="mb-4 font-serif text-4xl font-bold text-charcoal md:text-5xl">
+          <h2 className="mb-4 font-serif text-4xl font-bold text-text-primary md:text-5xl">
             What&apos;s Coming Up
           </h2>
-          <p className="mx-auto max-w-xl font-sans text-lg text-charcoal/60">
+          <p className="mx-auto max-w-xl font-sans text-lg text-text-secondary">
             From intimate supper clubs to gallery openings, there is always
             something worth getting dressed up for.
           </p>

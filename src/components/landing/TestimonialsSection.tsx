@@ -25,7 +25,7 @@ function StarRating({ rating }: { rating: number }) {
             "h-4 w-4",
             i < rating
               ? "fill-gold text-gold"
-              : "fill-none text-charcoal/20"
+              : "fill-none text-text-tertiary/40"
           )}
         />
       ))}
