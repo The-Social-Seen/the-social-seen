@@ -44,7 +44,11 @@ export function LoginForm() {
       return
     }
 
+    const { createClient } = await import("@/lib/supabase/client")
+    const supabase = createClient()
+    await supabase.auth.getUser()    // Syncs client from server-set cookies → fires onAuthStateChange
     router.push(result.redirectTo)
+    router.refresh()                  // Refresh server component caches
   }
 
   return (

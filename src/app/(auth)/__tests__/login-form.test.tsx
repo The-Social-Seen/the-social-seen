@@ -29,7 +29,7 @@ const mockPush = vi.fn()
 let mockRedirectParam: string | null = null
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush }),
+  useRouter: () => ({ push: mockPush, refresh: vi.fn() }),
   useSearchParams: () => ({
     get: (key: string) => (key === 'redirect' ? mockRedirectParam : null),
   }),
@@ -39,6 +39,17 @@ const mockSignIn = vi.fn()
 
 vi.mock('../actions', () => ({
   signIn: (...args: unknown[]) => mockSignIn(...args),
+}))
+
+// The updated LoginForm does a dynamic import of the browser Supabase client
+// after a successful sign-in to sync auth state. Mock it here so tests don't
+// hit the real client (which would throw for missing env vars).
+vi.mock('@/lib/supabase/client', () => ({
+  createClient: () => ({
+    auth: {
+      getUser: vi.fn().mockResolvedValue({ data: { user: null } }),
+    },
+  }),
 }))
 
 import { LoginForm } from '../login/login-form'

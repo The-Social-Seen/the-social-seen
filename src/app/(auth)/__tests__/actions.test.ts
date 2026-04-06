@@ -181,7 +181,12 @@ describe('signIn', () => {
   })
 
   it('returns success with default redirect for valid credentials', async () => {
-    mockSignInWithPassword.mockResolvedValue({ error: null })
+    // signIn now checks profile.role to determine redirect destination
+    mockSignInWithPassword.mockResolvedValue({
+      data: { user: { id: 'user-1' } },
+      error: null,
+    })
+    mockSupabaseChain({ data: { role: 'member' } }) // profiles role check
 
     const result = await signIn({
       email: 'test@example.com',
@@ -191,8 +196,27 @@ describe('signIn', () => {
     expect(result).toEqual({ success: true, redirectTo: '/events' })
   })
 
-  it('preserves redirect URL when provided', async () => {
-    mockSignInWithPassword.mockResolvedValue({ error: null })
+  it('redirects admin user to /admin on sign in', async () => {
+    mockSignInWithPassword.mockResolvedValue({
+      data: { user: { id: 'admin-1' } },
+      error: null,
+    })
+    mockSupabaseChain({ data: { role: 'admin' } })
+
+    const result = await signIn({
+      email: 'mitesh50@hotmail.com',
+      password: 'password123',
+    })
+
+    expect(result).toEqual({ success: true, redirectTo: '/admin' })
+  })
+
+  it('preserves redirect URL when provided (skips admin check)', async () => {
+    // When redirectTo is explicitly provided, no profile lookup is done
+    mockSignInWithPassword.mockResolvedValue({
+      data: { user: { id: 'user-1' } },
+      error: null,
+    })
 
     const result = await signIn({
       email: 'test@example.com',

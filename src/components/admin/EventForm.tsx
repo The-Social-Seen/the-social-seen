@@ -91,7 +91,7 @@ export default function EventForm({ event, inclusions: initialInclusions }: Even
         }
       }
 
-      router.push('/admin/events')
+      router.push(`/admin/events/${eventId}`)
     })
   }
 

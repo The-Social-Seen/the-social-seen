@@ -63,16 +63,16 @@ export function BookingsList({
       <button
         type="button"
         onClick={() => setReviewTarget(firstReviewable)}
-        className="mb-6 flex w-full items-center gap-3 rounded-xl border border-gold/20 bg-gold/5 p-4 text-left transition-colors hover:bg-gold/10 dark:border-gold/15 dark:bg-gold/5"
+        className="mb-6 flex w-full items-center gap-3 rounded-xl border border-gold/20 bg-gold/5 p-4 text-left transition-colors hover:bg-gold/10"
       >
         <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gold/10">
           <Star className="h-5 w-5 text-gold" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-charcoal dark:text-dark-text">
+          <p className="text-sm font-medium text-text-primary">
             How was {firstReviewable.event.title}?
           </p>
-          <p className="text-xs text-muted dark:text-dark-muted">
+          <p className="text-xs text-text-tertiary">
             Share your experience &rarr;
           </p>
         </div>
@@ -81,7 +81,7 @@ export function BookingsList({
 
     <Tabs.Root value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)}>
       {/* Tab triggers */}
-      <Tabs.List className="mb-6 flex gap-1 rounded-xl border border-border bg-white p-1.5 shadow-sm dark:border-dark-border dark:bg-dark-surface">
+      <Tabs.List className="mb-6 flex gap-1 rounded-xl border border-border bg-bg-card p-1.5 shadow-sm">
         {TAB_CONFIG.map((tab) => {
           const Icon = tab.icon
           const isActive = activeTab === tab.value
@@ -92,8 +92,8 @@ export function BookingsList({
               className={cn(
                 'flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-all',
                 isActive
-                  ? 'bg-charcoal text-cream shadow-sm dark:bg-gold dark:text-white'
-                  : 'text-muted hover:text-charcoal dark:text-dark-muted dark:hover:text-dark-text',
+                  ? 'bg-charcoal text-cream shadow-sm'
+                  : 'text-text-tertiary hover:text-text-primary',
               )}
             >
               <Icon className="h-4 w-4" />
@@ -102,8 +102,8 @@ export function BookingsList({
                 className={cn(
                   'rounded-full px-1.5 py-0.5 text-xs',
                   isActive
-                    ? 'bg-gold/20 text-gold dark:bg-white/20 dark:text-white'
-                    : 'bg-charcoal/5 text-muted/60 dark:bg-dark-border dark:text-dark-muted',
+                    ? 'bg-gold/20 text-gold'
+                    : 'bg-charcoal/5 text-text-tertiary/60',
                 )}
               >
                 {counts[tab.value]}
@@ -195,9 +195,9 @@ function EmptyState({
   href?: string
 }) {
   return (
-    <div className="rounded-xl border border-border bg-white p-10 text-center dark:border-dark-border dark:bg-dark-surface">
-      <Icon className="mx-auto mb-3 h-10 w-10 text-muted/30 dark:text-dark-muted/30" />
-      <p className="mx-auto max-w-sm text-sm text-muted dark:text-dark-muted">{message}</p>
+    <div className="rounded-xl border border-border bg-bg-card p-10 text-center">
+      <Icon className="mx-auto mb-3 h-10 w-10 text-text-tertiary/30" />
+      <p className="mx-auto max-w-sm text-sm text-text-tertiary">{message}</p>
       {cta && href && (
         <Link
           href={href}

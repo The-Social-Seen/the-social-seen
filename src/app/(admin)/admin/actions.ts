@@ -239,7 +239,7 @@ export async function getRecentActivity() {
 // ── Event CRUD ───────────────────────────────────────────────────────────────
 
 export async function createEvent(formData: FormData) {
-  const { supabase } = await requireAdmin()
+  const { supabase, userId } = await requireAdmin()
 
   const raw = parseEventFormData(formData)
   const parsed = eventFormSchema.safeParse(raw)
@@ -283,6 +283,13 @@ export async function createEvent(formData: FormData) {
   if (error) {
     return { error: error.message }
   }
+
+  await supabase.from('event_hosts').insert({
+    event_id: event.id,
+    profile_id: userId,
+    role_label: 'Host',
+    sort_order: 0,
+  })
 
   revalidatePath('/admin/events')
   revalidatePath('/events')

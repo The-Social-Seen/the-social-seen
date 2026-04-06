@@ -17,10 +17,10 @@ export function ProfileCompletionBanner({ profile, onCompleteClick }: ProfileCom
   if (!isIncomplete || dismissed) return null
 
   return (
-    <div className="relative rounded-xl border border-gold/20 border-l-4 border-l-gold bg-cream p-4 dark:bg-dark-surface sm:flex sm:items-center sm:justify-between sm:gap-4">
+    <div className="relative rounded-xl border border-gold/20 border-l-4 border-l-gold bg-bg-card p-4 sm:flex sm:items-center sm:justify-between sm:gap-4">
       <div className="flex items-start gap-3 sm:items-center">
         <UserCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-gold sm:mt-0" />
-        <p className="text-sm text-charcoal dark:text-dark-text">
+        <p className="text-sm text-text-primary">
           Profiles with a photo get noticed more.{' '}
           <button
             onClick={onCompleteClick}
@@ -32,7 +32,7 @@ export function ProfileCompletionBanner({ profile, onCompleteClick }: ProfileCom
       </div>
       <button
         onClick={() => setDismissed(true)}
-        className="absolute right-3 top-3 text-muted transition-colors hover:text-charcoal dark:text-dark-muted dark:hover:text-dark-text sm:static"
+        className="absolute right-3 top-3 text-text-tertiary transition-colors hover:text-text-primary sm:static"
         aria-label="Dismiss banner"
       >
         <X className="h-4 w-4" />

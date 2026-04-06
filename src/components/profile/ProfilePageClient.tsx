@@ -30,7 +30,7 @@ export function ProfilePageClient({
       <ProfileHeader profile={profile} onEditClick={() => setEditOpen(true)} />
 
       <section className="mt-8">
-        <h2 className="mb-4 font-serif text-xl font-bold text-charcoal dark:text-dark-text">
+        <h2 className="mb-4 font-serif text-xl font-bold text-text-primary">
           My Bookings
         </h2>
         <BookingsList
