@@ -7,7 +7,7 @@ import { isPastEvent } from "@/lib/utils/dates";
 import EventCard from "@/components/events/EventCard";
 import { cn } from "@/lib/utils/cn";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronDown, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, SlidersHorizontal, CalendarX } from "lucide-react";
 
 const categories: ("All" | EventCategory)[] = [
   "All",
@@ -152,8 +152,12 @@ export default function EventsPageClient({ events }: EventsPageClientProps) {
               exit={{ opacity: 0 }}
               className="py-20 text-center"
             >
-              <p className="text-lg text-text-primary/50">
+              <CalendarX className="mx-auto mb-4 h-10 w-10 text-text-tertiary/40" />
+              <p className="text-lg font-medium text-text-primary">
                 No upcoming events match your filters.
+              </p>
+              <p className="mt-1 text-sm text-text-secondary">
+                Try adjusting your filters or check back soon for new events.
               </p>
               <button
                 onClick={clearFilters}

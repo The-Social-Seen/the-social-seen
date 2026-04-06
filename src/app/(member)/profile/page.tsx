@@ -8,6 +8,8 @@ import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: 'My Profile — The Social Seen',
+  description: 'Manage your profile, interests, and account settings.',
+  robots: { index: false, follow: false },
 }
 
 export default async function ProfilePage() {

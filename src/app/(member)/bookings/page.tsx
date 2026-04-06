@@ -8,6 +8,8 @@ import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: 'My Bookings — The Social Seen',
+  description: 'View and manage your upcoming and past event bookings.',
+  robots: { index: false, follow: false },
 }
 
 export default async function BookingsPage() {

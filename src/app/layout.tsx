@@ -21,7 +21,8 @@ const dmSans = DM_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "The Social Seen | Where Connections Become Stories",
+  metadataBase: new URL("https://thesocialseen.com"),
+  title: "The Social Seen — Where Connections Become Stories",
   description:
     "A curated community for those who believe the best moments are experienced together. Discover handpicked social events -- wine tastings, supper clubs, gallery openings, and cultural soirees.",
   keywords: [
