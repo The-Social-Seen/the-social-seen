@@ -58,7 +58,7 @@ export function Header() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, [handleScroll]);
 
-  // Auth state
+  // Auth state — onAuthStateChange listener (mount-only)
   useEffect(() => {
     let subscription: { unsubscribe: () => void } | undefined;
 
@@ -66,20 +66,6 @@ export function Header() {
       try {
         const { createClient } = await import("@/lib/supabase/client");
         const supabase = createClient();
-
-        const {
-          data: { user: currentUser },
-        } = await supabase.auth.getUser();
-        setUser(currentUser);
-
-        if (currentUser) {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', currentUser.id)
-            .single()
-          setIsAdmin(profile?.role === 'admin')
-        }
 
         const {
           data: { subscription: sub },
@@ -105,6 +91,33 @@ export function Header() {
     initAuth();
     return () => subscription?.unsubscribe();
   }, []);
+
+  // Re-check auth on every route change (catches login redirect on Vercel
+  // where onAuthStateChange may not fire due to HTTP-only cookie mismatch)
+  useEffect(() => {
+    async function checkAuth() {
+      try {
+        const { createClient } = await import("@/lib/supabase/client");
+        const supabase = createClient();
+        const { data: { user: currentUser } } = await supabase.auth.getUser();
+        setUser(currentUser);
+        if (currentUser) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', currentUser.id)
+            .single()
+          setIsAdmin(profile?.role === 'admin')
+        } else {
+          setIsAdmin(false)
+        }
+      } catch {
+        setUser(null);
+        setIsAdmin(false);
+      }
+    }
+    checkAuth();
+  }, [pathname]);
 
   // Lock body scroll when mobile menu is open
   useEffect(() => {
