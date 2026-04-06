@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { Sun, Moon, Menu, X } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { useTheme } from "@/components/layout/ThemeProvider";
@@ -41,6 +41,9 @@ function ThemeToggle({ theme, onToggle, className, transparent }: {
 export function Header() {
   const { theme, toggleTheme } = useTheme();
   const router = useRouter();
+  const pathname = usePathname();
+  // Only use white-on-transparent styling on the home page (dark hero background)
+  const isHeroPage = pathname === "/";
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [user, setUser] = useState<User | null>(null);
@@ -156,7 +159,7 @@ export function Header() {
             >
               <span className={cn(
                 "font-serif text-xl font-bold tracking-tight transition-colors duration-300 sm:text-2xl",
-                isScrolled ? "text-text-primary" : "text-white"
+                isHeroPage && !isScrolled ? "text-white" : "text-text-primary"
               )}>
                 The Social{" "}
                 <span className="text-gold">Seen</span>
@@ -173,14 +176,14 @@ export function Header() {
                     "relative px-4 py-2 text-sm font-medium tracking-wide transition-colors duration-200 hover:text-gold",
                     "after:absolute after:bottom-0 after:left-1/2 after:h-0.5 after:w-0 after:bg-gold after:transition-all after:duration-300 after:-translate-x-1/2",
                     "hover:after:w-3/4",
-                    isScrolled ? "text-text-secondary" : "text-white/80"
+                    isHeroPage && !isScrolled ? "text-white/80" : "text-text-secondary"
                   )}
                 >
                   {link.label}
                 </Link>
               ))}
 
-              <ThemeToggle theme={theme} onToggle={toggleTheme} className="ml-4" transparent={!isScrolled} />
+              <ThemeToggle theme={theme} onToggle={toggleTheme} className="ml-4" transparent={isHeroPage && !isScrolled} />
 
               {/* Auth: Avatar dropdown or Sign In */}
               {user ? (
@@ -199,9 +202,9 @@ export function Header() {
                     "ml-2 inline-flex items-center justify-center rounded-full px-5 py-2",
                     "text-sm font-medium transition-all duration-200",
                     "hover:border-gold hover:text-gold",
-                    isScrolled
-                      ? "border border-border text-text-secondary"
-                      : "border border-white/30 text-white/80"
+                    isHeroPage && !isScrolled
+                      ? "border border-white/30 text-white/80"
+                      : "border border-border text-text-secondary"
                   )}
                 >
                   Sign In
@@ -211,16 +214,16 @@ export function Header() {
 
             {/* Mobile Controls */}
             <div className="flex items-center gap-3 md:hidden">
-              <ThemeToggle theme={theme} onToggle={toggleTheme} transparent={!isScrolled} />
+              <ThemeToggle theme={theme} onToggle={toggleTheme} transparent={isHeroPage && !isScrolled} />
 
               <button
                 onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
                 className={cn(
                   "flex h-11 w-11 items-center justify-center rounded-full",
                   "transition-all duration-200 hover:border-gold hover:text-gold",
-                  isScrolled
-                    ? "border border-border text-text-secondary"
-                    : "border border-white/30 text-white/70"
+                  isHeroPage && !isScrolled
+                    ? "border border-white/30 text-white/70"
+                    : "border border-border text-text-secondary"
                 )}
                 aria-label={isMobileMenuOpen ? "Close menu" : "Open menu"}
                 aria-expanded={isMobileMenuOpen}
