@@ -37,18 +37,23 @@ export function LoginForm() {
       redirectTo,
     })
 
-    setLoading(false)
-
     if ('error' in result) {
       setError(result.error)
+      setLoading(false)
       return
     }
 
-    const { createClient } = await import("@/lib/supabase/client")
-    const supabase = createClient()
-    await supabase.auth.getUser()    // Syncs client from server-set cookies → fires onAuthStateChange
+    try {
+      const { createClient } = await import("@/lib/supabase/client")
+      const supabase = createClient()
+      await supabase.auth.getUser()
+    } catch {
+      // Client-side sync failed — session still exists server-side
+      // Header will pick up auth state on next page load
+    }
+
     router.push(result.redirectTo)
-    router.refresh()                  // Refresh server component caches
+    router.refresh()
   }
 
   return (
