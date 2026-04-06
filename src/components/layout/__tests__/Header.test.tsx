@@ -29,6 +29,7 @@ function filterDomProps(props: Record<string, unknown>) {
 // Mock next/navigation
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  usePathname: () => '/events',
 }))
 
 // Mock next/image

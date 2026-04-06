@@ -21,7 +21,8 @@ const dmSans = DM_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "The Social Seen | Where Connections Become Stories",
+  metadataBase: new URL("https://thesocialseen.com"),
+  title: "The Social Seen — Where Connections Become Stories",
   description:
     "A curated community for those who believe the best moments are experienced together. Discover handpicked social events -- wine tastings, supper clubs, gallery openings, and cultural soirees.",
   keywords: [
@@ -77,6 +78,7 @@ export default async function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <script
           dangerouslySetInnerHTML={{
             __html: `

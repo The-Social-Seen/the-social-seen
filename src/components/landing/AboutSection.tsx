@@ -23,7 +23,7 @@ const fadeInRight = {
 
 export function AboutSection() {
   return (
-    <section className="bg-cream px-6 py-24 md:py-32">
+    <section className="bg-bg-primary px-6 py-24 md:py-32">
       <div className="mx-auto max-w-6xl">
         <div className="grid items-center gap-12 md:grid-cols-2 md:gap-20">
           {/* Text column */}
@@ -37,13 +37,13 @@ export function AboutSection() {
               Our Story
             </p>
 
-            <h2 className="mb-8 font-serif text-4xl font-bold leading-tight text-charcoal md:text-5xl">
+            <h2 className="mb-8 font-serif text-4xl font-bold leading-tight text-text-primary md:text-5xl">
               More Than
               <br />
               <span className="italic text-gold">Networking</span>
             </h2>
 
-            <div className="space-y-6 font-sans text-base leading-relaxed text-charcoal/70 md:text-lg">
+            <div className="space-y-6 font-sans text-base leading-relaxed text-text-secondary md:text-lg">
               <p>
                 The Social Seen was born from a simple belief: the best
                 connections happen when you stop trying to network and start
@@ -58,7 +58,7 @@ export function AboutSection() {
                 designed to spark genuine conversation and lasting friendships.
               </p>
               <p>
-                Now <span className="font-semibold text-charcoal">1,000+ members strong</span>,
+                Now <span className="font-semibold text-text-primary">1,000+ members strong</span>,
                 we have become London&apos;s most sought-after social community. Not
                 because we tried to be, but because when you bring the right
                 people together in the right setting, magic happens.

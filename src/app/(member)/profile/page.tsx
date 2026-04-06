@@ -8,6 +8,8 @@ import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: 'My Profile — The Social Seen',
+  description: 'Manage your profile, interests, and account settings.',
+  robots: { index: false, follow: false },
 }
 
 export default async function ProfilePage() {
@@ -30,7 +32,7 @@ export default async function ProfilePage() {
   const reviewableEventIds = new Set(reviewableEvents.map((e) => e.id))
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6 md:py-20">
+    <div className="mx-auto max-w-4xl px-4 pb-12 pt-20 sm:px-6 sm:pt-24 md:pb-20">
       <h1 className="sr-only">My Profile</h1>
       <div className="space-y-6">
         <ProfilePageClient

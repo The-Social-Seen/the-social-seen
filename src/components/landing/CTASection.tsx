@@ -57,7 +57,7 @@ export function CTASection() {
               href="/join"
               className={cn(
                 "inline-flex items-center justify-center rounded-full px-10 py-5",
-                "bg-gold font-sans text-base font-semibold uppercase tracking-wider text-charcoal",
+                "bg-gold font-sans text-base font-semibold uppercase tracking-wider text-text-primary",
                 "transition-all duration-300",
                 "hover:bg-gold/90 hover:shadow-xl hover:shadow-gold/20",
                 "active:scale-[0.98]"

@@ -32,12 +32,21 @@ export async function generateMetadata({
   const ogImage = resolveEventImage(event.image_url);
 
   return {
-    title: `${event.title} | The Social Seen`,
+    title: `${event.title} — The Social Seen`,
     description: event.short_description,
     openGraph: {
+      type: "website",
       title: event.title,
       description: event.short_description,
-      ...(ogImage ? { images: [{ url: ogImage }] } : {}),
+      ...(ogImage
+        ? { images: [{ url: ogImage, width: 1200, height: 630, alt: event.title }] }
+        : {}),
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: event.title,
+      description: event.short_description,
+      ...(ogImage ? { images: [ogImage] } : {}),
     },
   };
 }
@@ -76,17 +85,62 @@ export default async function EventDetailPage({ params }: PageProps) {
     userAvatar = profile?.avatar_url ?? null
   }
 
+  const ogImage = resolveEventImage(event.image_url);
+
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Event",
+    name: event.title,
+    description: event.short_description,
+    startDate: event.date_time,
+    endDate: event.end_time,
+    eventStatus: "https://schema.org/EventScheduled",
+    eventAttendanceMode: "https://schema.org/OfflineEventAttendanceMode",
+    location: {
+      "@type": "Place",
+      name: event.venue_name,
+      address: {
+        "@type": "PostalAddress",
+        streetAddress: event.venue_address,
+        addressLocality: "London",
+        addressCountry: "GB",
+      },
+    },
+    organizer: {
+      "@type": "Organization",
+      name: "The Social Seen",
+      url: "https://thesocialseen.com",
+    },
+    offers: {
+      "@type": "Offer",
+      price: event.price,
+      priceCurrency: "GBP",
+      availability:
+        event.capacity === null || (event.spots_left ?? 1) > 0
+          ? "https://schema.org/InStock"
+          : "https://schema.org/SoldOut",
+      url: `https://thesocialseen.com/events/${event.slug}`,
+    },
+    ...(ogImage ? { image: ogImage } : {}),
+  };
+
   return (
-    <EventDetailClient
-      event={event}
-      reviews={reviews}
-      photos={photos}
-      relatedEvents={relatedEvents}
-      userBooking={userBooking}
-      isLoggedIn={!!user}
-      userName={userName}
-      userAvatar={userAvatar}
-      userId={user?.id ?? null}
-    />
+    <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
+      <EventDetailClient
+        event={event}
+        reviews={reviews}
+        photos={photos}
+        relatedEvents={relatedEvents}
+        userBooking={userBooking}
+        isLoggedIn={!!user}
+        userName={userName}
+        userAvatar={userAvatar}
+        userId={user?.id ?? null}
+      />
+    </>
   );
 }

@@ -7,7 +7,7 @@ import { isPastEvent } from "@/lib/utils/dates";
 import EventCard from "@/components/events/EventCard";
 import { cn } from "@/lib/utils/cn";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronDown, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, SlidersHorizontal, CalendarX } from "lucide-react";
 
 const categories: ("All" | EventCategory)[] = [
   "All",
@@ -85,10 +85,10 @@ export default function EventsPageClient({ events }: EventsPageClientProps) {
 
   return (
     <>
-      {/* Filter Bar */}
-      <section className="sticky top-0 z-20 border-b border-blush/40 bg-bg-card/80 backdrop-blur-xl">
-        <div className="mx-auto max-w-7xl px-6 py-4">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      {/* Filter Bar — sticky below fixed header */}
+      <section className="sticky top-16 z-20 border-b border-blush/40 bg-bg-card/80 backdrop-blur-xl sm:top-20">
+        <div className="mx-auto max-w-7xl px-6 py-3">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             {/* Category Pills */}
             <div className="flex items-center gap-2">
               <SlidersHorizontal className="mr-1 hidden h-4 w-4 text-text-primary/40 md:block" />
@@ -98,7 +98,7 @@ export default function EventsPageClient({ events }: EventsPageClientProps) {
                     key={category}
                     onClick={() => setSelectedCategory(category)}
                     className={cn(
-                      "flex-shrink-0 rounded-full px-4 py-2 text-sm font-medium transition-all duration-200",
+                      "flex min-h-[44px] flex-shrink-0 items-center rounded-full px-4 text-sm font-medium transition-all duration-200",
                       selectedCategory === category
                         ? "bg-charcoal text-white shadow-sm"
                         : "bg-bg-primary text-text-primary/70 hover:bg-blush/40 hover:text-text-primary"
@@ -117,7 +117,7 @@ export default function EventsPageClient({ events }: EventsPageClientProps) {
                   key={filter}
                   onClick={() => setSelectedPrice(filter)}
                   className={cn(
-                    "rounded-full px-4 py-2 text-sm font-medium transition-all duration-200",
+                    "flex min-h-[44px] items-center rounded-full px-4 text-sm font-medium transition-all duration-200",
                     selectedPrice === filter
                       ? "bg-gold text-white shadow-sm"
                       : "bg-bg-primary text-text-primary/70 hover:bg-blush/40 hover:text-text-primary"
@@ -152,8 +152,12 @@ export default function EventsPageClient({ events }: EventsPageClientProps) {
               exit={{ opacity: 0 }}
               className="py-20 text-center"
             >
-              <p className="text-lg text-text-primary/50">
+              <CalendarX className="mx-auto mb-4 h-10 w-10 text-text-tertiary/40" />
+              <p className="text-lg font-medium text-text-primary">
                 No upcoming events match your filters.
+              </p>
+              <p className="mt-1 text-sm text-text-secondary">
+                Try adjusting your filters or check back soon for new events.
               </p>
               <button
                 onClick={clearFilters}

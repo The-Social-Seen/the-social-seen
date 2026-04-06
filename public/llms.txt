@@ -1,0 +1,22 @@
+# The Social Seen
+
+> A curated social events platform for London professionals. We connect people through handpicked experiences — supper clubs, gallery openings, wine tastings, cultural soirées, and more.
+
+## About
+
+The Social Seen is London's premier social community for professionals in their 30s–40s who believe the best moments are experienced together. We curate intimate events designed to spark genuine connections.
+
+## Pages
+
+- [Home](https://thesocialseen.com): Landing page with featured events and community overview
+- [Events](https://thesocialseen.com/events): Full listing of upcoming and past events with category and price filters
+- [Gallery](https://thesocialseen.com/gallery): Photo gallery from past events
+- [Join](https://thesocialseen.com/join): Membership registration
+
+## Event Categories
+
+drinks, dining, cultural, wellness, sport, workshops, music, networking
+
+## Contact
+
+For enquiries, visit [thesocialseen.com](https://thesocialseen.com).

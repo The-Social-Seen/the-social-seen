@@ -22,9 +22,9 @@ export default async function GalleryPage({ searchParams }: PageProps) {
 
   return (
     <main className="min-h-screen bg-bg-primary">
-      {/* Header */}
-      <section className="border-b border-blush/40 bg-bg-card">
-        <div className="mx-auto max-w-7xl px-6 py-16 md:py-20">
+      {/* Header — pt-16/pt-20 clears the fixed nav header */}
+      <section className="border-b border-blush/40 bg-bg-card pt-16 sm:pt-20">
+        <div className="mx-auto max-w-7xl px-6 py-12 md:py-16">
           <div className="mb-3 flex items-center gap-2">
             <Camera className="h-5 w-5 text-gold" />
             <span className="text-sm font-medium uppercase tracking-wider text-gold">

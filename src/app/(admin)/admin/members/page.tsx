@@ -19,7 +19,7 @@ export default async function AdminMembersPage({ searchParams }: PageProps) {
       <h1 className="font-serif text-2xl text-text-primary">Members</h1>
 
       <div className="bg-bg-card border border-border rounded-xl p-6">
-        <Suspense fallback={<div className="h-64 animate-shimmer rounded-lg" />}>
+        <Suspense fallback={<div className="animate-shimmer h-64 rounded-lg" />}>
           <MembersTable members={members} />
         </Suspense>
       </div>

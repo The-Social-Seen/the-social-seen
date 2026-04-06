@@ -252,6 +252,18 @@ a {
   background: linear-gradient(
     90deg,
     var(--color-bg-secondary) 25%,
+    var(--color-blush) 50%,
+    var(--color-bg-secondary) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+/* Dark mode: subtler highlight that still reads as a shimmer */
+.dark .animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-bg-secondary) 25%,
     var(--color-bg-tertiary) 50%,
     var(--color-bg-secondary) 75%
   );
