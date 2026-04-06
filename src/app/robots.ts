@@ -6,7 +6,7 @@ export default function robots(): MetadataRoute.Robots {
       {
         userAgent: "*",
         allow: "/",
-        disallow: ["/admin/", "/api/", "/(member)/"],
+        disallow: ["/admin/", "/api/", "/profile", "/bookings"],
       },
     ],
     sitemap: "https://thesocialseen.com/sitemap.xml",

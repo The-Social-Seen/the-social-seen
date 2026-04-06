@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 
 export default function NotFound() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-bg-primary px-6 text-center">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-bg-primary px-6 text-center">
       <p className="mb-4 font-sans text-sm font-medium uppercase tracking-[0.3em] text-gold">
         404
       </p>
@@ -23,17 +23,17 @@ export default function NotFound() {
       <div className="flex flex-col items-center gap-3 sm:flex-row">
         <Link
           href="/events"
-          className="inline-flex items-center justify-center rounded-full bg-gold px-8 py-3 font-sans text-sm font-semibold uppercase tracking-wider text-white transition-all duration-200 hover:bg-gold/90"
+          className="inline-flex items-center justify-center rounded-full bg-gold px-8 py-3.5 font-sans text-sm font-semibold uppercase tracking-wider text-white transition-all duration-200 hover:bg-gold/90"
         >
           Browse Events
         </Link>
         <Link
           href="/"
-          className="inline-flex items-center justify-center rounded-full border border-border px-8 py-3 font-sans text-sm font-semibold uppercase tracking-wider text-text-primary transition-all duration-200 hover:border-gold hover:text-gold"
+          className="inline-flex items-center justify-center rounded-full border border-border px-8 py-3.5 font-sans text-sm font-semibold uppercase tracking-wider text-text-primary transition-all duration-200 hover:border-gold hover:text-gold"
         >
           Go Home
         </Link>
       </div>
-    </main>
+    </div>
   );
 }
