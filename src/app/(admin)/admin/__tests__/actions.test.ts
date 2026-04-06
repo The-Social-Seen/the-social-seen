@@ -256,7 +256,7 @@ describe('createEvent — auto-host assignment', () => {
     expect(result).not.toHaveProperty('error')
 
     // from() call order: [0]=profiles(admin check), [1]=events(insert), [2]=event_hosts(insert)
-    const tables = mockFrom.mock.calls.map(([t]: [string]) => t)
+    const tables = mockFrom.mock.calls.map((args) => args[0] as string)
     expect(tables).toContain('event_hosts')
     expect(tables[2]).toBe('event_hosts')
   })
@@ -280,10 +280,9 @@ describe('createEvent — auto-host assignment', () => {
       }
       if (table === 'event_hosts') {
         const chain = mockChain({ error: null })
-        const origInsert = chain.insert
         chain.insert = vi.fn((data: unknown) => {
           capturedInsert = data
-          return origInsert(data)
+          return chain
         })
         return chain
       }
@@ -312,7 +311,7 @@ describe('createEvent — auto-host assignment', () => {
 
     // from() calls: [0]=profiles(admin check), [1]=events(insert with error)
     // event_hosts should NOT be reached
-    const tables = mockFrom.mock.calls.map(([t]: [string]) => t)
+    const tables = mockFrom.mock.calls.map((args) => args[0] as string)
     expect(tables).not.toContain('event_hosts')
   })
 })
