@@ -11,6 +11,7 @@ export type EventCategory =
   | 'workshops'
   | 'music'
   | 'networking'
+  | 'activity'
 
 export type BookingStatus = 'confirmed' | 'cancelled' | 'waitlisted' | 'no_show'
 
@@ -29,6 +30,7 @@ export const CATEGORY_LABELS: Record<EventCategory, string> = {
   workshops:  'Workshops',
   music:      'Music',
   networking: 'Networking',
+  activity:   'Activity',
 }
 
 export function categoryLabel(category: EventCategory): string {

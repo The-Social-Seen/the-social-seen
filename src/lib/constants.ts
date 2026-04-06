@@ -42,6 +42,7 @@ export const CATEGORIES: Array<{ value: EventCategory; label: string }> = [
   { value: 'workshops',  label: 'Workshops' },
   { value: 'music',      label: 'Music' },
   { value: 'networking', label: 'Networking' },
+  { value: 'activity',   label: 'Activity' },
 ]
 
 // ── Interest options (used in registration Step 2) ────────────────────────────
