@@ -14,14 +14,15 @@ describe('categoryLabel', () => {
     ['workshops',  'Workshops'],
     ['music',      'Music'],
     ['networking', 'Networking'],
+    ['activity',   'Activity'],
   ]
 
   it.each(cases)('maps "%s" → "%s"', (category, expected) => {
     expect(categoryLabel(category)).toBe(expected)
   })
 
-  it('covers all 8 EventCategory values', () => {
-    expect(Object.keys(CATEGORY_LABELS)).toHaveLength(8)
+  it('covers all 9 EventCategory values', () => {
+    expect(Object.keys(CATEGORY_LABELS)).toHaveLength(9)
   })
 
   it('returns a non-empty string for every category', () => {
@@ -40,10 +41,10 @@ describe('categoryLabel', () => {
 // ── CATEGORY_LABELS record ────────────────────────────────────────────────────
 
 describe('CATEGORY_LABELS', () => {
-  it('contains exactly the 8 expected category keys', () => {
+  it('contains exactly the 9 expected category keys', () => {
     const expected: EventCategory[] = [
       'drinks', 'dining', 'cultural', 'wellness',
-      'sport', 'workshops', 'music', 'networking',
+      'sport', 'workshops', 'music', 'networking', 'activity',
     ]
     expect(Object.keys(CATEGORY_LABELS).sort()).toEqual(expected.sort())
   })
