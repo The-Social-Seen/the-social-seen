@@ -66,5 +66,8 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(redirectUrl)
   }
 
+  // Forward pathname to root layout so it can conditionally render Header/Footer
+  supabaseResponse.headers.set('x-pathname', pathname)
+
   return supabaseResponse
 }

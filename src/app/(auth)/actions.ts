@@ -87,7 +87,7 @@ export async function signIn(input: {
   const { email, password, redirectTo } = parsed.data
   const supabase = await createServerClient()
 
-  const { error } = await supabase.auth.signInWithPassword({
+  const { data, error } = await supabase.auth.signInWithPassword({
     email,
     password,
   })
@@ -96,8 +96,21 @@ export async function signIn(input: {
     return { error: 'Invalid email or password' }
   }
 
+  // If no explicit redirect, check if user is admin and route accordingly
+  let destination = redirectTo || '/events'
+  if (!redirectTo && data.user) {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', data.user.id)
+      .single()
+    if (profile?.role === 'admin') {
+      destination = '/admin'
+    }
+  }
+
   revalidatePath('/', 'layout')
-  return { success: true, redirectTo: redirectTo || '/events' }
+  return { success: true, redirectTo: destination }
 }
 
 export async function signOut(): Promise<void> {

@@ -142,7 +142,7 @@ export default function ReviewForm({
       ? 'text-danger'
       : charCount >= WARN_THRESHOLD
         ? 'text-gold'
-        : 'text-muted dark:text-dark-muted'
+        : 'text-text-tertiary'
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -159,7 +159,7 @@ export default function ReviewForm({
         ref={panelRef}
         tabIndex={-1}
         className={cn(
-          'relative w-full max-w-lg bg-white dark:bg-dark-surface',
+          'relative w-full max-w-lg bg-bg-card',
           'rounded-t-2xl md:rounded-2xl',
           'p-6 shadow-xl',
           'focus-visible:outline-none',
@@ -171,22 +171,22 @@ export default function ReviewForm({
           type="button"
           onClick={onClose}
           aria-label="Close"
-          className="absolute top-4 right-4 flex h-11 w-11 items-center justify-center rounded-full text-muted transition-colors hover:bg-border/50 hover:text-charcoal dark:text-dark-muted dark:hover:bg-dark-border dark:hover:text-dark-text"
+          className="absolute top-4 right-4 flex h-11 w-11 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-border/50 hover:text-text-primary"
         >
           <X className="h-5 w-5" />
         </button>
 
         {/* Drag handle (mobile) */}
-        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-border dark:bg-dark-border md:hidden" />
+        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-border md:hidden" />
 
         {submittedReview ? (
           /* ── Success state ─────────────────────────────────────────── */
           <div className="space-y-5">
             <div className="text-center">
-              <h2 className="font-serif text-xl font-bold text-charcoal dark:text-dark-text">
+              <h2 className="font-serif text-xl font-bold text-text-primary">
                 Thank you for your review
               </h2>
-              <p className="mt-1 text-sm text-muted dark:text-dark-muted">
+              <p className="mt-1 text-sm text-text-tertiary">
                 Your feedback helps our community discover great events.
               </p>
             </div>
@@ -196,7 +196,7 @@ export default function ReviewForm({
             <button
               type="button"
               onClick={onClose}
-              className="w-full rounded-full border border-border bg-white px-8 py-3 text-sm font-semibold text-charcoal transition-colors hover:bg-cream dark:border-dark-border dark:bg-dark-surface dark:text-dark-text dark:hover:bg-dark-bg"
+              className="w-full rounded-full border border-border bg-bg-card px-8 py-3 text-sm font-semibold text-text-primary transition-colors hover:bg-bg-secondary"
             >
               Close
             </button>
@@ -206,17 +206,17 @@ export default function ReviewForm({
           <div className="space-y-5">
             {/* Event context header */}
             <div>
-              <h2 className="font-serif text-xl font-bold text-charcoal dark:text-dark-text">
+              <h2 className="font-serif text-xl font-bold text-text-primary">
                 Leave a Review
               </h2>
-              <p className="mt-1 text-sm text-muted dark:text-dark-muted">
+              <p className="mt-1 text-sm text-text-tertiary">
                 {eventTitle} &middot; {eventDate}
               </p>
             </div>
 
             {/* Star rating */}
             <div>
-              <label className="mb-2 block text-sm font-medium text-charcoal dark:text-dark-text">
+              <label className="mb-2 block text-sm font-medium text-text-primary">
                 How was your experience?
               </label>
               <InteractiveStarRating
@@ -235,10 +235,10 @@ export default function ReviewForm({
             <div>
               <label
                 htmlFor="review-text"
-                className="mb-2 block text-sm font-medium text-charcoal dark:text-dark-text"
+                className="mb-2 block text-sm font-medium text-text-primary"
               >
                 What made this event special?{' '}
-                <span className="font-normal text-muted dark:text-dark-muted">(optional)</span>
+                <span className="font-normal text-text-tertiary">(optional)</span>
               </label>
               <textarea
                 id="review-text"
@@ -247,10 +247,9 @@ export default function ReviewForm({
                 placeholder="What made this event special?"
                 rows={4}
                 className={cn(
-                  'w-full resize-none rounded-xl border border-border bg-white px-4 py-3 text-sm text-charcoal placeholder:text-muted',
+                  'w-full resize-none rounded-xl border border-border bg-bg-card px-4 py-3 text-sm text-text-primary placeholder:text-text-tertiary',
                   'transition-all duration-200',
                   'focus:border-gold focus:outline-none focus:ring-2 focus:ring-gold/50',
-                  'dark:border-dark-border dark:bg-dark-bg dark:text-dark-text dark:placeholder:text-dark-muted dark:focus:border-gold',
                 )}
               />
               <div className="mt-1 flex justify-end">

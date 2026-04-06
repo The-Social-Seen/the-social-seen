@@ -3,19 +3,21 @@
 import Link from "next/link";
 import Image from "next/image";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { User, CalendarDays, LogOut } from "lucide-react";
+import { User, CalendarDays, LogOut, LayoutDashboard } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 
 interface AvatarDropdownProps {
   avatarUrl: string | null;
   initials: string;
   onSignOut: () => void;
+  isAdmin?: boolean;
 }
 
 export function AvatarDropdown({
   avatarUrl,
   initials,
   onSignOut,
+  isAdmin,
 }: AvatarDropdownProps) {
   return (
     <DropdownMenu.Root>
@@ -54,6 +56,21 @@ export function AvatarDropdown({
             "animate-fade-in"
           )}
         >
+          {isAdmin && (
+            <DropdownMenu.Item asChild>
+              <Link
+                href="/admin"
+                className={cn(
+                  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-text-primary",
+                  "outline-none transition-colors hover:bg-bg-secondary focus:bg-bg-secondary"
+                )}
+              >
+                <LayoutDashboard className="h-4 w-4 text-text-tertiary" />
+                Dashboard
+              </Link>
+            </DropdownMenu.Item>
+          )}
+
           <DropdownMenu.Item asChild>
             <Link
               href="/profile"

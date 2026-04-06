@@ -42,6 +42,7 @@ export function Header() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const handleScroll = useCallback(() => {
     setIsScrolled(window.scrollY > 20);
@@ -66,10 +67,29 @@ export function Header() {
         } = await supabase.auth.getUser();
         setUser(currentUser);
 
+        if (currentUser) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', currentUser.id)
+            .single()
+          setIsAdmin(profile?.role === 'admin')
+        }
+
         const {
           data: { subscription: sub },
-        } = supabase.auth.onAuthStateChange((_event, session) => {
+        } = supabase.auth.onAuthStateChange(async (_event, session) => {
           setUser(session?.user ?? null);
+          if (session?.user) {
+            const { data: profile } = await supabase
+              .from('profiles')
+              .select('role')
+              .eq('id', session.user.id)
+              .single()
+            setIsAdmin(profile?.role === 'admin')
+          } else {
+            setIsAdmin(false)
+          }
         });
         subscription = sub;
       } catch {
@@ -164,6 +184,7 @@ export function Header() {
                     avatarUrl={avatarUrl}
                     initials={userInitials}
                     onSignOut={handleSignOut}
+                    isAdmin={isAdmin}
                   />
                 </div>
               ) : (
@@ -216,6 +237,7 @@ export function Header() {
         userInitials={userInitials}
         avatarUrl={avatarUrl}
         onSignOut={handleSignOut}
+        isAdmin={isAdmin}
       />
     </>
   );

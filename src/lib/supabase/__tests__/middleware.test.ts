@@ -18,6 +18,7 @@ vi.mock('next/server', () => ({
   NextResponse: {
     next: vi.fn(() => ({
       cookies: { set: vi.fn() },
+      headers: new Headers(),
       status: 200,
     })),
     redirect: vi.fn((url: URL) => ({

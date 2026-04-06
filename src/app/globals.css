@@ -15,7 +15,7 @@
 
   --color-text-primary: #1C1C1E;
   --color-text-secondary: #4A4A4C;
-  --color-text-tertiary: #8E8E93;
+  --color-text-tertiary: #636366;  /* was #8E8E93, now 5.3:1 on cream */
   --color-text-inverse: #FAF7F2;
 
   --color-gold: #C9A96E;
@@ -46,7 +46,7 @@
 
   --color-text-primary: #FAF7F2;
   --color-text-secondary: #C7C7CC;
-  --color-text-tertiary: #8E8E93;
+  --color-text-tertiary: #A1A1A6;  /* was #8E8E93, now 5.2:1 on dark bg */
   --color-text-inverse: #1C1C1E;
 
   --color-gold: #C9A96E;

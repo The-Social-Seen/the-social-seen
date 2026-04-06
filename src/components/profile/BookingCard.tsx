@@ -26,10 +26,10 @@ export function BookingCard({ booking, variant, isReviewable, onReviewClick }: B
   return (
     <div
       className={cn(
-        'group overflow-hidden rounded-xl border bg-white shadow-sm transition-all hover:shadow-md dark:bg-dark-surface',
+        'group overflow-hidden rounded-xl border bg-bg-card shadow-sm transition-all hover:shadow-md',
         isSoon
           ? 'border-gold/30 ring-2 ring-gold/20'
-          : 'border-border dark:border-dark-border',
+          : 'border-border',
       )}
     >
       <div className="flex flex-col sm:flex-row">
@@ -44,8 +44,8 @@ export function BookingCard({ booking, variant, isReviewable, onReviewClick }: B
               className="object-cover transition-transform duration-500 group-hover:scale-105"
             />
           ) : (
-            <div className="flex h-full min-h-[100px] w-full items-center justify-center bg-cream dark:bg-dark-border">
-              <Calendar className="h-8 w-8 text-muted/30" />
+            <div className="flex h-full min-h-[100px] w-full items-center justify-center bg-bg-secondary">
+              <Calendar className="h-8 w-8 text-text-tertiary/30" />
             </div>
           )}
         </div>
@@ -60,13 +60,13 @@ export function BookingCard({ booking, variant, isReviewable, onReviewClick }: B
               <StatusBadge status={booking.status} waitlistPosition={booking.waitlist_position} />
             </div>
 
-            <h3 className="mb-1.5 font-serif text-base font-bold text-charcoal dark:text-dark-text sm:text-lg">
+            <h3 className="mb-1.5 font-serif text-base font-bold text-text-primary sm:text-lg">
               <Link href={`/events/${event.slug}`} className="hover:text-gold transition-colors">
                 {event.title}
               </Link>
             </h3>
 
-            <div className="space-y-1 text-xs text-muted dark:text-dark-muted">
+            <div className="space-y-1 text-xs text-text-tertiary">
               <p className="flex items-center gap-1.5">
                 <Calendar className="h-3.5 w-3.5 flex-shrink-0" />
                 {formatDateCard(event.date_time)} &middot; {formatTime(event.date_time)}
@@ -86,7 +86,7 @@ export function BookingCard({ booking, variant, isReviewable, onReviewClick }: B
 
             {/* Waitlisted positive copy */}
             {variant === 'waitlisted' && (
-              <p className="mt-2 text-xs text-muted dark:text-dark-muted">
+              <p className="mt-2 text-xs text-text-tertiary">
                 Most waitlisted members get a spot &mdash; we&rsquo;ll let you know the moment one opens.
               </p>
             )}
@@ -112,7 +112,7 @@ export function BookingCard({ booking, variant, isReviewable, onReviewClick }: B
             {variant === 'past' && !isReviewable && (
               <Link
                 href={`/events/${event.slug}#reviews`}
-                className="rounded-full border border-gold/20 px-3 py-1 text-xs font-medium text-muted/50 dark:text-dark-muted/50 transition-all"
+                className="rounded-full border border-gold/20 px-3 py-1 text-xs font-medium text-text-tertiary/50 transition-all"
               >
                 Reviewed
               </Link>

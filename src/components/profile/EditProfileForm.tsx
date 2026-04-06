@@ -140,14 +140,14 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
     <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-charcoal/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-        <Dialog.Content className="fixed inset-x-4 bottom-0 z-50 mx-auto max-h-[90vh] max-w-lg overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl dark:bg-dark-surface sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl">
+        <Dialog.Content className="fixed inset-x-4 bottom-0 z-50 mx-auto max-h-[90vh] max-w-lg overflow-y-auto rounded-t-2xl bg-bg-card p-6 shadow-xl sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl">
           <div className="mb-6 flex items-center justify-between">
-            <Dialog.Title className="font-serif text-xl font-bold text-charcoal dark:text-dark-text">
+            <Dialog.Title className="font-serif text-xl font-bold text-text-primary">
               Edit Profile
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
-                className="rounded-full p-1.5 text-muted transition-colors hover:bg-cream hover:text-charcoal dark:text-dark-muted dark:hover:bg-dark-border dark:hover:text-dark-text"
+                className="rounded-full p-1.5 text-text-tertiary transition-colors hover:bg-bg-secondary hover:text-text-primary"
                 aria-label="Close"
               >
                 <X className="h-5 w-5" />
@@ -188,7 +188,7 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
                 >
                   Upload photo
                 </button>
-                <p className="mt-0.5 text-xs text-muted dark:text-dark-muted">JPG, PNG, or WebP. Max 2 MB.</p>
+                <p className="mt-0.5 text-xs text-text-tertiary">JPG, PNG, or WebP. Max 2 MB.</p>
                 {errors.avatar && <p className="mt-1 text-xs text-danger">{errors.avatar}</p>}
               </div>
               <input
@@ -254,7 +254,7 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
                 className={cn(fieldClass, 'resize-none')}
                 placeholder="Tell other members a bit about yourself"
               />
-              <p className="mt-1 text-right text-xs text-muted dark:text-dark-muted">
+              <p className="mt-1 text-right text-xs text-text-tertiary">
                 {bio.length}/500
               </p>
             </FieldGroup>
@@ -272,7 +272,7 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
 
             {/* Interests */}
             <div>
-              <label className="mb-2 block text-sm font-medium text-charcoal dark:text-dark-text">
+              <label className="mb-2 block text-sm font-medium text-text-primary">
                 Interests
               </label>
               <div className="flex flex-wrap gap-2">
@@ -313,7 +313,7 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
               <button
                 type="button"
                 onClick={() => handleOpenChange(false)}
-                className="flex-1 rounded-full border border-border px-6 py-3 text-sm font-medium text-charcoal transition-colors hover:bg-cream dark:border-dark-border dark:text-dark-text dark:hover:bg-dark-border"
+                className="flex-1 rounded-full border border-border px-6 py-3 text-sm font-medium text-text-primary transition-colors hover:bg-bg-secondary"
               >
                 Cancel
               </button>
@@ -336,7 +336,7 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
 // ── Shared styles ────────────────────────────────────────────────────────────
 
 const fieldClass =
-  'w-full rounded-lg border border-border bg-white px-3 py-2.5 text-sm text-charcoal placeholder:text-muted/50 focus:border-gold focus:outline-none focus:ring-2 focus:ring-gold/20 dark:border-dark-border dark:bg-dark-surface dark:text-dark-text dark:placeholder:text-dark-muted/50'
+  'w-full rounded-lg border border-border bg-bg-card px-3 py-2.5 text-sm text-text-primary placeholder:text-text-tertiary/50 focus:border-gold focus:outline-none focus:ring-2 focus:ring-gold/20'
 
 function FieldGroup({
   label,
@@ -349,7 +349,7 @@ function FieldGroup({
 }) {
   return (
     <div>
-      <label className="mb-1.5 block text-sm font-medium text-charcoal dark:text-dark-text">
+      <label className="mb-1.5 block text-sm font-medium text-text-primary">
         {label}
       </label>
       {children}

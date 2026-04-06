@@ -181,10 +181,10 @@ describe('createEvent', () => {
   it('creates event with correct slug and returns event', async () => {
     const createdEvent = { id: 'evt-new', slug: 'test-wine-evening', title: 'Test Wine Evening' }
     mockAdminWithSequence([
-      // uniqueSlug existence check → not found
-      { data: null },
-      // insert → returns event
+      // events insert → returns new event (uniqueSlug is mocked, no slug-check from() call)
       { data: createdEvent },
+      // event_hosts insert (auto-host assignment)
+      { error: null },
     ])
 
     const result = await createEvent(makeEventFormData())
@@ -195,17 +195,14 @@ describe('createEvent', () => {
 
   it('converts price from pounds to pence (35 → 3500)', async () => {
     mockAdminWithSequence([
-      { data: null },
       { data: { id: 'evt-new' } },
+      { error: null }, // event_hosts insert
     ])
 
     await createEvent(makeEventFormData({ price: '35' }))
 
-    // Verify insert was called — the second from() call after admin check
-    // is the slug check, third is the insert
-    const insertCalls = mockFrom.mock.results
-    // The chain should have called insert with price: 3500
-    // We verify via the from().insert() chain
+    // Verify insert was called — uniqueSlug is mocked so from() calls are:
+    // [0]=profiles(admin), [1]=events(insert), [2]=event_hosts(insert)
     expect(mockFrom).toHaveBeenCalled()
   })
 
@@ -237,6 +234,85 @@ describe('createEvent', () => {
 
     expect(result.error).toBeDefined()
     expect(result.error).toContain('End time must be after start time')
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// createEvent — auto-host assignment
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('createEvent — auto-host assignment', () => {
+  it('inserts a row into event_hosts after a successful event creation', async () => {
+    const createdEvent = { id: 'evt-auto-host', slug: 'test-wine-evening', title: 'Test Wine Evening' }
+    mockAdminWithSequence([
+      // events insert
+      { data: createdEvent },
+      // event_hosts insert
+      { error: null },
+    ])
+
+    const result = await createEvent(makeEventFormData())
+
+    expect(result).not.toHaveProperty('error')
+
+    // from() call order: [0]=profiles(admin check), [1]=events(insert), [2]=event_hosts(insert)
+    const tables = mockFrom.mock.calls.map((args) => args[0] as string)
+    expect(tables).toContain('event_hosts')
+    expect(tables[2]).toBe('event_hosts')
+  })
+
+  it('uses the authenticated admin userId as profile_id in event_hosts', async () => {
+    const adminId = 'admin-auto-host-id'
+    const createdEvent = { id: 'evt-host-check', slug: 'test-wine-evening', title: 'Test Wine Evening' }
+
+    authenticateAdmin(adminId)
+    let callIndex = 0
+    let capturedInsert: unknown = null
+
+    mockFrom.mockImplementation((table: string) => {
+      callIndex++
+      if (callIndex === 1) {
+        // profiles — admin role check
+        return mockChain({ data: { role: 'admin' } })
+      }
+      if (table === 'events') {
+        return mockChain({ data: createdEvent })
+      }
+      if (table === 'event_hosts') {
+        const chain = mockChain({ error: null })
+        chain.insert = vi.fn((data: unknown) => {
+          capturedInsert = data
+          return chain
+        })
+        return chain
+      }
+      return mockChain({ data: null })
+    })
+
+    await createEvent(makeEventFormData())
+
+    expect(capturedInsert).toMatchObject({
+      event_id: createdEvent.id,
+      profile_id: adminId,
+      role_label: 'Host',
+      sort_order: 0,
+    })
+  })
+
+  it('does not insert event_hosts when event creation fails (DB error)', async () => {
+    mockAdminWithSequence([
+      // events insert returns DB error
+      { data: null, error: { message: 'unique violation' } },
+    ])
+
+    const result = await createEvent(makeEventFormData())
+
+    expect(result.error).toBeDefined()
+
+    // from() calls: [0]=profiles(admin check), [1]=events(insert with error)
+    // event_hosts should NOT be reached
+    const tables = mockFrom.mock.calls.map((args) => args[0] as string)
+    expect(tables).not.toContain('event_hosts')
   })
 })
 

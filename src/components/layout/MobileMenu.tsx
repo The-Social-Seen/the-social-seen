@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, LogOut } from "lucide-react";
+import { X, LogOut, LayoutDashboard } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { cn } from "@/lib/utils/cn";
 
@@ -41,6 +41,7 @@ interface MobileMenuProps {
   userInitials: string;
   avatarUrl: string | null;
   onSignOut: () => void;
+  isAdmin?: boolean;
 }
 
 export function MobileMenu({
@@ -52,6 +53,7 @@ export function MobileMenu({
   userInitials,
   avatarUrl,
   onSignOut,
+  isAdmin,
 }: MobileMenuProps) {
   return (
     <AnimatePresence>
@@ -177,11 +179,35 @@ export function MobileMenu({
                 </motion.div>
               )}
 
+              {/* Admin: Dashboard */}
+              {user && isAdmin && (
+                <motion.div
+                  variants={menuItemVariants}
+                  custom={navLinks.length}
+                  initial="closed"
+                  animate="open"
+                  exit="closed"
+                >
+                  <Link
+                    href="/admin"
+                    onClick={onClose}
+                    className={cn(
+                      "flex items-center gap-3 rounded-xl px-4 py-4 font-serif text-2xl font-semibold",
+                      "text-text-primary transition-all duration-200",
+                      "hover:bg-bg-secondary hover:text-gold"
+                    )}
+                  >
+                    <LayoutDashboard className="h-6 w-6" />
+                    Dashboard
+                  </Link>
+                </motion.div>
+              )}
+
               {/* Authenticated: Profile */}
               {user && (
                 <motion.div
                   variants={menuItemVariants}
-                  custom={navLinks.length}
+                  custom={navLinks.length + (isAdmin ? 1 : 0)}
                   initial="closed"
                   animate="open"
                   exit="closed"

@@ -19,7 +19,7 @@ export function ProfileHeader({ profile, onEditClick }: ProfileHeaderProps) {
   })
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-white p-6 shadow-sm dark:border-dark-border dark:bg-dark-surface md:p-8">
+    <div className="overflow-hidden rounded-xl border border-border bg-bg-card p-6 shadow-sm md:p-8">
       <div className="flex flex-col items-start gap-6 md:flex-row">
         {/* Avatar */}
         <div className="relative flex-shrink-0">
@@ -46,11 +46,11 @@ export function ProfileHeader({ profile, onEditClick }: ProfileHeaderProps) {
         <div className="flex-1">
           <div className="mb-3 flex flex-wrap items-start justify-between gap-4">
             <div>
-              <h1 className="font-serif text-2xl font-bold text-charcoal dark:text-dark-text md:text-3xl">
+              <h1 className="font-serif text-2xl font-bold text-text-primary md:text-3xl">
                 {profile.full_name}
               </h1>
               {(profile.job_title || profile.company) && (
-                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-sm text-muted dark:text-dark-muted">
+                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-sm text-text-tertiary">
                   {profile.job_title && (
                     <span className="flex items-center gap-1.5">
                       <Briefcase className="h-3.5 w-3.5" />
@@ -58,7 +58,7 @@ export function ProfileHeader({ profile, onEditClick }: ProfileHeaderProps) {
                     </span>
                   )}
                   {profile.job_title && profile.company && (
-                    <span className="text-border dark:text-dark-border">&bull;</span>
+                    <span className="text-border">&bull;</span>
                   )}
                   {profile.company && (
                     <span className="flex items-center gap-1.5">
@@ -71,7 +71,7 @@ export function ProfileHeader({ profile, onEditClick }: ProfileHeaderProps) {
             </div>
             <button
               onClick={onEditClick}
-              className="inline-flex items-center gap-2 rounded-full border border-border px-5 py-2 text-sm font-medium text-muted transition-all hover:border-gold hover:text-gold dark:border-dark-border dark:text-dark-muted dark:hover:border-gold dark:hover:text-gold"
+              className="inline-flex items-center gap-2 rounded-full border border-border px-5 py-2 text-sm font-medium text-text-tertiary transition-all hover:border-gold hover:text-gold"
             >
               <Edit3 className="h-3.5 w-3.5" />
               Edit Profile
@@ -80,13 +80,13 @@ export function ProfileHeader({ profile, onEditClick }: ProfileHeaderProps) {
 
           {/* Bio */}
           {profile.bio && (
-            <p className="mb-4 max-w-xl text-sm leading-relaxed text-muted dark:text-dark-muted">
+            <p className="mb-4 max-w-xl text-sm leading-relaxed text-text-tertiary">
               {profile.bio}
             </p>
           )}
 
           {/* Member since + LinkedIn */}
-          <div className="mb-4 flex flex-wrap items-center gap-4 text-sm text-muted dark:text-dark-muted">
+          <div className="mb-4 flex flex-wrap items-center gap-4 text-sm text-text-tertiary">
             <span className="flex items-center gap-1.5">
               <Calendar className="h-3.5 w-3.5" />
               Member since {memberSince}
