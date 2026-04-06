@@ -39,9 +39,9 @@ export function HeroSection() {
       {/* Dark overlay gradient */}
       <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/50 to-black/70" />
 
-      {/* Content */}
+      {/* Content — pt clears the fixed header; pb clears the scroll indicator */}
       <motion.div
-        className="relative z-10 mx-auto max-w-4xl px-6 text-center"
+        className="relative z-10 mx-auto max-w-4xl px-6 pb-20 pt-20 text-center sm:pt-24"
         variants={containerVariants}
         initial="hidden"
         animate="visible"

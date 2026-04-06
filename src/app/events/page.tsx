@@ -13,9 +13,9 @@ export default async function EventsPage() {
 
   return (
     <main className="min-h-screen bg-bg-primary">
-      {/* Header */}
-      <section className="border-b border-blush/40 bg-bg-card">
-        <div className="mx-auto max-w-7xl px-6 py-16 md:py-20">
+      {/* Header — pt-16/pt-20 clears the fixed nav header */}
+      <section className="border-b border-blush/40 bg-bg-card pt-16 sm:pt-20">
+        <div className="mx-auto max-w-7xl px-6 py-12 md:py-16">
           <h1 className="mb-4 text-4xl font-bold tracking-tight text-text-primary md:text-5xl">
             Upcoming Events
           </h1>

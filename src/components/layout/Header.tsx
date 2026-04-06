@@ -17,16 +17,18 @@ function getInitials(name: string): string {
   return (parts[0]?.[0] ?? "?").toUpperCase();
 }
 
-function ThemeToggle({ theme, onToggle, className }: {
-  theme: string; onToggle: () => void; className?: string;
+function ThemeToggle({ theme, onToggle, className, transparent }: {
+  theme: string; onToggle: () => void; className?: string; transparent?: boolean;
 }) {
   return (
     <button
       onClick={onToggle}
       className={cn(
         "flex h-11 w-11 items-center justify-center rounded-full",
-        "border border-border transition-all duration-200",
-        "hover:border-gold hover:text-gold text-text-secondary",
+        "transition-all duration-200 hover:border-gold hover:text-gold",
+        transparent
+          ? "border border-white/30 text-white/70"
+          : "border border-border text-text-secondary",
         className
       )}
       aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
@@ -152,7 +154,10 @@ export function Header() {
               className="group flex items-center gap-2"
               onClick={closeMobileMenu}
             >
-              <span className="font-serif text-xl font-bold tracking-tight text-text-primary sm:text-2xl">
+              <span className={cn(
+                "font-serif text-xl font-bold tracking-tight transition-colors duration-300 sm:text-2xl",
+                isScrolled ? "text-text-primary" : "text-white"
+              )}>
                 The Social{" "}
                 <span className="text-gold">Seen</span>
               </span>
@@ -165,17 +170,17 @@ export function Header() {
                   key={link.label}
                   href={link.href}
                   className={cn(
-                    "relative px-4 py-2 text-sm font-medium tracking-wide text-text-secondary",
-                    "transition-colors duration-200 hover:text-gold",
+                    "relative px-4 py-2 text-sm font-medium tracking-wide transition-colors duration-200 hover:text-gold",
                     "after:absolute after:bottom-0 after:left-1/2 after:h-0.5 after:w-0 after:bg-gold after:transition-all after:duration-300 after:-translate-x-1/2",
-                    "hover:after:w-3/4"
+                    "hover:after:w-3/4",
+                    isScrolled ? "text-text-secondary" : "text-white/80"
                   )}
                 >
                   {link.label}
                 </Link>
               ))}
 
-              <ThemeToggle theme={theme} onToggle={toggleTheme} className="ml-4" />
+              <ThemeToggle theme={theme} onToggle={toggleTheme} className="ml-4" transparent={!isScrolled} />
 
               {/* Auth: Avatar dropdown or Sign In */}
               {user ? (
@@ -192,9 +197,11 @@ export function Header() {
                   href="/login"
                   className={cn(
                     "ml-2 inline-flex items-center justify-center rounded-full px-5 py-2",
-                    "border border-border text-sm font-medium text-text-secondary",
-                    "transition-all duration-200",
-                    "hover:border-gold hover:text-gold"
+                    "text-sm font-medium transition-all duration-200",
+                    "hover:border-gold hover:text-gold",
+                    isScrolled
+                      ? "border border-border text-text-secondary"
+                      : "border border-white/30 text-white/80"
                   )}
                 >
                   Sign In
@@ -204,15 +211,16 @@ export function Header() {
 
             {/* Mobile Controls */}
             <div className="flex items-center gap-3 md:hidden">
-              <ThemeToggle theme={theme} onToggle={toggleTheme} />
+              <ThemeToggle theme={theme} onToggle={toggleTheme} transparent={!isScrolled} />
 
               <button
                 onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
                 className={cn(
                   "flex h-11 w-11 items-center justify-center rounded-full",
-                  "border border-border transition-all duration-200",
-                  "hover:border-gold hover:text-gold",
-                  "text-text-secondary"
+                  "transition-all duration-200 hover:border-gold hover:text-gold",
+                  isScrolled
+                    ? "border border-border text-text-secondary"
+                    : "border border-white/30 text-white/70"
                 )}
                 aria-label={isMobileMenuOpen ? "Close menu" : "Open menu"}
                 aria-expanded={isMobileMenuOpen}
