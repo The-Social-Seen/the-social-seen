@@ -92,14 +92,19 @@ export function Header() {
     return () => subscription?.unsubscribe();
   }, []);
 
-  // Re-check auth on every route change (catches login redirect on Vercel
-  // where onAuthStateChange may not fire due to HTTP-only cookie mismatch)
+  // Re-check auth on every route change — uses getSession() (reads cookie directly,
+  // no network request) rather than getUser() (network call to Supabase Auth server).
   useEffect(() => {
     async function checkAuth() {
       try {
         const { createClient } = await import("@/lib/supabase/client");
         const supabase = createClient();
-        const { data: { user: currentUser } } = await supabase.auth.getUser();
+        // eslint-disable-next-line no-console
+        console.log('[Header] checking auth, pathname:', pathname);
+        const { data: { session }, error } = await supabase.auth.getSession();
+        // eslint-disable-next-line no-console
+        console.log('[Header] session result:', { hasSession: !!session, email: session?.user?.email, error: error?.message });
+        const currentUser = session?.user ?? null;
         setUser(currentUser);
         if (currentUser) {
           const { data: profile } = await supabase
