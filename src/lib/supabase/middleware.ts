@@ -45,7 +45,14 @@ export async function updateSession(request: NextRequest) {
           request,
         })
         cookiesToSet.forEach(({ name, value, options }) =>
-          supabaseResponse.cookies.set(name, value, options)
+          supabaseResponse.cookies.set(name, value, {
+            ...options,
+            // Must be false so the browser Supabase client (createBrowserClient)
+            // can read the auth token from document.cookie. HttpOnly cookies are
+            // invisible to JavaScript, which causes getUser() / onAuthStateChange
+            // to always return null on the client side.
+            httpOnly: false,
+          })
         )
       },
     },
