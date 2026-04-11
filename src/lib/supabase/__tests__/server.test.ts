@@ -107,7 +107,7 @@ describe('createServerClient — httpOnly cookie security', () => {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key'
   })
 
-  it('does not override httpOnly to false when writing session cookies', async () => {
+  it('sets httpOnly to false so createBrowserClient can read auth cookies', async () => {
     await createServerClient()
 
     expect(capturedCookieConfig).not.toBeNull()
@@ -120,9 +120,9 @@ describe('createServerClient — httpOnly cookie security', () => {
     expect(mockCookieSet).toHaveBeenCalled()
     const [, , writtenOptions] = mockCookieSet.mock.calls[0] as [string, string, Record<string, unknown>]
 
-    // SECURITY: httpOnly must NOT be explicitly forced to false.
-    // Setting httpOnly: false exposes the auth token to JavaScript (XSS vector).
-    expect(writtenOptions.httpOnly).not.toBe(false)
+    // httpOnly: false is required for @supabase/ssr createBrowserClient to read
+    // the auth token from document.cookie. XSS mitigation is via CSP headers.
+    expect(writtenOptions.httpOnly).toBe(false)
   })
 
   it('preserves other cookie options passed by the SSR library', async () => {

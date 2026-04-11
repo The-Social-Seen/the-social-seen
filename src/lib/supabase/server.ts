@@ -27,7 +27,13 @@ export async function createServerClient() {
     setAll(cookiesToSet) {
       try {
         cookiesToSet.forEach(({ name, value, options }) =>
-          cookieStore.set(name, value, { ...options })
+          cookieStore.set(name, value, {
+            ...options,
+            // httpOnly must be false so createBrowserClient can read the auth
+            // token from document.cookie. XSS → session theft is mitigated by
+            // Content-Security-Policy headers (see next.config.ts), not httpOnly.
+            httpOnly: false,
+          })
         )
       } catch {
         // The `setAll` method is called from a Server Component.
