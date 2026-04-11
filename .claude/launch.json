@@ -4,8 +4,9 @@
     {
       "name": "dev",
       "runtimeExecutable": "/usr/local/bin/node",
-      "runtimeArgs": ["node_modules/next/dist/bin/next", "dev", "--port", "6500"],
-      "port": 6500,
+      "runtimeArgs": ["node_modules/next/dist/bin/next", "dev"],
+      "port": 61929,
+      "autoPort": false,
       "env": {
         "PATH": "/usr/local/bin:/usr/bin:/bin"
       }
