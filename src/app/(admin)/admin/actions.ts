@@ -15,6 +15,23 @@ import type {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
+ * Prevents CSV formula injection by prefixing dangerous leading characters
+ * with a single-quote so spreadsheet applications treat the cell as text.
+ */
+function sanitizeCsvCell(value: string): string {
+  if (/^[=+\-@\t\r]/.test(value)) return `'${value}`
+  return value
+}
+
+/**
+ * Escapes PostgreSQL ILIKE wildcards in user-supplied search strings so that
+ * literal % and _ characters are matched verbatim rather than as wildcards.
+ */
+function escapeIlike(value: string): string {
+  return value.replace(/%/g, '\\%').replace(/_/g, '\\_')
+}
+
+/**
  * Supabase join results can be object, array-of-one, or null depending on
  * the FK relationship. This normalises to a single object or null.
  */
@@ -702,7 +719,8 @@ export async function exportEventAttendeesCSV(eventId: string) {
 
   const header = 'Name,Email,Booked At'
   const csvRows = rows.map(
-    (r) => `"${r.name}","${r.email}","${r.booked_at}"`
+    (r) =>
+      `"${sanitizeCsvCell(r.name)}","${sanitizeCsvCell(r.email)}","${r.booked_at}"`
   )
 
   return [header, ...csvRows].join('\n')
@@ -721,7 +739,8 @@ export async function getAdminMembers(search?: string, sort?: string) {
     .is('deleted_at', null)
 
   if (search && search.trim()) {
-    const term = `%${search.trim()}%`
+    const escaped = escapeIlike(search.trim())
+    const term = `%${escaped}%`
     query = query.or(`full_name.ilike.${term},email.ilike.${term}`)
   }
 
@@ -796,7 +815,8 @@ export async function exportMembersCSV(search?: string) {
     .order('created_at', { ascending: false })
 
   if (search && search.trim()) {
-    const term = `%${search.trim()}%`
+    const escaped = escapeIlike(search.trim())
+    const term = `%${escaped}%`
     query = query.or(`full_name.ilike.${term},email.ilike.${term}`)
   }
 
@@ -805,10 +825,13 @@ export async function exportMembersCSV(search?: string) {
   if (error) throw new Error('Failed to fetch members')
 
   const header = 'Name,Email,Job Title,Company,Joined'
-  const csvRows = (data ?? []).map(
-    (m) =>
-      `"${m.full_name ?? ''}","${m.email ?? ''}","${m.job_title ?? ''}","${m.company ?? ''}","${m.created_at}"`
-  )
+  const csvRows = (data ?? []).map((m) => {
+    const name = sanitizeCsvCell(m.full_name ?? '')
+    const email = sanitizeCsvCell(m.email ?? '')
+    const jobTitle = sanitizeCsvCell(m.job_title ?? '')
+    const company = sanitizeCsvCell(m.company ?? '')
+    return `"${name}","${email}","${jobTitle}","${company}","${m.created_at}"`
+  })
 
   return [header, ...csvRows].join('\n')
 }
