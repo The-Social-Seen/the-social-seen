@@ -12,7 +12,15 @@ import { signIn } from '../actions'
 export function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const redirectTo = searchParams.get('redirect') || '/events'
+  const rawRedirect = searchParams.get('redirect')
+  const redirectTo =
+    rawRedirect &&
+    rawRedirect.startsWith('/') &&
+    !rawRedirect.startsWith('//') &&
+    !rawRedirect.startsWith('\\/') &&
+    !rawRedirect.includes('://')
+      ? rawRedirect
+      : '/events'
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')

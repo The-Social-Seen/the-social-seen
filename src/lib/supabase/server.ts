@@ -29,10 +29,9 @@ export async function createServerClient() {
         cookiesToSet.forEach(({ name, value, options }) =>
           cookieStore.set(name, value, {
             ...options,
-            // Must be false so the browser Supabase client (createBrowserClient)
-            // can read the auth token from document.cookie. HttpOnly cookies are
-            // invisible to JavaScript, which causes getUser() / onAuthStateChange
-            // to always return null on the client side.
+            // httpOnly must be false so createBrowserClient can read the auth
+            // token from document.cookie. XSS → session theft is mitigated by
+            // Content-Security-Policy headers (see next.config.ts), not httpOnly.
             httpOnly: false,
           })
         )
