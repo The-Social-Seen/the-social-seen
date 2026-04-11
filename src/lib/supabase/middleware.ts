@@ -35,9 +35,6 @@ export async function updateSession(request: NextRequest) {
         return request.cookies.getAll()
       },
       setAll(cookiesToSet) {
-        // Cookie options (HttpOnly, SameSite, etc.) are intentionally omitted here:
-        // the request object is read-only in middleware — we only need to forward the
-        // raw name/value so the refreshed token is visible to the new NextResponse below.
         cookiesToSet.forEach(({ name, value }) =>
           request.cookies.set(name, value)
         )
@@ -45,14 +42,7 @@ export async function updateSession(request: NextRequest) {
           request,
         })
         cookiesToSet.forEach(({ name, value, options }) =>
-          supabaseResponse.cookies.set(name, value, {
-            ...options,
-            // Must be false so the browser Supabase client (createBrowserClient)
-            // can read the auth token from document.cookie. HttpOnly cookies are
-            // invisible to JavaScript, which causes getUser() / onAuthStateChange
-            // to always return null on the client side.
-            httpOnly: false,
-          })
+          supabaseResponse.cookies.set(name, value, { ...options })
         )
       },
     },

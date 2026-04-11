@@ -14,10 +14,28 @@ const signUpSchema = z.object({
   referralSource: z.string().optional(),
 })
 
+/**
+ * Validates a redirect path is safe (relative, no open-redirect vectors).
+ * Must start with "/" and must not contain "://" or start with "//".
+ */
+function validateRedirect(path?: string | null): string {
+  if (!path) return '/events'
+  if (path.startsWith('/') && !path.startsWith('//') && !path.includes('://')) {
+    return path
+  }
+  return '/events'
+}
+
 const signInSchema = z.object({
   email: z.string().email('Invalid email address'),
   password: z.string().min(1, 'Password is required'),
-  redirectTo: z.string().optional(),
+  redirectTo: z
+    .string()
+    .optional()
+    .refine(
+      (val) => !val || (val.startsWith('/') && !val.startsWith('//') && !val.includes('://')),
+      { message: 'Invalid redirect path' }
+    ),
 })
 
 const saveInterestsSchema = z.object({
@@ -96,9 +114,12 @@ export async function signIn(input: {
     return { error: 'Invalid email or password' }
   }
 
+  // Validate the redirect path to prevent open-redirect attacks
+  const safeRedirectTo = validateRedirect(redirectTo)
+
   // If no explicit redirect, check if user is admin and route accordingly
-  let destination = redirectTo || '/events'
-  if (!redirectTo && data.user) {
+  let destination = safeRedirectTo
+  if (safeRedirectTo === '/events' && !redirectTo && data.user) {
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')

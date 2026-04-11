@@ -27,14 +27,7 @@ export async function createServerClient() {
     setAll(cookiesToSet) {
       try {
         cookiesToSet.forEach(({ name, value, options }) =>
-          cookieStore.set(name, value, {
-            ...options,
-            // Must be false so the browser Supabase client (createBrowserClient)
-            // can read the auth token from document.cookie. HttpOnly cookies are
-            // invisible to JavaScript, which causes getUser() / onAuthStateChange
-            // to always return null on the client side.
-            httpOnly: false,
-          })
+          cookieStore.set(name, value, { ...options })
         )
       } catch {
         // The `setAll` method is called from a Server Component.
