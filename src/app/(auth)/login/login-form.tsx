@@ -17,6 +17,7 @@ export function LoginForm() {
     rawRedirect &&
     rawRedirect.startsWith('/') &&
     !rawRedirect.startsWith('//') &&
+    !rawRedirect.startsWith('\\/') &&
     !rawRedirect.includes('://')
       ? rawRedirect
       : '/events'

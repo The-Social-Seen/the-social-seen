@@ -16,11 +16,18 @@ const signUpSchema = z.object({
 
 /**
  * Validates a redirect path is safe (relative, no open-redirect vectors).
- * Must start with "/" and must not contain "://" or start with "//".
+ * Must start with "/" and must not contain "://" or start with "//" or "\/".
+ * Backslash-prefixed paths (\/evil.com) are rejected because some browsers
+ * normalise \ to / making them equivalent to protocol-relative URLs.
  */
 function validateRedirect(path?: string | null): string {
   if (!path) return '/events'
-  if (path.startsWith('/') && !path.startsWith('//') && !path.includes('://')) {
+  if (
+    path.startsWith('/') &&
+    !path.startsWith('//') &&
+    !path.startsWith('\\/') &&
+    !path.includes('://')
+  ) {
     return path
   }
   return '/events'
@@ -33,7 +40,7 @@ const signInSchema = z.object({
     .string()
     .optional()
     .refine(
-      (val) => !val || (val.startsWith('/') && !val.startsWith('//') && !val.includes('://')),
+      (val) => !val || (val.startsWith('/') && !val.startsWith('//') && !val.startsWith('\\/') && !val.includes('://')),
       { message: 'Invalid redirect path' }
     ),
 })

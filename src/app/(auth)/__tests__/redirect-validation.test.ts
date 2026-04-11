@@ -112,6 +112,12 @@ describe('signIn — open redirect prevention', () => {
     expect(result).toMatchObject({ error: expect.any(String) })
   })
 
+  it('rejects backslash-prefixed paths (\\/evil.com → normalises to //evil.com in some browsers)', async () => {
+    mockSuccessfulSignIn()
+    const result = await signIn({ email: 'a@b.com', password: 'password1', redirectTo: '\\/evil.com' })
+    expect(result).toMatchObject({ error: expect.any(String) })
+  })
+
   // ── Missing / empty redirectTo (defaults to /events or /admin for admins) ─
 
   it('defaults to /events when redirectTo is omitted', async () => {
