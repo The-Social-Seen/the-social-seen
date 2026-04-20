@@ -54,31 +54,62 @@ describe('signUp', () => {
     vi.clearAllMocks()
   })
 
+  // Shared baseline for signUp tests — all required fields populated.
+  // Override fields per test as needed.
+  const validInput = {
+    fullName: 'Charlotte Moreau',
+    email: 'charlotte@example.com',
+    password: 'password123',
+    phoneNumber: '+447123456789',
+    emailConsent: false,
+  }
+
   it('returns error when full name is empty', async () => {
-    const result = await signUp({
-      fullName: '',
-      email: 'test@example.com',
-      password: 'password123',
-    })
+    const result = await signUp({ ...validInput, fullName: '' })
     expect(result).toHaveProperty('error')
   })
 
   it('returns error when email is invalid', async () => {
-    const result = await signUp({
-      fullName: 'Test User',
-      email: 'not-an-email',
-      password: 'password123',
-    })
+    const result = await signUp({ ...validInput, email: 'not-an-email' })
     expect(result).toHaveProperty('error')
   })
 
   it('returns error when password is too short', async () => {
-    const result = await signUp({
-      fullName: 'Test User',
-      email: 'test@example.com',
-      password: 'short',
-    })
+    const result = await signUp({ ...validInput, password: 'short' })
     expect(result).toHaveProperty('error')
+  })
+
+  it('returns error when phone number contains letters', async () => {
+    const result = await signUp({ ...validInput, phoneNumber: 'abc' })
+    expect(result).toHaveProperty('error')
+    if ('error' in result) {
+      expect(result.error).toContain('phone number')
+    }
+  })
+
+  it('returns error when phone number is too short', async () => {
+    const result = await signUp({ ...validInput, phoneNumber: '12345' })
+    expect(result).toHaveProperty('error')
+  })
+
+  it('accepts UK phone number in +44 format', async () => {
+    mockSignUp.mockResolvedValue({
+      data: { user: { id: 'user-1', identities: [{ id: '1' }] } },
+      error: null,
+    })
+
+    const result = await signUp({ ...validInput, phoneNumber: '+447123456789' })
+    expect(result).toEqual({ success: true })
+  })
+
+  it('accepts UK phone number in 07... format', async () => {
+    mockSignUp.mockResolvedValue({
+      data: { user: { id: 'user-1', identities: [{ id: '1' }] } },
+      error: null,
+    })
+
+    const result = await signUp({ ...validInput, phoneNumber: '07123456789' })
+    expect(result).toEqual({ success: true })
   })
 
   it('returns success for valid input', async () => {
@@ -87,18 +118,54 @@ describe('signUp', () => {
       error: null,
     })
 
-    const result = await signUp({
-      fullName: 'Charlotte Moreau',
-      email: 'charlotte@example.com',
-      password: 'password123',
-    })
+    const result = await signUp(validInput)
 
     expect(result).toEqual({ success: true })
     expect(mockSignUp).toHaveBeenCalledWith({
       email: 'charlotte@example.com',
       password: 'password123',
-      options: { data: { full_name: 'Charlotte Moreau' } },
+      options: {
+        data: {
+          full_name: 'Charlotte Moreau',
+          phone_number: '+447123456789',
+          email_consent: false,
+        },
+      },
     })
+  })
+
+  it('passes email_consent: true through to user metadata when opted in', async () => {
+    mockSignUp.mockResolvedValue({
+      data: { user: { id: 'user-1', identities: [{ id: '1' }] } },
+      error: null,
+    })
+
+    await signUp({ ...validInput, emailConsent: true })
+
+    expect(mockSignUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: {
+          data: expect.objectContaining({ email_consent: true }),
+        },
+      }),
+    )
+  })
+
+  it('passes email_consent: false through to user metadata when opted out', async () => {
+    mockSignUp.mockResolvedValue({
+      data: { user: { id: 'user-1', identities: [{ id: '1' }] } },
+      error: null,
+    })
+
+    await signUp({ ...validInput, emailConsent: false })
+
+    expect(mockSignUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: {
+          data: expect.objectContaining({ email_consent: false }),
+        },
+      }),
+    )
   })
 
   it('returns friendly error when email is already registered', async () => {
@@ -108,9 +175,8 @@ describe('signUp', () => {
     })
 
     const result = await signUp({
-      fullName: 'Test User',
+      ...validInput,
       email: 'existing@example.com',
-      password: 'password123',
     })
 
     expect(result).toHaveProperty('error')
@@ -129,9 +195,8 @@ describe('signUp', () => {
     })
 
     const result = await signUp({
-      fullName: 'Test User',
+      ...validInput,
       email: 'existing@example.com',
-      password: 'password123',
     })
 
     expect(result).toHaveProperty('error')
@@ -147,12 +212,7 @@ describe('signUp', () => {
       error: null,
     })
 
-    await signUp({
-      fullName: 'Test User',
-      email: 'test@example.com',
-      password: 'password123',
-      referralSource: 'Instagram',
-    })
+    await signUp({ ...validInput, referralSource: 'Instagram' })
 
     expect(mockFrom).toHaveBeenCalledWith('profiles')
     expect(chain.update).toHaveBeenCalledWith({ referral_source: 'Instagram' })

@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
+import * as Checkbox from '@radix-ui/react-checkbox'
 import { cn } from '@/lib/utils/cn'
 import { INTEREST_OPTIONS, HEAR_ABOUT_OPTIONS } from '@/lib/constants'
 import { track } from '@/lib/analytics/track'
@@ -108,10 +109,14 @@ interface StepAccountProps {
   name: string
   email: string
   password: string
+  phoneNumber: string
+  emailConsent: boolean
   hearAbout: string
   onNameChange: (v: string) => void
   onEmailChange: (v: string) => void
   onPasswordChange: (v: string) => void
+  onPhoneNumberChange: (v: string) => void
+  onEmailConsentChange: (v: boolean) => void
   onHearAboutChange: (v: string) => void
   errors: Record<string, string>
   loading: boolean
@@ -119,8 +124,9 @@ interface StepAccountProps {
 }
 
 function StepAccount({
-  name, email, password, hearAbout,
-  onNameChange, onEmailChange, onPasswordChange, onHearAboutChange,
+  name, email, password, phoneNumber, emailConsent, hearAbout,
+  onNameChange, onEmailChange, onPasswordChange,
+  onPhoneNumberChange, onEmailConsentChange, onHearAboutChange,
   errors, loading, onSubmit,
 }: StepAccountProps) {
   return (
@@ -209,6 +215,29 @@ function StepAccount({
         {errors.password && <p className="text-xs text-danger">{errors.password}</p>}
       </div>
 
+      {/* Phone Number */}
+      <div className="space-y-1.5">
+        <label htmlFor="phoneNumber" className="block text-sm font-medium text-text-secondary">
+          Phone Number
+        </label>
+        <input
+          id="phoneNumber"
+          type="tel"
+          inputMode="tel"
+          value={phoneNumber}
+          onChange={(e) => onPhoneNumberChange(e.target.value)}
+          placeholder="07123 456789 or +44 7123 456789"
+          autoComplete="tel"
+          className={cn(
+            'w-full rounded-xl border bg-bg-card px-4 py-3 text-sm text-text-primary outline-none transition-all',
+            'placeholder:text-text-tertiary focus:border-border-focus focus:ring-2 focus:ring-gold/20',
+            errors.phoneNumber ? 'border-danger ring-2 ring-danger/10' : 'border-border'
+          )}
+        />
+        <p className="text-xs text-text-tertiary">For event reminders and venue details</p>
+        {errors.phoneNumber && <p className="text-xs text-danger">{errors.phoneNumber}</p>}
+      </div>
+
       {/* How did you hear about us? (optional) */}
       <div className="space-y-1.5">
         <label htmlFor="hearAbout" className="block text-sm font-medium text-text-secondary">
@@ -255,6 +284,30 @@ function StepAccount({
           Coming soon
         </div>
       </div>
+
+      {/* Email marketing consent (GDPR: unchecked by default) */}
+      <label
+        htmlFor="emailConsent"
+        className="flex cursor-pointer items-start gap-3 text-sm text-text-secondary"
+      >
+        <Checkbox.Root
+          id="emailConsent"
+          checked={emailConsent}
+          onCheckedChange={(checked) => onEmailConsentChange(checked === true)}
+          className={cn(
+            'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border bg-bg-card transition-all',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold/40',
+            emailConsent ? 'border-gold bg-gold' : 'border-border hover:border-gold/50'
+          )}
+        >
+          <Checkbox.Indicator>
+            <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />
+          </Checkbox.Indicator>
+        </Checkbox.Root>
+        <span className="leading-snug">
+          Keep me updated with new events and community news
+        </span>
+      </label>
 
       {/* Submit */}
       <button
@@ -439,6 +492,9 @@ export function JoinForm() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [phoneNumber, setPhoneNumber] = useState('')
+  // GDPR: marketing consent defaults to false (opt-in only).
+  const [emailConsent, setEmailConsent] = useState(false)
   const [hearAbout, setHearAbout] = useState('')
   const [accountErrors, setAccountErrors] = useState<Record<string, string>>({})
   const [accountLoading, setAccountLoading] = useState(false)
@@ -475,6 +531,15 @@ export function JoinForm() {
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.email = 'Enter your email to create your account'
     if (!password.trim() || password.length < 8) errors.password = 'Choose a password (at least 8 characters)'
 
+    // Phone is stored stripped of whitespace (Server Action regex is strict).
+    // Users can still type spaces/dashes while the UI matches the looser regex.
+    const phoneStripped = phoneNumber.replace(/\s+/g, '')
+    if (!phoneStripped) {
+      errors.phoneNumber = 'Enter a valid phone number'
+    } else if (!/^\+?[0-9]{10,15}$/.test(phoneStripped)) {
+      errors.phoneNumber = 'Enter a valid phone number'
+    }
+
     if (Object.keys(errors).length > 0) {
       setAccountErrors(errors)
       return
@@ -487,6 +552,8 @@ export function JoinForm() {
       fullName: name.trim(),
       email: email.trim(),
       password,
+      phoneNumber: phoneStripped,
+      emailConsent,
       referralSource: hearAbout || undefined,
     })
 
@@ -579,10 +646,14 @@ export function JoinForm() {
                     name={name}
                     email={email}
                     password={password}
+                    phoneNumber={phoneNumber}
+                    emailConsent={emailConsent}
                     hearAbout={hearAbout}
                     onNameChange={setName}
                     onEmailChange={setEmail}
                     onPasswordChange={setPassword}
+                    onPhoneNumberChange={setPhoneNumber}
+                    onEmailConsentChange={setEmailConsent}
                     onHearAboutChange={setHearAbout}
                     errors={accountErrors}
                     loading={accountLoading}

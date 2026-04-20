@@ -2,6 +2,8 @@
 
 export type UserRole = 'member' | 'admin'
 
+export type UserStatus = 'active' | 'suspended' | 'banned'
+
 export type EventCategory =
   | 'drinks'
   | 'dining'
@@ -53,6 +55,11 @@ export interface Profile {
   role:                UserRole
   onboarding_complete: boolean
   referral_source:     string | null
+  // Added by migration 20260420000001 (P2-2 registration, P2-3 verification, P2-8 member mgmt)
+  phone_number:        string | null
+  email_consent:       boolean
+  email_verified:      boolean
+  status:              UserStatus
   created_at:          string
   updated_at:          string
   deleted_at:          string | null
