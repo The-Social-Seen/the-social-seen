@@ -4,6 +4,7 @@ import { Playfair_Display, DM_Sans } from "next/font/google";
 import { ThemeProvider } from "@/components/layout/ThemeProvider";
 import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
+import { PostHogProvider } from "@/components/providers/PostHogProvider";
 import "./globals.css";
 
 const playfair = Playfair_Display({
@@ -99,11 +100,13 @@ export default async function RootLayout({
       <body
         className={`${playfair.variable} ${dmSans.variable} font-sans antialiased`}
       >
-        <ThemeProvider>
-          {!isAdmin && <Header />}
-          <main>{children}</main>
-          {!isAdmin && <Footer />}
-        </ThemeProvider>
+        <PostHogProvider>
+          <ThemeProvider>
+            {!isAdmin && <Header />}
+            <main>{children}</main>
+            {!isAdmin && <Footer />}
+          </ThemeProvider>
+        </PostHogProvider>
       </body>
     </html>
   );

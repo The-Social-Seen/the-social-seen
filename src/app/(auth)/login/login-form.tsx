@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { motion } from 'framer-motion'
 import { Eye, EyeOff } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
+import { track, identifyUser } from '@/lib/analytics/track'
 import { signIn } from '../actions'
 
 export function LoginForm() {
@@ -54,7 +55,11 @@ export function LoginForm() {
     try {
       const { createClient } = await import("@/lib/supabase/client")
       const supabase = createClient()
-      await supabase.auth.getUser()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        identifyUser(user.id, { email: user.email })
+        track('login', { method: 'email' })
+      }
     } catch {
       // Client-side sync failed — session still exists server-side
       // Header will pick up auth state on next page load

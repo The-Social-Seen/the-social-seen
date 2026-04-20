@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { INTEREST_OPTIONS, HEAR_ABOUT_OPTIONS } from '@/lib/constants'
+import { track } from '@/lib/analytics/track'
 import { signUp, saveInterests, completeOnboarding } from '../actions'
 
 /* ------------------------------------------------------------------ */
@@ -500,6 +501,7 @@ export function JoinForm() {
       return
     }
 
+    track('sign_up', { method: 'email' })
     goToStep(1)
   }
 
@@ -522,6 +524,7 @@ export function JoinForm() {
       return
     }
 
+    track('sign_up_completed', { interests_count: selectedInterests.length })
     goToStep(2)
   }
 

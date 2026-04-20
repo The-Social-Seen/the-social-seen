@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs";
 
 const nextConfig: NextConfig = {
   images: {
@@ -36,4 +37,18 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+export default withSentryConfig(nextConfig, {
+  // Sentry organization and project — used for source map uploads.
+  org: "social-seen-dt",
+  project: "javascript-nextjs",
+
+  // Silence CLI output unless CI so dev builds stay clean.
+  silent: !process.env.CI,
+
+  // Upload larger source maps (default is too small for Next.js bundles).
+  widenClientFileUpload: true,
+
+  // Route browser requests to Sentry through a Next.js rewrite so ad-blockers
+  // don't swallow error reports.
+  tunnelRoute: "/monitoring",
+});
