@@ -12,6 +12,8 @@ export interface AnalyticsEvents {
   sign_up_completed: { interests_count: number };
   login: { method: "email" };
   logout: Record<string, never>;
+  password_reset_requested: Record<string, never>;
+  password_reset_completed: Record<string, never>;
   event_view: { event_id: string; event_slug: string };
   booking_created: {
     event_id: string;

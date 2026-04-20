@@ -49,6 +49,14 @@ const saveInterestsSchema = z.object({
   interests: z.array(z.string().min(1)).min(1, 'Select at least one interest'),
 })
 
+const requestPasswordResetSchema = z.object({
+  email: z.string().email('Enter a valid email address'),
+})
+
+const updatePasswordSchema = z.object({
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+})
+
 // ── Server Actions ──────────────────────────────────────────────────────────
 
 export async function signUp(input: {
@@ -188,6 +196,82 @@ export async function saveInterests(input: {
     return { error: 'Failed to save interests' }
   }
 
+  return { success: true }
+}
+
+/**
+ * Request a password reset email.
+ *
+ * Always returns success to the caller — we never reveal whether an email is
+ * registered (prevents account enumeration). Supabase handles the actual
+ * email delivery; if the email isn't registered, no email is sent.
+ *
+ * The reset link returned by Supabase points to the URL configured in
+ * Supabase Auth → URL Configuration → Redirect URLs. Locally the first
+ * allowed URL is http://localhost:3000; in production set this to
+ * https://<your-domain>/reset-password.
+ */
+export async function requestPasswordReset(input: {
+  email: string
+}): Promise<{ success: true } | { error: string }> {
+  const parsed = requestPasswordResetSchema.safeParse(input)
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0].message }
+  }
+
+  const { email } = parsed.data
+  const supabase = await createServerClient()
+
+  // Derive the absolute redirect URL from the NEXT_PUBLIC_SITE_URL env var
+  // so staging and production land on their own /reset-password page.
+  // Falls back to NEXT_PUBLIC_VERCEL_URL (auto-set on Vercel) then localhost.
+  const origin =
+    process.env.NEXT_PUBLIC_SITE_URL ??
+    (process.env.NEXT_PUBLIC_VERCEL_URL
+      ? `https://${process.env.NEXT_PUBLIC_VERCEL_URL}`
+      : 'http://localhost:3000')
+
+  await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${origin}/reset-password`,
+  })
+
+  // Always report success — we don't leak whether the email is registered.
+  return { success: true }
+}
+
+/**
+ * Update the signed-in user's password. Only callable from within the recovery
+ * flow (user has clicked the reset link and has an active session).
+ */
+export async function updatePassword(input: {
+  password: string
+}): Promise<{ success: true } | { error: string }> {
+  const parsed = updatePasswordSchema.safeParse(input)
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0].message }
+  }
+
+  const supabase = await createServerClient()
+
+  // Ensure there's an active session — prevents unauthenticated calls.
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser()
+
+  if (authError || !user) {
+    return { error: 'Your reset link has expired. Request a new one.' }
+  }
+
+  const { error } = await supabase.auth.updateUser({
+    password: parsed.data.password,
+  })
+
+  if (error) {
+    return { error: error.message }
+  }
+
+  revalidatePath('/', 'layout')
   return { success: true }
 }
 

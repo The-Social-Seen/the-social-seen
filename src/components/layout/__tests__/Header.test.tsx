@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 
 // Mock framer-motion to render children directly
 vi.mock('framer-motion', () => ({
@@ -59,17 +59,25 @@ vi.mock('@/components/layout/AvatarDropdown', () => ({
   AvatarDropdown: () => <div data-testid="avatar-dropdown" />,
 }))
 
-// Mock supabase client — dynamic import, so we mock the module
-vi.mock('@/lib/supabase/client', () => ({
-  createClient: () => ({
+// Mock supabase client — dynamic import, so we mock the module.
+// Returns the same instance each call to mirror the real singleton.
+vi.mock('@/lib/supabase/client', () => {
+  const mockClient = {
     auth: {
+      getSession: vi.fn().mockResolvedValue({ data: { session: null } }),
       getUser: vi.fn().mockResolvedValue({ data: { user: null } }),
       onAuthStateChange: vi.fn().mockReturnValue({
         data: { subscription: { unsubscribe: vi.fn() } },
       }),
     },
-  }),
-}))
+    from: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({ data: null }),
+    }),
+  }
+  return { createClient: () => mockClient }
+})
 
 import { Header } from '../Header'
 
@@ -110,11 +118,15 @@ describe('Header (unauthenticated)', () => {
     expect(hasRouteLink).toBe(true)
   })
 
-  it('renders Sign In link with route href /login', () => {
+  it('renders Sign In link with route href /login (after auth resolves)', async () => {
     render(<Header />)
-    const links = screen.getAllByRole('link', { name: /sign in/i })
-    const hasRouteLink = links.some((l) => l.getAttribute('href') === '/login')
-    expect(hasRouteLink).toBe(true)
+    // Auth is async — initial render shows a loading placeholder to prevent
+    // the Sign In button from flashing for authenticated users.
+    await waitFor(() => {
+      const links = screen.getAllByRole('link', { name: /sign in/i })
+      const hasRouteLink = links.some((l) => l.getAttribute('href') === '/login')
+      expect(hasRouteLink).toBe(true)
+    })
   })
 
   it('does NOT render "About" in any nav link', () => {

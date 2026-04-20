@@ -90,10 +90,10 @@ describe('LoginForm', () => {
     expect(tooltips.length).toBeGreaterThanOrEqual(1)
   })
 
-  it('renders "Forgot password?" as disabled button', () => {
+  it('renders "Forgot password?" link pointing to /forgot-password', () => {
     render(<LoginForm />)
-    const forgotBtn = screen.getByRole('button', { name: /forgot password/i })
-    expect(forgotBtn.hasAttribute('disabled')).toBe(true)
+    const forgotLink = screen.getByRole('link', { name: /forgot password/i })
+    expect(forgotLink.getAttribute('href')).toBe('/forgot-password')
   })
 
   it('renders "Join now" link pointing to /join', () => {

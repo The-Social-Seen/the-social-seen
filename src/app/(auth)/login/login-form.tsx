@@ -159,18 +159,12 @@ export function LoginForm() {
                 <label htmlFor="login-password" className="block text-sm font-medium text-text-secondary">
                   Password
                 </label>
-                <div className="group relative">
-                  <button
-                    type="button"
-                    disabled
-                    className="cursor-not-allowed text-xs text-text-tertiary"
-                  >
-                    Forgot password?
-                  </button>
-                  <div className="pointer-events-none absolute -top-8 right-0 rounded-lg bg-text-primary px-3 py-1.5 text-xs text-text-inverse opacity-0 transition-opacity group-hover:opacity-100 whitespace-nowrap">
-                    Coming soon
-                  </div>
-                </div>
+                <Link
+                  href="/forgot-password"
+                  className="text-xs text-text-tertiary transition-colors hover:text-gold"
+                >
+                  Forgot password?
+                </Link>
               </div>
               <div className="relative">
                 <input
