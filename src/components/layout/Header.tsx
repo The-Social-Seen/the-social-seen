@@ -49,6 +49,9 @@ export function Header() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  // `null` until the first auth check completes. Prevents the "Sign In" button
+  // from flashing for authenticated users while the session is being fetched.
+  const [isAuthResolved, setIsAuthResolved] = useState(false);
 
   const handleScroll = useCallback(() => {
     setIsScrolled(window.scrollY > 20);
@@ -59,71 +62,76 @@ export function Header() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, [handleScroll]);
 
-  // Auth state — onAuthStateChange listener (mount-only)
+  // Auth state — single source of truth.
+  //
+  // 1. On mount: read the current session (cookie-only, no network) so the
+  //    avatar appears immediately for logged-in users without waiting for a
+  //    route change.
+  // 2. Subscribe to onAuthStateChange so sign-in / sign-out fire UI updates
+  //    without requiring a page reload. The singleton browser client
+  //    (lib/supabase/client.ts) guarantees this listener sees events from
+  //    auth calls made anywhere in the app.
   useEffect(() => {
+    let active = true;
     let subscription: { unsubscribe: () => void } | undefined;
+
+    async function applyUser(nextUser: User | null) {
+      if (!active) return;
+      setUser(nextUser);
+
+      if (nextUser) {
+        try {
+          const { createClient } = await import("@/lib/supabase/client");
+          const supabase = createClient();
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", nextUser.id)
+            .single();
+          if (active) setIsAdmin(profile?.role === "admin");
+        } catch {
+          if (active) setIsAdmin(false);
+        }
+      } else if (active) {
+        setIsAdmin(false);
+      }
+
+      if (active) setIsAuthResolved(true);
+    }
 
     async function initAuth() {
       try {
         const { createClient } = await import("@/lib/supabase/client");
         const supabase = createClient();
 
+        // Initial session — cookie-only, no network round-trip.
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        await applyUser(session?.user ?? null);
+
+        // React to future auth changes (sign-in from login form, sign-out, etc.).
         const {
           data: { subscription: sub },
-        } = supabase.auth.onAuthStateChange(async (_event, session) => {
-          setUser(session?.user ?? null);
-          if (session?.user) {
-            const { data: profile } = await supabase
-              .from('profiles')
-              .select('role')
-              .eq('id', session.user.id)
-              .single()
-            setIsAdmin(profile?.role === 'admin')
-          } else {
-            setIsAdmin(false)
-          }
+        } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+          void applyUser(nextSession?.user ?? null);
         });
         subscription = sub;
       } catch {
-        setUser(null);
+        if (active) {
+          setUser(null);
+          setIsAdmin(false);
+          setIsAuthResolved(true);
+        }
       }
     }
 
     initAuth();
-    return () => subscription?.unsubscribe();
+    return () => {
+      active = false;
+      subscription?.unsubscribe();
+    };
   }, []);
-
-  // Re-check auth on every route change — uses getSession() (reads cookie directly,
-  // no network request) rather than getUser() (network call to Supabase Auth server).
-  useEffect(() => {
-    async function checkAuth() {
-      try {
-        const { createClient } = await import("@/lib/supabase/client");
-        const supabase = createClient();
-        // eslint-disable-next-line no-console
-        console.log('[Header] checking auth, pathname:', pathname);
-        const { data: { session }, error } = await supabase.auth.getSession();
-        // eslint-disable-next-line no-console
-        console.log('[Header] session result:', { hasSession: !!session, email: session?.user?.email, error: error?.message });
-        const currentUser = session?.user ?? null;
-        setUser(currentUser);
-        if (currentUser) {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', currentUser.id)
-            .single()
-          setIsAdmin(profile?.role === 'admin')
-        } else {
-          setIsAdmin(false)
-        }
-      } catch {
-        setUser(null);
-        setIsAdmin(false);
-      }
-    }
-    checkAuth();
-  }, [pathname]);
 
   // Lock body scroll when mobile menu is open
   useEffect(() => {
@@ -206,8 +214,15 @@ export function Header() {
 
               <ThemeToggle theme={theme} onToggle={toggleTheme} className="ml-4" transparent={isHeroPage && !isScrolled} />
 
-              {/* Auth: Avatar dropdown or Sign In */}
-              {user ? (
+              {/* Auth: Avatar dropdown or Sign In. While auth is still
+                  resolving on first load, show a neutral placeholder so
+                  logged-in users don't see a "Sign In" flash. */}
+              {!isAuthResolved ? (
+                <div
+                  className="ml-2 h-8 w-8 animate-pulse rounded-full bg-border/50"
+                  aria-hidden="true"
+                />
+              ) : user ? (
                 <div className="ml-2">
                   <AvatarDropdown
                     avatarUrl={avatarUrl}
