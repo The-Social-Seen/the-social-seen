@@ -10,6 +10,7 @@ import { AvatarDropdown } from "@/components/layout/AvatarDropdown";
 import { MobileMenu } from "@/components/layout/MobileMenu";
 import { NAV_LINKS_PUBLIC, NAV_LINKS_MEMBER } from "@/lib/constants";
 import { cn } from "@/lib/utils/cn";
+import { resetAnalytics, track } from "@/lib/analytics/track";
 
 function getInitials(name: string): string {
   const parts = name.trim().split(/\s+/);
@@ -139,6 +140,8 @@ export function Header() {
       const { createClient } = await import("@/lib/supabase/client");
       const supabase = createClient();
       await supabase.auth.signOut();
+      track("logout", {});
+      resetAnalytics();
       setUser(null);
       closeMobileMenu();
       router.push("/");
