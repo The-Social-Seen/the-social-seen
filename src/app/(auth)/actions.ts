@@ -11,6 +11,15 @@ const signUpSchema = z.object({
   fullName: z.string().min(1, 'Full name is required').max(100),
   email: z.string().email('Invalid email address'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
+  // Accepts international formats (10–15 digits, optional leading +).
+  // Frontend enforces UK-specific formatting; this matches the DB CHECK
+  // constraint so invalid input is rejected before the Supabase call.
+  phoneNumber: z
+    .string()
+    .regex(/^\+?[0-9]{10,15}$/, 'Enter a valid phone number'),
+  // Email marketing consent — must be an explicit boolean (no undefined).
+  // Defaults to false at the DB level if somehow missing (GDPR: opt-in only).
+  emailConsent: z.boolean(),
   referralSource: z.string().optional(),
 })
 
@@ -63,6 +72,8 @@ export async function signUp(input: {
   fullName: string
   email: string
   password: string
+  phoneNumber: string
+  emailConsent: boolean
   referralSource?: string
 }): Promise<{ success: true } | { error: string }> {
   const parsed = signUpSchema.safeParse(input)
@@ -70,14 +81,21 @@ export async function signUp(input: {
     return { error: parsed.error.issues[0].message }
   }
 
-  const { fullName, email, password, referralSource } = parsed.data
+  const { fullName, email, password, phoneNumber, emailConsent, referralSource } =
+    parsed.data
   const supabase = await createServerClient()
 
+  // phone_number and email_consent are read by the handle_new_user() trigger
+  // and inserted into the profile row when Supabase creates the auth user.
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
     options: {
-      data: { full_name: fullName },
+      data: {
+        full_name: fullName,
+        phone_number: phoneNumber,
+        email_consent: emailConsent,
+      },
     },
   })
 

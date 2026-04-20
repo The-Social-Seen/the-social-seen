@@ -52,6 +52,27 @@ vi.mock('../actions', () => ({
 
 import { JoinForm } from '../join/join-form'
 
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+// Fills all required Step 1 fields with valid values. Returns the DOM nodes
+// so individual tests can override values or assert further state.
+function fillStep1Valid({
+  name = 'Charlotte Moreau',
+  email = 'charlotte@test.com',
+  password = 'password123',
+  phoneNumber = '07123 456789',
+}: {
+  name?: string
+  email?: string
+  password?: string
+  phoneNumber?: string
+} = {}) {
+  fireEvent.change(screen.getByLabelText(/full name/i), { target: { value: name } })
+  fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: email } })
+  fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: password } })
+  fireEvent.change(screen.getByLabelText(/phone number/i), { target: { value: phoneNumber } })
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe('JoinForm — Step 1 (Account)', () => {
@@ -69,6 +90,37 @@ describe('JoinForm — Step 1 (Account)', () => {
     expect(screen.getByLabelText(/full name/i)).toBeTruthy()
     expect(screen.getByLabelText(/email address/i)).toBeTruthy()
     expect(screen.getByLabelText(/^password$/i)).toBeTruthy()
+    expect(screen.getByLabelText(/phone number/i)).toBeTruthy()
+  })
+
+  it('renders phone number field with helper text', () => {
+    render(<JoinForm />)
+    expect(screen.getByLabelText(/phone number/i)).toBeTruthy()
+    expect(screen.getByText(/for event reminders and venue details/i)).toBeTruthy()
+  })
+
+  it('renders email consent checkbox unchecked by default (GDPR)', () => {
+    render(<JoinForm />)
+    const checkbox = screen.getByRole('checkbox', {
+      name: /keep me updated with new events/i,
+    })
+    expect(checkbox).toBeTruthy()
+    // Radix checkbox exposes checked state via aria-checked
+    expect(checkbox.getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('toggles email consent checkbox when clicked', () => {
+    render(<JoinForm />)
+    const checkbox = screen.getByRole('checkbox', {
+      name: /keep me updated/i,
+    })
+    expect(checkbox.getAttribute('aria-checked')).toBe('false')
+
+    fireEvent.click(checkbox)
+    expect(checkbox.getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.click(checkbox)
+    expect(checkbox.getAttribute('aria-checked')).toBe('false')
   })
 
   it('renders the "How did you hear about us?" optional dropdown', () => {
@@ -135,9 +187,7 @@ describe('JoinForm — Step 1 (Account)', () => {
     })
 
     render(<JoinForm />)
-    fireEvent.change(screen.getByLabelText(/full name/i), { target: { value: 'Test User' } })
-    fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: 'existing@test.com' } })
-    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'password123' } })
+    fillStep1Valid({ email: 'existing@test.com', name: 'Test User' })
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
     await waitFor(() => {
@@ -149,13 +199,108 @@ describe('JoinForm — Step 1 (Account)', () => {
     mockSignUp.mockResolvedValue({ success: true })
 
     render(<JoinForm />)
-    fireEvent.change(screen.getByLabelText(/full name/i), { target: { value: 'Charlotte Moreau' } })
-    fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: 'charlotte@test.com' } })
-    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'password123' } })
+    fillStep1Valid()
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /what interests you/i })).toBeTruthy()
+    })
+  })
+
+  // ── Phone number validation ──────────────────────────────────────────────
+  it('shows "Enter a valid phone number" when phone is empty', async () => {
+    render(<JoinForm />)
+    fireEvent.change(screen.getByLabelText(/full name/i), { target: { value: 'Test User' } })
+    fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: 'test@test.com' } })
+    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'password123' } })
+    // Phone left blank
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Enter a valid phone number')).toBeTruthy()
+    })
+  })
+
+  it('shows "Enter a valid phone number" when phone contains letters', async () => {
+    render(<JoinForm />)
+    fillStep1Valid({ phoneNumber: 'abc' })
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Enter a valid phone number')).toBeTruthy()
+    })
+    expect(mockSignUp).not.toHaveBeenCalled()
+  })
+
+  it('shows "Enter a valid phone number" when phone is too short', async () => {
+    render(<JoinForm />)
+    fillStep1Valid({ phoneNumber: '12345' })
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Enter a valid phone number')).toBeTruthy()
+    })
+    expect(mockSignUp).not.toHaveBeenCalled()
+  })
+
+  it('accepts UK phone with whitespace and strips it before submit', async () => {
+    mockSignUp.mockResolvedValue({ success: true })
+
+    render(<JoinForm />)
+    fillStep1Valid({ phoneNumber: '07123 456 789' })
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+
+    await waitFor(() => {
+      expect(mockSignUp).toHaveBeenCalledWith(
+        expect.objectContaining({ phoneNumber: '07123456789' }),
+      )
+    })
+  })
+
+  it('accepts +44 international format', async () => {
+    mockSignUp.mockResolvedValue({ success: true })
+
+    render(<JoinForm />)
+    fillStep1Valid({ phoneNumber: '+44 7123 456789' })
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+
+    await waitFor(() => {
+      expect(mockSignUp).toHaveBeenCalledWith(
+        expect.objectContaining({ phoneNumber: '+447123456789' }),
+      )
+    })
+  })
+
+  // ── Email consent passthrough ────────────────────────────────────────────
+  it('passes emailConsent: false to signUp when checkbox left unchecked', async () => {
+    mockSignUp.mockResolvedValue({ success: true })
+
+    render(<JoinForm />)
+    fillStep1Valid()
+    // Do NOT click the checkbox
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+
+    await waitFor(() => {
+      expect(mockSignUp).toHaveBeenCalledWith(
+        expect.objectContaining({ emailConsent: false }),
+      )
+    })
+  })
+
+  it('passes emailConsent: true to signUp when checkbox is checked', async () => {
+    mockSignUp.mockResolvedValue({ success: true })
+
+    render(<JoinForm />)
+    fillStep1Valid()
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: /keep me updated/i }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+
+    await waitFor(() => {
+      expect(mockSignUp).toHaveBeenCalledWith(
+        expect.objectContaining({ emailConsent: true }),
+      )
     })
   })
 })
@@ -168,9 +313,7 @@ describe('JoinForm — Step 2 (Interests)', () => {
 
   async function advanceToStep2() {
     render(<JoinForm />)
-    fireEvent.change(screen.getByLabelText(/full name/i), { target: { value: 'Test User' } })
-    fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: 'test@test.com' } })
-    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'password123' } })
+    fillStep1Valid({ name: 'Test User', email: 'test@test.com' })
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /what interests you/i })).toBeTruthy()
@@ -253,9 +396,7 @@ describe('JoinForm — Step 3 (Welcome)', () => {
   async function advanceToStep3() {
     render(<JoinForm />)
     // Step 1
-    fireEvent.change(screen.getByLabelText(/full name/i), { target: { value: 'Charlotte Moreau' } })
-    fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: 'charlotte@test.com' } })
-    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'password123' } })
+    fillStep1Valid()
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /what interests you/i })).toBeTruthy()
