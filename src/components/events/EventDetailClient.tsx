@@ -26,6 +26,7 @@ import ReviewCard from "@/components/reviews/ReviewCard";
 import ReviewForm from "@/components/reviews/ReviewForm";
 import EventCard from "@/components/events/EventCard";
 import MobileBookingBar from "@/components/events/MobileBookingBar";
+import ShareActions from "@/components/shared/ShareActions";
 import type {
   EventDetail,
   ReviewWithAuthor,
@@ -216,6 +217,14 @@ export default function EventDetailClient({
                     </p>
                   </div>
                 </div>
+              </motion.div>
+
+              {/* Share row */}
+              <motion.div {...fadeInUp} className="mb-10">
+                <ShareActions
+                  eventTitle={event.title}
+                  eventSlug={event.slug}
+                />
               </motion.div>
 
               {/* Description */}

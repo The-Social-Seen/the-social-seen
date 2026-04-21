@@ -52,6 +52,8 @@ function makeBooking(overrides: Partial<BookingWithEvent> = {}): BookingWithEven
       date_time: '2026-05-10T19:00:00Z',
       end_time: '2026-05-10T22:00:00Z',
       venue_name: 'The Cellar',
+      short_description: 'A short description',
+      venue_address: '1 London Rd',
       image_url: 'https://example.com/wine.jpg',
       category: 'dining',
       dress_code: 'Smart Casual',

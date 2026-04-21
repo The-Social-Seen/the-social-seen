@@ -64,7 +64,7 @@ export async function getMyBookings(
     .select(
       `
       id, user_id, event_id, status, waitlist_position, price_at_booking, booked_at, created_at, updated_at, deleted_at,
-      event:events(id, slug, title, date_time, end_time, venue_name, image_url, category, dress_code)
+      event:events(id, slug, title, short_description, date_time, end_time, venue_name, venue_address, image_url, category, dress_code)
     `,
     )
     .eq('user_id', userId)

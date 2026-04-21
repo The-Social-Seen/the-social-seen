@@ -25,6 +25,8 @@ function makeBooking(
       date_time: overrides.date_time,
       end_time: '',
       venue_name: 'Venue',
+      short_description: 'A short description',
+      venue_address: '1 London Rd',
       image_url: '',
       category: 'drinks',
       dress_code: null,
