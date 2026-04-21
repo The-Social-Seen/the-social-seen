@@ -619,6 +619,7 @@ export async function getEventBookings(
     .from('bookings')
     .select(`
       id, status, waitlist_position, price_at_booking, booked_at, created_at,
+      stripe_payment_id, stripe_refund_id, refunded_amount_pence, cancelled_at,
       profile:profiles!bookings_user_id_fkey(id, full_name, email, avatar_url)
     `)
     .eq('event_id', eventId)

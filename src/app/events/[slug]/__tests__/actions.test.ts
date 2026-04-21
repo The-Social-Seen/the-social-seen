@@ -20,6 +20,24 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }))
 
+// `after()` is a Next.js App Router primitive for post-response work.
+// It requires a request scope at runtime — not available under Vitest —
+// so mock to immediately invoke the callback so the fire-and-forget
+// behaviour is still exercised by tests.
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next/server')>()
+  return {
+    ...actual,
+    after: (fn: () => unknown | Promise<unknown>) => {
+      // Invoke immediately so email/notification side-effects still fire
+      // in tests. Swallow returned promise — callers use `after` for
+      // fire-and-forget, test assertions awaiting mockSendEmail work
+      // via Vitest's microtask draining.
+      void Promise.resolve(fn())
+    },
+  }
+})
+
 // Mock the email send wrapper — createBooking fires a fire-and-forget
 // confirmation email via static import. Intercept here so tests don't
 // hit the real Resend API.
@@ -28,7 +46,54 @@ vi.mock('@/lib/email/send', () => ({
   sendEmail: (...args: unknown[]) => mockSendEmail(...args),
 }))
 
-import { createBooking, cancelBooking, leaveWaitlist } from '../actions'
+import {
+  createBooking,
+  cancelBooking,
+  claimWaitlistSpot,
+  leaveWaitlist,
+} from '../actions'
+
+// ── Stripe refund mock (P2-7b) ─────────────────────────────────────────────
+// cancelBooking calls stripe.refunds.create when cancellation is >48h out
+// on a paid booking. Default to a successful refund id; tests override
+// with mockRejectedValueOnce to simulate Stripe outages.
+const mockStripeRefundCreate = vi.fn()
+vi.mock('@/lib/stripe/server', () => ({
+  getStripeClient: () => ({
+    refunds: { create: (...args: unknown[]) => mockStripeRefundCreate(...args) },
+  }),
+}))
+
+// cancelBooking's "notify waitlisters of open spot" helper uses the admin
+// client. Stub it with a minimal chainable thenable so the queries
+// resolve to empty data (no waitlisters to email in these tests).
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: () => {
+    const chain: Record<string, unknown> = {}
+    const methods = ['select', 'eq', 'is', 'single', 'maybeSingle', 'limit', 'order']
+    for (const m of methods) {
+      ;(chain as Record<string, ReturnType<typeof vi.fn>>)[m] = vi
+        .fn()
+        .mockReturnValue(chain)
+    }
+    ;(chain as Record<string, unknown>).then = (resolve: (v: unknown) => void) =>
+      resolve({ data: [], error: null })
+    return { from: vi.fn(() => chain) }
+  },
+}))
+
+vi.mock('next/headers', () => ({
+  headers: async () =>
+    new Headers({ 'x-forwarded-host': 'localhost:6500', 'x-forwarded-proto': 'http' }),
+}))
+
+vi.mock('@/lib/stripe/checkout', () => ({
+  ensureStripeCustomer: vi.fn().mockResolvedValue('cus_mock'),
+  createBookingCheckoutSession: vi.fn().mockResolvedValue({
+    sessionId: 'cs_mock',
+    url: 'https://checkout.stripe.test/cs_mock',
+  }),
+}))
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -377,6 +442,202 @@ describe('cancelBooking', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Booking not found')
+  })
+
+  // ── 48h refund policy (P2-7b) ───────────────────────────────────────────
+
+  /**
+   * Stub the 3-step Supabase chain: booking fetch → event fetch → update.
+   * Each step gets its own `.then` response.
+   */
+  function stubCancelSequence(opts: {
+    booking: Record<string, unknown>
+    event: { date_time: string; slug: string }
+    updateResult?: { data: unknown; error: unknown }
+  }) {
+    let callCount = 0
+    mockFrom.mockImplementation(() => {
+      callCount++
+      const chain: Record<string, ReturnType<typeof vi.fn>> = {}
+      const methods = ['select', 'update', 'eq', 'is', 'single', 'neq', 'order', 'limit']
+      for (const m of methods) {
+        chain[m] = vi.fn().mockReturnValue(chain)
+      }
+      if (callCount === 1) {
+        chain.then = vi.fn((resolve: (v: unknown) => void) =>
+          resolve({ data: opts.booking, error: null }),
+        )
+      } else if (callCount === 2) {
+        chain.then = vi.fn((resolve: (v: unknown) => void) =>
+          resolve({ data: opts.event, error: null }),
+        )
+      } else {
+        chain.then = vi.fn((resolve: (v: unknown) => void) =>
+          resolve(opts.updateResult ?? { data: { id: 'bk-1' }, error: null }),
+        )
+      }
+      return chain
+    })
+  }
+
+  it('issues a Stripe refund when paid booking cancelled >48h before event', async () => {
+    authenticateUser('user-1')
+    mockStripeRefundCreate.mockResolvedValueOnce({ id: 're_abc' })
+
+    stubCancelSequence({
+      booking: {
+        id: 'bk-1',
+        user_id: 'user-1',
+        event_id: 'evt-1',
+        status: 'confirmed',
+        price_at_booking: 3500,
+        stripe_payment_id: 'pi_xyz',
+        refunded_amount_pence: 0,
+      },
+      event: {
+        date_time: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
+        slug: 'wine',
+      },
+    })
+
+    const result = await cancelBooking('bk-1')
+
+    expect(result.success).toBe(true)
+    expect(result.refundEligible).toBe(true)
+    expect(result.refundedPence).toBe(3500)
+    expect(mockStripeRefundCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ payment_intent: 'pi_xyz' }),
+      // I2 fix: idempotency key ties the refund to the booking so a
+      // double-click can't double-spend.
+      expect.objectContaining({
+        idempotencyKey: expect.stringMatching(/^refund-booking-/),
+      }),
+    )
+  })
+
+  it('does NOT refund paid booking cancelled ≤48h before event', async () => {
+    authenticateUser('user-1')
+    stubCancelSequence({
+      booking: {
+        id: 'bk-1',
+        user_id: 'user-1',
+        event_id: 'evt-1',
+        status: 'confirmed',
+        price_at_booking: 3500,
+        stripe_payment_id: 'pi_xyz',
+        refunded_amount_pence: 0,
+      },
+      event: {
+        date_time: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
+        slug: 'wine',
+      },
+    })
+
+    const result = await cancelBooking('bk-1')
+    expect(result.success).toBe(true)
+    expect(result.refundEligible).toBe(false)
+    expect(result.refundedPence).toBe(0)
+    expect(mockStripeRefundCreate).not.toHaveBeenCalled()
+  })
+
+  it('does NOT refund free-event bookings (no stripe_payment_id)', async () => {
+    authenticateUser('user-1')
+    stubCancelSequence({
+      booking: {
+        id: 'bk-1',
+        user_id: 'user-1',
+        event_id: 'evt-1',
+        status: 'confirmed',
+        price_at_booking: 0,
+        stripe_payment_id: null,
+        refunded_amount_pence: 0,
+      },
+      event: {
+        date_time: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
+        slug: 'run-club',
+      },
+    })
+
+    const result = await cancelBooking('bk-1')
+    expect(result.success).toBe(true)
+    expect(result.refundEligible).toBe(false)
+    expect(mockStripeRefundCreate).not.toHaveBeenCalled()
+  })
+
+  it('aborts cancellation when Stripe refund throws (user keeps their spot)', async () => {
+    authenticateUser('user-1')
+    mockStripeRefundCreate.mockRejectedValueOnce(new Error('Stripe is down'))
+    stubCancelSequence({
+      booking: {
+        id: 'bk-1',
+        user_id: 'user-1',
+        event_id: 'evt-1',
+        status: 'confirmed',
+        price_at_booking: 3500,
+        stripe_payment_id: 'pi_xyz',
+        refunded_amount_pence: 0,
+      },
+      event: {
+        date_time: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
+        slug: 'wine',
+      },
+    })
+
+    const result = await cancelBooking('bk-1')
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/refund/i)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// claimWaitlistSpot (P2-7b)
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('claimWaitlistSpot', () => {
+  it('rejects empty eventId', async () => {
+    const result = await claimWaitlistSpot('')
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('Event ID is required')
+  })
+
+  it('rejects unauthenticated callers', async () => {
+    unauthenticateUser()
+    const result = await claimWaitlistSpot('evt-1')
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('Authentication required')
+    expect(mockRpc).not.toHaveBeenCalled()
+  })
+
+  it('returns success and no checkoutUrl for a free-event claim', async () => {
+    authenticateUser('user-1')
+    mockRpc.mockResolvedValueOnce({
+      data: { booking_id: 'bk-42', status: 'confirmed' },
+      error: null,
+    })
+
+    const result = await claimWaitlistSpot('evt-1')
+
+    expect(mockRpc).toHaveBeenCalledWith('claim_waitlist_spot', {
+      p_user_id: 'user-1',
+      p_event_id: 'evt-1',
+    })
+    expect(result.success).toBe(true)
+    expect(result.status).toBe('confirmed')
+    expect(result.checkoutUrl).toBeUndefined()
+  })
+
+  it('surfaces the RPC race-lost error verbatim', async () => {
+    authenticateUser('user-1')
+    mockRpc.mockResolvedValueOnce({
+      data: {
+        error: "Someone else just claimed this spot. You're still on the waitlist.",
+      },
+      error: null,
+    })
+
+    const result = await claimWaitlistSpot('evt-1')
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/someone else/i)
   })
 })
 

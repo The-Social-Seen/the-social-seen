@@ -10,10 +10,15 @@ import {
   Check,
   CalendarPlus,
 } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import { formatDateFull, formatTimeRange } from "@/lib/utils/dates";
 import { formatPrice } from "@/lib/utils/currency";
 import { downloadIcsFile } from "@/lib/utils/calendar";
-import { cancelBooking, leaveWaitlist } from "@/app/events/[slug]/actions";
+import {
+  cancelBooking,
+  claimWaitlistSpot,
+  leaveWaitlist,
+} from "@/app/events/[slug]/actions";
 import StarRating from "@/components/reviews/StarRating";
 import type { EventDetail, Booking } from "@/types";
 
@@ -287,14 +292,35 @@ function ConfirmedState({
 }) {
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [isPending, startTransition] = useTransition();
+  const [cancelError, setCancelError] = useState<string | null>(null);
+
+  // 48h refund policy preview — same cut-off as server-side constant.
+  // Captured at mount via useState's lazy initializer: runs once,
+  // doesn't re-read Date.now() on every render, and satisfies the
+  // "no impure calls in render" lint rule. The value is stable enough
+  // for the lifetime of the sidebar — no one keeps it open long
+  // enough for the window to cross 48h mid-session.
+  const isPaid = event.price > 0;
+  const [refundEligible] = useState(() => {
+    if (!isPaid) return false;
+    const hoursUntilEvent =
+      (new Date(event.date_time).getTime() - Date.now()) / (1000 * 60 * 60);
+    return hoursUntilEvent > 48;
+  });
 
   function handleCancel() {
+    setCancelError(null);
     startTransition(async () => {
       const result = await cancelBooking(booking.id);
       if (!result.success) {
-        // Reset confirmation UI — error is non-blocking for demo
-        setShowCancelConfirm(false);
+        setCancelError(result.error ?? "Something went wrong. Please try again.");
+        return;
       }
+      // Success — full refresh so the sidebar re-renders in the
+      // LoggedOutState/BookableState and the cancellation is reflected
+      // in the bookings list. The refund (if any) was already issued
+      // server-side.
+      window.location.reload();
     });
   }
 
@@ -356,9 +382,19 @@ function ConfirmedState({
           </button>
         ) : (
           <div>
-            <p className="mb-3 text-sm text-text-primary/70">
+            <p className="mb-2 text-sm text-text-primary/70">
               Are you sure? This will release your spot.
             </p>
+            {isPaid && (
+              <p className="mb-3 text-xs text-text-primary/60">
+                {refundEligible
+                  ? `We\u2019ll refund ${formatPrice(booking.price_at_booking)} to your card (2\u20133 working days).`
+                  : "Cancellations within 48h of the event aren\u2019t refundable."}
+              </p>
+            )}
+            {cancelError && (
+              <p className="mb-3 text-xs text-danger">{cancelError}</p>
+            )}
             <div className="flex gap-3">
               <button
                 onClick={handleCancel}
@@ -390,8 +426,14 @@ function WaitlistedState({
   event: EventDetail;
   booking: Booking;
 }) {
+  const searchParams = useSearchParams();
+  const isClaiming = searchParams.get("claim") === "1";
+
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [claimError, setClaimError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  const isFree = event.price === 0;
 
   function handleLeave() {
     startTransition(async () => {
@@ -399,6 +441,25 @@ function WaitlistedState({
       if (!result.success) {
         setShowLeaveConfirm(false);
       }
+    });
+  }
+
+  function handleClaim() {
+    setClaimError(null);
+    startTransition(async () => {
+      const result = await claimWaitlistSpot(event.id);
+      if (!result.success) {
+        setClaimError(result.error ?? "Something went wrong. Please try again.");
+        return;
+      }
+      // Paid event: redirect to Stripe Checkout.
+      if (result.checkoutUrl) {
+        window.location.href = result.checkoutUrl;
+        return;
+      }
+      // Free event — booking is already confirmed. Full refresh so the
+      // whole sidebar re-renders in the ConfirmedState.
+      window.location.reload();
     });
   }
 
@@ -411,13 +472,44 @@ function WaitlistedState({
         </span>
       </div>
 
+      {/* Claim banner — shown when ?claim=1 (arrived via spot-available email) */}
+      {isClaiming && (
+        <div className="mb-5 rounded-xl border border-gold/40 bg-gold/5 p-4">
+          <p className="mb-1 text-sm font-semibold text-text-primary">
+            A spot just opened!
+          </p>
+          <p className="mb-3 text-xs text-text-primary/70">
+            First to {isFree ? "claim" : "pay"} wins. You&rsquo;re still on the
+            waitlist if someone beats you to it.
+          </p>
+          {claimError && (
+            <p className="mb-3 text-xs text-danger">{claimError}</p>
+          )}
+          <button
+            onClick={handleClaim}
+            disabled={isPending}
+            className="block w-full rounded-full bg-gold py-3 text-sm font-semibold text-white shadow-lg shadow-gold/25 transition-all hover:bg-gold-dark hover:shadow-xl hover:shadow-gold/30 active:scale-[0.98] disabled:opacity-60"
+          >
+            {isPending
+              ? isFree
+                ? "Claiming\u2026"
+                : "Redirecting to payment\u2026"
+              : isFree
+              ? "Claim your spot"
+              : `Claim spot (${formatPrice(event.price)})`}
+          </button>
+        </div>
+      )}
+
       <p className="mb-1 text-lg font-semibold text-text-primary">
         You&apos;re{" "}
         <span className="text-gold">#{booking.waitlist_position}</span> on the
         waitlist
       </p>
       <p className="mb-5 text-sm text-text-primary/60">
-        We&apos;ll notify you if a spot opens up
+        {isClaiming
+          ? "Not ready now? You\u2019ll stay on the waitlist for the next opening."
+          : "We\u2019ll email you if a spot opens up."}
       </p>
 
       {/* Leave section */}
