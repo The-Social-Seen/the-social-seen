@@ -33,6 +33,14 @@ vi.mock('next/navigation', () => ({
   redirect: vi.fn(),
 }))
 
+// Mock the email send wrapper — completeOnboarding fires a welcome email
+// via dynamic import. Intercept here so tests don't try the real Resend
+// call (which would fail without RESEND_API_KEY set).
+const mockSendEmail = vi.fn()
+vi.mock('@/lib/email/send', () => ({
+  sendEmail: (...args: unknown[]) => mockSendEmail(...args),
+}))
+
 import {
   signUp,
   signIn,
@@ -405,6 +413,7 @@ describe('completeOnboarding', () => {
     })
 
     const chain = mockSupabaseChain({ data: null, error: null })
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg' })
 
     const result = await completeOnboarding()
 
@@ -412,6 +421,66 @@ describe('completeOnboarding', () => {
     expect(mockFrom).toHaveBeenCalledWith('profiles')
     expect(chain.update).toHaveBeenCalledWith({ onboarding_complete: true })
     expect(chain.eq).toHaveBeenCalledWith('id', 'user-1')
+  })
+
+  it('fires the welcome email after onboarding completes', async () => {
+    mockGetUser.mockResolvedValue({
+      data: {
+        user: {
+          id: 'user-1',
+          email: 'charlotte@example.com',
+          user_metadata: { full_name: 'Charlotte Moreau' },
+        },
+      },
+      error: null,
+    })
+
+    // The chain helper returns the same response for every from() call.
+    // Both the `update` (onboarding) and the subsequent `select` (profile
+    // lookup for the email) hit the same mock — return profile data so
+    // the welcome email path proceeds.
+    mockSupabaseChain({
+      data: {
+        full_name: 'Charlotte Moreau',
+        email: 'charlotte@example.com',
+      },
+      error: null,
+    })
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg_1' })
+
+    await completeOnboarding()
+
+    expect(mockSendEmail).toHaveBeenCalledTimes(1)
+    expect(mockSendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'charlotte@example.com',
+        templateName: 'welcome',
+        relatedProfileId: 'user-1',
+      }),
+    )
+  })
+
+  it('still returns success when the welcome email fails', async () => {
+    mockGetUser.mockResolvedValue({
+      data: {
+        user: { id: 'user-1', email: 'charlotte@example.com' },
+      },
+      error: null,
+    })
+
+    mockSupabaseChain({
+      data: { full_name: 'Charlotte Moreau', email: 'charlotte@example.com' },
+      error: null,
+    })
+    mockSendEmail.mockResolvedValue({
+      success: false,
+      error: 'Resend down',
+    })
+
+    const result = await completeOnboarding()
+
+    // Email failure must NOT roll back onboarding — user gets a clean success.
+    expect(result).toEqual({ success: true })
   })
 })
 

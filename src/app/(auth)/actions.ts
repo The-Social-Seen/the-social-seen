@@ -4,6 +4,8 @@ import { z } from 'zod'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { createServerClient } from '@/lib/supabase/server'
+import { sendEmail } from '@/lib/email/send'
+import { welcomeTemplate } from '@/lib/email/templates/welcome'
 
 // ── Validation schemas ──────────────────────────────────────────────────────
 
@@ -312,6 +314,44 @@ export async function completeOnboarding(): Promise<{ success: true } | { error:
 
   if (error) {
     return { error: 'Failed to complete onboarding' }
+  }
+
+  // Welcome email — bonus, not critical. A failure here must NOT roll
+  // back the onboarding state. Fetch the user's full_name for the
+  // greeting; fall back to the auth metadata if the profile read fails.
+  try {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('full_name, email')
+      .eq('id', user.id)
+      .single()
+
+    const fullName =
+      profile?.full_name?.trim() ||
+      (user.user_metadata?.full_name as string | undefined) ||
+      'there'
+    const recipient = profile?.email ?? user.email
+
+    if (recipient) {
+      const tpl = welcomeTemplate({ fullName })
+      const result = await sendEmail({
+        to: recipient,
+        subject: tpl.subject,
+        html: tpl.html,
+        text: tpl.text,
+        templateName: 'welcome',
+        relatedProfileId: user.id,
+        tags: [{ name: 'template', value: 'welcome' }],
+      })
+      if (!result.success) {
+        console.warn('[completeOnboarding] welcome email failed:', result.error)
+      }
+    }
+  } catch (err) {
+    console.warn(
+      '[completeOnboarding] welcome email send threw:',
+      err instanceof Error ? err.message : err,
+    )
   }
 
   revalidatePath('/', 'layout')

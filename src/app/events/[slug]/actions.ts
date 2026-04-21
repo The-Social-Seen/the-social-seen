@@ -2,6 +2,9 @@
 
 import { revalidatePath } from 'next/cache'
 import { createServerClient } from '@/lib/supabase/server'
+import { sendEmail } from '@/lib/email/send'
+import { bookingConfirmationTemplate } from '@/lib/email/templates/booking-confirmation'
+import { formatDateFull, formatTime } from '@/lib/utils/dates'
 import type { BookingStatus } from '@/types'
 
 // ── Result type ────────���─────────────────────────────��──────────────────────
@@ -57,11 +60,106 @@ export async function createBooking(eventId: string): Promise<ActionResult> {
   revalidatePath('/bookings')
   revalidatePath('/profile')
 
+  // Booking confirmation email — bonus, not critical. A failure here
+  // must NOT roll back the booking. Skip if status is 'no_show' / 'cancelled'
+  // (only confirmed/waitlisted/pending_payment trigger a confirmation).
+  const bookingStatus = result.status as BookingStatus
+  if (
+    bookingStatus === 'confirmed' ||
+    bookingStatus === 'waitlisted'
+  ) {
+    void sendBookingConfirmationEmail({
+      userId: user.id,
+      eventId,
+      status: bookingStatus,
+      waitlistPosition: (result.waitlist_position as number | null) ?? null,
+    })
+  }
+
   return {
     success: true,
     bookingId: result.booking_id as string,
-    status: result.status as BookingStatus,
+    status: bookingStatus,
     waitlistPosition: (result.waitlist_position as number | null) ?? null,
+  }
+}
+
+/**
+ * Fire-and-forget booking confirmation email. Awaited via `void` from
+ * the calling action so a slow Resend response doesn't delay the
+ * booking response, but errors are still logged via the send wrapper's
+ * notifications audit.
+ */
+async function sendBookingConfirmationEmail(args: {
+  userId: string
+  eventId: string
+  status: 'confirmed' | 'waitlisted'
+  waitlistPosition: number | null
+}): Promise<void> {
+  try {
+    const supabase = await createServerClient()
+
+    // Fetch the bits the template needs in a single round-trip each.
+    const [profileRes, eventRes] = await Promise.all([
+      supabase
+        .from('profiles')
+        .select('full_name, email')
+        .eq('id', args.userId)
+        .single(),
+      supabase
+        .from('events')
+        .select('title, slug, date_time, venue_name, venue_address')
+        .eq('id', args.eventId)
+        .single(),
+    ])
+
+    const profile = profileRes.data
+    const event = eventRes.data
+    if (!profile?.email || !event) {
+      console.warn(
+        '[createBooking] confirmation email skipped: profile or event missing',
+      )
+      return
+    }
+
+    const tpl = bookingConfirmationTemplate({
+      fullName: profile.full_name?.trim() || 'there',
+      eventTitle: event.title,
+      eventSlug: event.slug,
+      eventDate: formatDateFull(event.date_time),
+      eventTime: formatTime(event.date_time),
+      venueName: event.venue_name,
+      venueAddress: event.venue_address,
+      // P2-5 will introduce events.venue_revealed. Until then, every
+      // event reveals the venue on booking — current behaviour preserved.
+      venueRevealed: true,
+      status: args.status,
+      waitlistPosition: args.waitlistPosition,
+    })
+
+    const result = await sendEmail({
+      to: profile.email,
+      subject: tpl.subject,
+      html: tpl.html,
+      text: tpl.text,
+      templateName: 'booking_confirmation',
+      relatedProfileId: args.userId,
+      tags: [
+        { name: 'template', value: 'booking_confirmation' },
+        { name: 'status', value: args.status },
+      ],
+    })
+    if (!result.success) {
+      console.warn(
+        '[createBooking] confirmation email failed:',
+        result.error,
+      )
+    }
+  } catch (err) {
+    console.warn(
+      '[createBooking] confirmation email threw:',
+      err instanceof Error ? err.message : err,
+    )
   }
 }
 

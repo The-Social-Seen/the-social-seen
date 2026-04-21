@@ -20,6 +20,14 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }))
 
+// Mock the email send wrapper — createBooking fires a fire-and-forget
+// confirmation email via static import. Intercept here so tests don't
+// hit the real Resend API.
+const mockSendEmail = vi.fn()
+vi.mock('@/lib/email/send', () => ({
+  sendEmail: (...args: unknown[]) => mockSendEmail(...args),
+}))
+
 import { createBooking, cancelBooking, leaveWaitlist } from '../actions'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -152,6 +160,123 @@ describe('createBooking', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Something went wrong. Please try again.')
+  })
+
+  // ── Booking confirmation email integration ──────────────────────────────
+
+  it('fires booking confirmation email after a confirmed booking', async () => {
+    authenticateUser()
+    mockRpc.mockResolvedValue({
+      data: { booking_id: 'bk-1', status: 'confirmed', waitlist_position: null },
+      error: null,
+    })
+    // Profile + event lookups in sendBookingConfirmationEmail share the
+    // same chain mock; return enough data for the template to render.
+    mockSupabaseChain({
+      data: {
+        full_name: 'Charlotte Moreau',
+        email: 'charlotte@example.com',
+        title: 'Wine & Wisdom',
+        slug: 'wine-and-wisdom',
+        date_time: '2026-05-07T19:00:00Z',
+        venue_name: 'Quo Vadis',
+        venue_address: '26-29 Dean St, London',
+      },
+      error: null,
+    })
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg_1' })
+
+    const result = await createBooking('evt-1')
+
+    expect(result.success).toBe(true)
+    // Fire-and-forget — give the microtask queue a chance to drain.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(mockSendEmail).toHaveBeenCalledTimes(1)
+    expect(mockSendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'charlotte@example.com',
+        templateName: 'booking_confirmation',
+        relatedProfileId: 'user-1',
+      }),
+    )
+  })
+
+  it('fires booking confirmation email after a waitlisted booking', async () => {
+    authenticateUser()
+    mockRpc.mockResolvedValue({
+      data: { booking_id: 'bk-2', status: 'waitlisted', waitlist_position: 3 },
+      error: null,
+    })
+    mockSupabaseChain({
+      data: {
+        full_name: 'Charlotte Moreau',
+        email: 'charlotte@example.com',
+        title: 'Wine & Wisdom',
+        slug: 'wine-and-wisdom',
+        date_time: '2026-05-07T19:00:00Z',
+        venue_name: 'Quo Vadis',
+        venue_address: '26-29 Dean St, London',
+      },
+      error: null,
+    })
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg_2' })
+
+    await createBooking('evt-1')
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(mockSendEmail).toHaveBeenCalledTimes(1)
+    expect(mockSendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        templateName: 'booking_confirmation',
+        // Status tag confirms the waitlisted variant of the template was used
+        tags: expect.arrayContaining([
+          { name: 'status', value: 'waitlisted' },
+        ]),
+      }),
+    )
+  })
+
+  it('does NOT fire email when book_event returns an error', async () => {
+    authenticateUser()
+    mockRpc.mockResolvedValue({
+      data: { error: 'Event not found' },
+      error: null,
+    })
+
+    await createBooking('evt-missing')
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('still returns success when the confirmation email fails', async () => {
+    authenticateUser()
+    mockRpc.mockResolvedValue({
+      data: { booking_id: 'bk-3', status: 'confirmed', waitlist_position: null },
+      error: null,
+    })
+    mockSupabaseChain({
+      data: {
+        full_name: 'Charlotte Moreau',
+        email: 'charlotte@example.com',
+        title: 'Wine & Wisdom',
+        slug: 'wine-and-wisdom',
+        date_time: '2026-05-07T19:00:00Z',
+        venue_name: 'Quo Vadis',
+        venue_address: '26-29 Dean St, London',
+      },
+      error: null,
+    })
+    mockSendEmail.mockResolvedValue({
+      success: false,
+      error: 'Resend down',
+    })
+
+    const result = await createBooking('evt-1')
+
+    // Email failure must NOT roll back the booking — user gets a clean success.
+    expect(result.success).toBe(true)
+    expect(result.bookingId).toBe('bk-3')
   })
 })
 
