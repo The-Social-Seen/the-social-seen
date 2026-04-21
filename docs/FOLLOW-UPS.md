@@ -137,6 +137,40 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 
 ---
 
+## 🧹 P2-8a + P2-8b code-review follow-ups
+
+### Middleware does a `profiles.status` round-trip on every authenticated request
+**Source:** P2-8a code review (I2)
+**Rationale:** `src/lib/supabase/middleware.ts` now reads `profiles.status` for every authenticated request to support immediate ban enforcement. At demo scale (~1000 members) it's unnoticeable; at real scale or on cold-start serverless it adds measurable p95 latency.
+**Action (Phase 3):** Move `status` into a Supabase Auth JWT custom claim via an auth hook. Middleware reads from the JWT — zero DB hit per request. Ban-taking-effect time becomes "until next token refresh" (≤1 hour) rather than "immediate", which is acceptable for the threat model.
+**Priority:** Low. Optimisation, not a correctness issue.
+
+### Middleware should also sign out if `profiles.deleted_at` is set
+**Source:** P2-8b code review (I3)
+**Rationale:** The ban flow signs users out when `status = 'banned'`. The delete flow sets `deleted_at` but doesn't flip `status`. If `auth.signOut()` silently failed during deletion (rare but possible), the cookie persists and middleware wouldn't catch the deleted-but-still-logged-in state.
+**Action:** Add a parallel `if (profile?.deleted_at) { signOut + redirect }` alongside the ban check in `src/lib/supabase/middleware.ts`. Three lines; belt-and-braces.
+**Priority:** Low. Defence-in-depth.
+
+### `/?account_deleted=1` lands silently on the homepage
+**Source:** P2-8b code review (S1)
+**Rationale:** After account deletion the user is redirected to `/?account_deleted=1`, but there's no UI handler for the param — they see the normal landing page with no visible confirmation the deletion completed. The redirect itself is signal, but an explicit "Your account has been closed" toast would be nicer.
+**Action:** Client Component mounted in the root layout that reads `?account_deleted=1`, shows a toast, and strips the param via `router.replace`. Mirrors the `BookingCancelledHandler` pattern.
+**Priority:** Low. UX polish.
+
+### Legal-page "Last updated" dates are hardcoded
+**Source:** P2-8b code review (S2)
+**Rationale:** `/privacy` and `/terms` both hardcode "Last updated: 21 April 2026" at the top. Two places to remember when re-publishing after a policy change.
+**Action:** Extract to a shared constant (`src/app/(legal)/_constants.ts` or similar), or pull from `git log` at build time via a script.
+**Priority:** Very low.
+
+### `sanitise_user_notifications` RPC doesn't scrub recipient rows
+**Source:** P2-8b code review (S3) + P2-9 dependency
+**Rationale:** The RPC scrubs `notifications` rows where `sent_by = user_id` (system emails we sent *for* the user). It does NOT scrub rows where the user was the *recipient* of an admin announcement. Today there's no admin-announcement feature surface, so no recipient rows exist — but P2-9 introduces "Email all attendees" which creates exactly those rows.
+**Action:** When P2-9 lands the attendee-messaging feature, extend the RPC to also scrub `recipient_email` matching the deleted user's stored email OR use a new `recipient_user_id` column that FKs to profiles (cleaner). Track and action as part of P2-9.
+**Priority:** Medium (becomes a GDPR completeness gap the moment P2-9 ships).
+
+---
+
 ## 🧪 Testing gaps
 
 <!-- Resolved in P2-8b (PR #24): wrapped the assertion in `waitFor(...)`
