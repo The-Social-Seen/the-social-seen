@@ -1,12 +1,16 @@
 'use server'
 
+import { after } from 'next/server'
 import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 import { createServerClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { sendEmail } from '@/lib/email/send'
 import { bookingConfirmationTemplate } from '@/lib/email/templates/booking-confirmation'
+import { waitlistSpotAvailableTemplate } from '@/lib/email/templates/waitlist-spot-available'
 import { formatDateFull, formatTime } from '@/lib/utils/dates'
+import * as Sentry from '@sentry/nextjs'
+import { getStripeClient } from '@/lib/stripe/server'
 import {
   createBookingCheckoutSession,
   ensureStripeCustomer,
@@ -27,6 +31,14 @@ interface ActionResult {
    * complete payment.
    */
   checkoutUrl?: string
+  /**
+   * Cancellation-refund outcome (populated by cancelBooking).
+   *   - refundedPence > 0 + refundEligible: full refund issued (48h+ before event)
+   *   - refundedPence = 0 + !refundEligible: paid event, cancellation within 48h → no refund
+   *   - undefined: free event or nothing cancellation-related
+   */
+  refundedPence?: number
+  refundEligible?: boolean
 }
 
 // ── createBooking ───────────────────────────────────────────────────────────
@@ -80,12 +92,14 @@ export async function createBooking(eventId: string): Promise<ActionResult> {
     bookingStatus === 'confirmed' ||
     bookingStatus === 'waitlisted'
   ) {
-    void sendBookingConfirmationEmail({
-      userId: user.id,
-      eventId,
-      status: bookingStatus,
-      waitlistPosition: (result.waitlist_position as number | null) ?? null,
-    })
+    after(() =>
+      sendBookingConfirmationEmail({
+        userId: user.id,
+        eventId,
+        status: bookingStatus,
+        waitlistPosition: (result.waitlist_position as number | null) ?? null,
+      }),
+    )
   }
 
   return {
@@ -237,12 +251,14 @@ export async function createPaidCheckout(
   // Waitlisted paid event → no Stripe. Same shape as free-event
   // waitlist response; send the confirmation email and return.
   if (status === 'waitlisted') {
-    void sendBookingConfirmationEmail({
-      userId: user.id,
-      eventId,
-      status: 'waitlisted',
-      waitlistPosition,
-    })
+    after(() =>
+      sendBookingConfirmationEmail({
+        userId: user.id,
+        eventId,
+        status: 'waitlisted',
+        waitlistPosition,
+      }),
+    )
     return { success: true, bookingId, status, waitlistPosition }
   }
 
@@ -340,6 +356,164 @@ export async function createPaidCheckout(
   }
 }
 
+// ── claimWaitlistSpot ───────────────────────────────────────────────────────
+
+/**
+ * First-click-wins waitlist claim (P2-7b). Fired when a waitlisted user
+ * lands on `/events/[slug]?claim=1` (from the "spot available" email)
+ * and clicks the Claim CTA.
+ *
+ * Flow:
+ *   1. `claim_waitlist_spot` RPC atomically checks capacity + transitions
+ *      the caller's waitlisted booking to `pending_payment` (paid event)
+ *      or `confirmed` (free event) under a row lock.
+ *   2. Free events: revalidate, send confirmation email, return success.
+ *   3. Paid events: create a Stripe Checkout Session against the same
+ *      booking_id (same `checkoutUrl` contract as createPaidCheckout —
+ *      the client navigates there). On Stripe failure, roll the booking
+ *      back to `waitlisted` (not `cancelled` — their waitlist entry is
+ *      restored so the next cancellation email is still relevant).
+ */
+export async function claimWaitlistSpot(
+  eventId: string,
+): Promise<ActionResult> {
+  if (!eventId) {
+    return { success: false, error: 'Event ID is required' }
+  }
+
+  const supabase = await createServerClient()
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser()
+  if (authError || !user) {
+    return { success: false, error: 'Authentication required' }
+  }
+
+  const { data: rpcData, error: rpcError } = await supabase.rpc(
+    'claim_waitlist_spot',
+    { p_user_id: user.id, p_event_id: eventId },
+  )
+
+  if (rpcError) {
+    console.error('[claimWaitlistSpot] RPC error:', rpcError.message)
+    return { success: false, error: 'Something went wrong. Please try again.' }
+  }
+
+  const result = rpcData as Record<string, unknown>
+  if (result.error) {
+    return { success: false, error: result.error as string }
+  }
+
+  const bookingId = result.booking_id as string
+  const status = result.status as BookingStatus
+
+  revalidatePath('/events')
+  revalidatePath('/bookings')
+
+  // Free event — confirmed immediately, send confirmation email.
+  if (status === 'confirmed') {
+    after(() =>
+      sendBookingConfirmationEmail({
+        userId: user.id,
+        eventId,
+        status: 'confirmed',
+        waitlistPosition: null,
+      }),
+    )
+    return { success: true, bookingId, status }
+  }
+
+  if (status !== 'pending_payment') {
+    console.error(
+      '[claimWaitlistSpot] unexpected status from claim_waitlist_spot:',
+      status,
+    )
+    return { success: false, error: 'Unexpected booking state' }
+  }
+
+  // Paid event — create Checkout Session. Mirrors createPaidCheckout's
+  // Stripe block, but on failure we restore the booking to `waitlisted`
+  // rather than cancelling (the user shouldn't lose their waitlist
+  // entry because our payment provider hiccuped).
+  try {
+    const [eventRes, profileRes] = await Promise.all([
+      supabase
+        .from('events')
+        .select('title, slug, price')
+        .eq('id', eventId)
+        .single(),
+      supabase
+        .from('profiles')
+        .select('full_name, email')
+        .eq('id', user.id)
+        .single(),
+    ])
+
+    const event = eventRes.data
+    const profile = profileRes.data
+    if (!event || !profile?.email) {
+      throw new Error('Missing event or profile data for checkout')
+    }
+
+    const admin = createAdminClient()
+    const stripeCustomerId = await ensureStripeCustomer(admin, {
+      userId: user.id,
+      email: profile.email,
+      fullName: profile.full_name,
+    })
+
+    const origin = await resolveOrigin()
+    const successUrl = `${origin}/events/${event.slug}/booking-success?session_id={CHECKOUT_SESSION_ID}`
+    // Cancel goes back to the event page with claim=1 so the waitlist
+    // user can try again if they want. `cancelled=1` triggers the
+    // abandon-pending handler which flips them back to waitlisted.
+    const cancelUrl = `${origin}/events/${event.slug}?cancelled=1&from=claim`
+
+    const { sessionId, url } = await createBookingCheckoutSession({
+      bookingId,
+      userId: user.id,
+      userEmail: profile.email,
+      eventId,
+      eventTitle: event.title,
+      eventSlug: event.slug,
+      priceInPence: event.price,
+      successUrl,
+      cancelUrl,
+      stripeCustomerId,
+    })
+
+    const { error: updErr } = await supabase
+      .from('bookings')
+      .update({ stripe_checkout_session_id: sessionId })
+      .eq('id', bookingId)
+    if (updErr) {
+      console.warn(
+        '[claimWaitlistSpot] Failed to store checkout session id:',
+        updErr.message,
+      )
+    }
+
+    return { success: true, bookingId, status, checkoutUrl: url }
+  } catch (err) {
+    console.error(
+      '[claimWaitlistSpot] Stripe flow failed, restoring waitlist entry:',
+      err instanceof Error ? err.message : err,
+    )
+    // Restore to waitlisted so the user keeps their place.
+    await supabase
+      .from('bookings')
+      .update({ status: 'waitlisted' as BookingStatus })
+      .eq('id', bookingId)
+      .eq('status', 'pending_payment')
+
+    return {
+      success: false,
+      error: 'Could not start checkout. Please try again.',
+    }
+  }
+}
+
 async function resolveOrigin(): Promise<string> {
   // Prefer the explicit site URL env var (set in production). Fall back
   // to the request's forwarded host — works on localhost + Vercel
@@ -376,6 +550,7 @@ async function resolveOrigin(): Promise<string> {
  */
 export async function abandonPendingCheckout(
   eventId: string,
+  options?: { from?: 'book' | 'claim' },
 ): Promise<ActionResult> {
   if (!eventId) {
     return { success: false, error: 'Event ID is required' }
@@ -390,9 +565,18 @@ export async function abandonPendingCheckout(
     return { success: false, error: 'Authentication required' }
   }
 
+  // When the user arrived via a waitlist claim, rolling their
+  // pending_payment row back to `cancelled` would lose their waitlist
+  // position AND their eligibility for future "spot available" emails.
+  // Restore to `waitlisted` instead. For the regular book-flow abandon,
+  // keep the original `cancelled` semantics (they made a new booking and
+  // decided not to pay).
+  const rollbackStatus: BookingStatus =
+    options?.from === 'claim' ? 'waitlisted' : 'cancelled'
+
   const { error } = await supabase
     .from('bookings')
-    .update({ status: 'cancelled' as BookingStatus })
+    .update({ status: rollbackStatus })
     .eq('user_id', user.id)
     .eq('event_id', eventId)
     .eq('status', 'pending_payment')
@@ -411,9 +595,31 @@ export async function abandonPendingCheckout(
 // ── cancelBooking ────────────────���──────────────────────────────────────────
 
 /**
- * Cancel a confirmed booking. Sets status to 'cancelled'.
- * Per architect spec: no auto-promote, no deleted_at.
+ * Cancellation policy (P2-7b):
+ *   - Free events: status → cancelled, no payment touched.
+ *   - Paid events > 48h before start: status → cancelled, full Stripe
+ *     refund issued. stripe_refund_id + refunded_amount_pence recorded.
+ *   - Paid events ≤ 48h before start: status → cancelled, NO refund.
+ *     `refundEligible: false` in the result so the UI can show the
+ *     policy line without sending a second API call.
+ *
+ * After a successful cancel (any branch), we fire-and-forget a "spot
+ * available" email to every remaining waitlisted member. First-to-pay
+ * wins — no staggering, no auto-promote.
+ *
+ * Refund correctness:
+ *   - Refund API call happens BEFORE the status UPDATE. A failed refund
+ *     aborts the cancellation (user keeps their spot, sees the error,
+ *     can retry or contact support).
+ *   - Re-running the action after a successful refund is guarded by the
+ *     `.eq('status', 'confirmed')` clause: the second UPDATE no-ops
+ *     because the row is already cancelled.
+ *   - The partial UNIQUE index `ux_bookings_stripe_refund_id` prevents
+ *     the same refund id from being recorded on two rows (defence in
+ *     depth; not reachable under normal flow).
  */
+const REFUND_WINDOW_HOURS = 48
+
 export async function cancelBooking(bookingId: string): Promise<ActionResult> {
   if (!bookingId) {
     return { success: false, error: 'Booking ID is required' }
@@ -429,10 +635,13 @@ export async function cancelBooking(bookingId: string): Promise<ActionResult> {
     return { success: false, error: 'Authentication required' }
   }
 
-  // Fetch booking to validate ownership and status
+  // Fetch booking: need price_at_booking + stripe_payment_id for the
+  // refund decision, plus the usual ownership / status guards.
   const { data: booking, error: fetchError } = await supabase
     .from('bookings')
-    .select('id, user_id, event_id, status')
+    .select(
+      'id, user_id, event_id, status, price_at_booking, stripe_payment_id, refunded_amount_pence',
+    )
     .eq('id', bookingId)
     .is('deleted_at', null)
     .single()
@@ -441,7 +650,6 @@ export async function cancelBooking(bookingId: string): Promise<ActionResult> {
     return { success: false, error: 'Booking not found' }
   }
 
-  // Defence-in-depth: verify ownership (RLS also covers this)
   if (booking.user_id !== user.id) {
     return { success: false, error: 'Unauthorised' }
   }
@@ -450,7 +658,6 @@ export async function cancelBooking(bookingId: string): Promise<ActionResult> {
     return { success: false, error: 'Only confirmed bookings can be cancelled' }
   }
 
-  // Check event hasn't passed
   const { data: event, error: eventError } = await supabase
     .from('events')
     .select('date_time, slug')
@@ -461,14 +668,76 @@ export async function cancelBooking(bookingId: string): Promise<ActionResult> {
     return { success: false, error: 'Event not found' }
   }
 
-  if (new Date(event.date_time) < new Date()) {
+  const eventStart = new Date(event.date_time)
+  const now = new Date()
+  if (eventStart < now) {
     return { success: false, error: 'Cannot cancel a booking for a past event' }
   }
 
-  // Optimistic lock: WHERE status = 'confirmed' guards against race condition
+  // Refund decision. Paid event AND >48h before start AND we have a
+  // payment id AND we haven't already refunded (idempotency).
+  const hoursUntilEvent =
+    (eventStart.getTime() - now.getTime()) / (1000 * 60 * 60)
+  const isPaid =
+    (booking.price_at_booking ?? 0) > 0 && !!booking.stripe_payment_id
+  const refundEligible = isPaid && hoursUntilEvent > REFUND_WINDOW_HOURS
+  const alreadyRefunded = (booking.refunded_amount_pence ?? 0) > 0
+
+  let stripeRefundId: string | null = null
+  let refundedPence = 0
+
+  if (refundEligible && !alreadyRefunded) {
+    try {
+      const stripe = getStripeClient()
+      const refund = await stripe.refunds.create(
+        {
+          payment_intent: booking.stripe_payment_id!,
+          // Reason surfaces in the Stripe dashboard — helpful when an
+          // admin is auditing refund volumes.
+          reason: 'requested_by_customer',
+          metadata: {
+            booking_id: booking.id,
+            user_id: user.id,
+          },
+        },
+        {
+          // Idempotency key tied to the booking id — under a tight race
+          // (double-click before the first UPDATE lands), a second call
+          // with the same key returns the same refund object instead of
+          // creating a second one. Stripe keeps idempotency keys for 24h
+          // which is well longer than any reasonable cancel retry window.
+          idempotencyKey: `refund-booking-${booking.id}`,
+        },
+      )
+      stripeRefundId = refund.id
+      refundedPence = booking.price_at_booking
+    } catch (err) {
+      // Refund failed — abort cancellation so the user keeps their
+      // spot. This is the safe failure mode; user can retry or contact
+      // support.
+      console.error(
+        '[cancelBooking] Stripe refund failed:',
+        err instanceof Error ? err.message : err,
+      )
+      return {
+        success: false,
+        error: 'We couldn\u2019t process the refund. Please try again or email info@the-social-seen.com.',
+      }
+    }
+  }
+
+  // Status UPDATE — optimistic-locked on current status=confirmed so a
+  // concurrent duplicate cancellation no-ops. Records cancel audit +
+  // refund details together.
   const { data: updated, error: updateError } = await supabase
     .from('bookings')
-    .update({ status: 'cancelled' as BookingStatus })
+    .update({
+      status: 'cancelled' as BookingStatus,
+      cancelled_at: now.toISOString(),
+      refunded_amount_pence: refundedPence,
+      refunded_at: stripeRefundId ? now.toISOString() : null,
+      stripe_refund_id: stripeRefundId,
+    })
     .eq('id', bookingId)
     .eq('status', 'confirmed')
     .is('deleted_at', null)
@@ -476,15 +745,134 @@ export async function cancelBooking(bookingId: string): Promise<ActionResult> {
     .single()
 
   if (updateError || !updated) {
+    // Edge case: refund went through but the DB UPDATE failed. The
+    // charge is refunded but the booking still shows confirmed. Admin
+    // needs to manually reconcile via the stripe_refund_id we got from
+    // the API. Log loudly AND emit to Sentry with a filterable tag.
+    if (stripeRefundId) {
+      console.error(
+        '[cancelBooking] Refund issued but DB update failed — manual reconciliation needed:',
+        { bookingId, stripeRefundId, updateError: updateError?.message },
+      )
+      Sentry.captureException(
+        new Error('Refund issued but booking UPDATE failed — manual reconciliation needed'),
+        {
+          tags: { surface: 'refund-reconcile' },
+          extra: {
+            bookingId,
+            stripeRefundId,
+            updateError: updateError?.message ?? null,
+          },
+          level: 'error',
+        },
+      )
+    }
     return { success: false, error: 'Booking was already cancelled or modified' }
   }
+
+  // Post-response: email waitlisters that a spot is available. Uses
+  // next/after so the work continues after the HTTP response is sent.
+  // Unlike a bare `void promise` this is explicitly supported by the
+  // Next.js runtime (including Vercel serverless) — the platform keeps
+  // the function alive until the callback settles. Failures inside the
+  // helper never surface to the user; they're logged via the send
+  // wrapper's audit trail.
+  after(() => notifyWaitlistersOfOpenSpot(booking.event_id))
 
   revalidatePath('/events')
   revalidatePath(`/events/${event.slug}`)
   revalidatePath('/bookings')
   revalidatePath('/profile')
 
-  return { success: true }
+  return {
+    success: true,
+    refundedPence,
+    refundEligible,
+  }
+}
+
+/**
+ * Email every waitlisted user for this event that a spot has just
+ * opened. First-click-wins — see the waitlistSpotAvailableTemplate
+ * copy + the claim_waitlist_spot RPC for the race-safe flow.
+ *
+ * Uses the admin client so the email-send + audit-log paths aren't
+ * constrained by the cancelling user's RLS context (we need to query
+ * every waitlister's profile).
+ */
+async function notifyWaitlistersOfOpenSpot(eventId: string): Promise<void> {
+  try {
+    const admin = createAdminClient()
+
+    const [eventRes, waitlistersRes] = await Promise.all([
+      admin
+        .from('events')
+        .select('title, slug, date_time, price')
+        .eq('id', eventId)
+        .single(),
+      admin
+        .from('bookings')
+        .select('user_id, profiles:profiles!inner(full_name, email)')
+        .eq('event_id', eventId)
+        .eq('status', 'waitlisted')
+        .is('deleted_at', null),
+    ])
+
+    const event = eventRes.data
+    if (!event) {
+      console.warn(
+        '[notifyWaitlistersOfOpenSpot] event not found:',
+        eventId,
+      )
+      return
+    }
+
+    type Row = {
+      user_id: string
+      profiles: { full_name: string | null; email: string | null } | null
+    }
+
+    const rows = (waitlistersRes.data ?? []).map((r: unknown) => {
+      const row = r as { user_id: string; profiles: unknown }
+      const profile = Array.isArray(row.profiles) ? row.profiles[0] : row.profiles
+      return {
+        user_id: row.user_id,
+        profiles: profile as Row['profiles'],
+      }
+    })
+
+    for (const w of rows) {
+      const email = w.profiles?.email
+      if (!email) continue
+
+      const tpl = waitlistSpotAvailableTemplate({
+        fullName: w.profiles?.full_name ?? 'there',
+        eventTitle: event.title,
+        eventSlug: event.slug,
+        eventDate: formatDateFull(event.date_time),
+        eventTime: formatTime(event.date_time),
+        priceInPence: event.price,
+      })
+
+      await sendEmail({
+        to: email,
+        subject: tpl.subject,
+        html: tpl.html,
+        text: tpl.text,
+        templateName: 'waitlist_spot_available',
+        relatedProfileId: w.user_id,
+        tags: [
+          { name: 'template', value: 'waitlist_spot_available' },
+          { name: 'event_id', value: eventId },
+        ],
+      })
+    }
+  } catch (err) {
+    console.warn(
+      '[notifyWaitlistersOfOpenSpot] threw:',
+      err instanceof Error ? err.message : err,
+    )
+  }
 }
 
 // ── leaveWaitlist ──────────���─────────────────────────────��──────────────────
