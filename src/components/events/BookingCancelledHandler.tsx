@@ -25,12 +25,24 @@ export default function BookingCancelledHandler({ eventId }: Props) {
   const sp = useSearchParams()
   const [showToast, setShowToast] = useState(false)
 
+  const [fromClaim, setFromClaim] = useState(false)
+
   useEffect(() => {
     if (sp.get('cancelled') !== '1') return
 
+    // If the user reached Stripe via a waitlist-claim flow (Stripe
+    // redirects back with ?cancelled=1&from=claim on abandon), we want
+    // to restore them to `waitlisted` rather than `cancelled` so they
+    // keep their queue position for the next cancellation email.
+    const isFromClaim = sp.get('from') === 'claim'
+    setFromClaim(isFromClaim)
+
     let cancelled = false
     void (async () => {
-      const result = await abandonPendingCheckout(eventId)
+      const result = await abandonPendingCheckout(
+        eventId,
+        isFromClaim ? { from: 'claim' } : { from: 'book' },
+      )
       if (cancelled) return
       if (!result.success) {
         console.warn(
@@ -43,6 +55,7 @@ export default function BookingCancelledHandler({ eventId }: Props) {
       // replace (not push) so the user's back button still works.
       const url = new URL(window.location.href)
       url.searchParams.delete('cancelled')
+      url.searchParams.delete('from')
       router.replace(url.pathname + (url.search || ''))
       window.setTimeout(() => {
         if (!cancelled) setShowToast(false)
@@ -64,7 +77,9 @@ export default function BookingCancelledHandler({ eventId }: Props) {
       role="status"
       className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full border border-blush/60 bg-bg-card px-5 py-3 text-sm text-text-primary shadow-lg"
     >
-      Payment cancelled &mdash; no charge made. You can book again whenever you&rsquo;re ready.
+      {fromClaim
+        ? 'No charge made — you\u2019re still on the waitlist.'
+        : 'Payment cancelled — no charge made. You can book again whenever you\u2019re ready.'}
     </div>
   )
 }

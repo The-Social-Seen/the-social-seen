@@ -13,7 +13,36 @@ interface BookingRow {
   waitlist_position: number | null
   booked_at: string
   created_at: string
+  // P2-7b: payment + refund audit columns. All nullable.
+  stripe_payment_id?: string | null
+  stripe_refund_id?: string | null
+  refunded_amount_pence?: number | null
+  cancelled_at?: string | null
   profile: { id: string; full_name: string; email: string; avatar_url: string | null } | null
+}
+
+function paymentBadge(b: BookingRow) {
+  // Only meaningful for bookings that went through Stripe.
+  if (!b.stripe_payment_id && !b.stripe_refund_id) return null
+  if (b.stripe_refund_id) {
+    const amount = b.refunded_amount_pence ?? 0
+    return (
+      <span
+        className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-50 text-red-600 dark:bg-red-950/30 dark:text-red-400"
+        title={`Refund id: ${b.stripe_refund_id}`}
+      >
+        Refunded {amount > 0 ? `£${(amount / 100).toFixed(0)}` : ''}
+      </span>
+    )
+  }
+  return (
+    <span
+      className="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30 dark:text-emerald-400"
+      title={`PaymentIntent: ${b.stripe_payment_id}`}
+    >
+      Paid
+    </span>
+  )
 }
 
 interface BookingsTableProps {
@@ -105,6 +134,7 @@ export default function BookingsTable({ bookings, eventId }: BookingsTableProps)
                 <th className="pb-3 font-medium text-text-tertiary">Name</th>
                 <th className="pb-3 font-medium text-text-tertiary hidden md:table-cell">Email</th>
                 <th className="pb-3 font-medium text-text-tertiary">Status</th>
+                <th className="pb-3 font-medium text-text-tertiary hidden md:table-cell">Payment</th>
                 <th className="pb-3 font-medium text-text-tertiary hidden md:table-cell">Booked</th>
                 <th className="pb-3 font-medium text-text-tertiary hidden lg:table-cell">Waitlist #</th>
                 <th className="pb-3 font-medium text-text-tertiary text-right">Action</th>
@@ -124,6 +154,11 @@ export default function BookingsTable({ bookings, eventId }: BookingsTableProps)
                       {profile?.email ?? '—'}
                     </td>
                     <td className="py-3 pr-4">{statusBadge(booking.status)}</td>
+                    <td className="py-3 pr-4 hidden md:table-cell">
+                      {paymentBadge(booking) ?? (
+                        <span className="text-xs text-text-tertiary">&mdash;</span>
+                      )}
+                    </td>
                     <td className="py-3 pr-4 text-text-tertiary hidden md:table-cell whitespace-nowrap">
                       {formatDistanceToNow(new Date(booking.created_at), { addSuffix: true })}
                     </td>

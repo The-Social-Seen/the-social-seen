@@ -32,6 +32,14 @@ vi.mock('next/link', () => ({
   ),
 }))
 
+// WaitlistedState reads `?claim=1` via useSearchParams. Default to an
+// empty params object so the default render path stays un-claim-y.
+vi.mock('next/navigation', () => ({
+  useSearchParams: () => ({
+    get: (_key: string) => null,
+  }),
+}))
+
 vi.mock('@/components/reviews/StarRating', () => ({
   default: ({ rating }: { rating: number }) => (
     <div data-testid="star-rating">{rating.toFixed(1)}</div>

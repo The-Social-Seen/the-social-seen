@@ -75,8 +75,14 @@ export async function POST(req: NextRequest): Promise<Response> {
         await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session)
         break
       }
-      // Future: charge.refunded lands in P2-7b to flip the booking to
-      // 'cancelled' when an admin refunds from the Stripe dashboard.
+      case 'charge.refunded': {
+        // Fires when an admin issues a refund from the Stripe dashboard
+        // OR when our own `cancelBooking` flow calls stripe.refunds.create.
+        // Either way, this handler reconciles the booking row so the
+        // app state matches Stripe state.
+        await handleChargeRefunded(event.data.object as Stripe.Charge)
+        break
+      }
       default:
         // Any event we don't handle — ACK so Stripe stops retrying.
         console.info(`[stripe/webhook] Unhandled event type: ${event.type}`)
@@ -143,6 +149,12 @@ async function handleCheckoutCompleted(
     .update({
       status: 'confirmed',
       stripe_payment_id: paymentIntentId,
+      // Clear waitlist_position now that the booking is a confirmed
+      // seat — the P2-7b RPC preserves the position through the
+      // pending_payment transition so the user can be restored to
+      // waitlist if Stripe fails. On successful payment, position is
+      // no longer meaningful.
+      waitlist_position: null,
     })
     .eq('id', bookingId)
     .eq('status', 'pending_payment')
@@ -239,6 +251,121 @@ async function sendPaidBookingConfirmationEmail(args: {
     console.warn(
       '[stripe/webhook] confirmation email threw:',
       err instanceof Error ? err.message : err,
+    )
+  }
+}
+
+// ── Section 2 — charge.refunded (P2-7b) ─────────────────────────────────────
+
+/**
+ * Reconcile a Stripe refund back to the booking row. Two triggers:
+ *
+ *   1. App-initiated: `cancelBooking` calls `stripe.refunds.create`,
+ *      sets `bookings.stripe_refund_id` + `refunded_amount_pence`, then
+ *      flips status to `cancelled`. Moments later this webhook fires;
+ *      we detect the row is already reconciled (stripe_refund_id
+ *      matches) and no-op.
+ *
+ *   2. Admin-initiated: someone issues a refund from the Stripe
+ *      dashboard. The app knows nothing about it until this webhook
+ *      fires. We look the booking up by `payment_intent_id`, flip its
+ *      status to `cancelled`, record the refund details.
+ *
+ * Idempotency:
+ *   - We match the refund by id first — if `stripe_refund_id` already
+ *     set on any booking, no-op.
+ *   - Otherwise match by `stripe_payment_id` and set the fields.
+ *   - The `.is('stripe_refund_id', null)` guard on the UPDATE means a
+ *     concurrent duplicate delivery won't overwrite a reconciled row.
+ */
+async function handleChargeRefunded(charge: Stripe.Charge): Promise<void> {
+  // Pull the refund (or refunds) that triggered this event. Stripe
+  // docs: charge.refunds is a list; we take the most recent by created
+  // time since this event fires per-refund.
+  const refunds = charge.refunds?.data ?? []
+  if (refunds.length === 0) {
+    console.warn(
+      '[stripe/webhook] charge.refunded with no refunds in payload',
+      charge.id,
+    )
+    return
+  }
+  const refund = refunds.reduce((latest, r) =>
+    r.created > latest.created ? r : latest,
+  )
+
+  const paymentIntentId =
+    typeof charge.payment_intent === 'string'
+      ? charge.payment_intent
+      : charge.payment_intent?.id ?? null
+  if (!paymentIntentId) {
+    console.warn(
+      '[stripe/webhook] charge.refunded without a payment_intent',
+      charge.id,
+    )
+    return
+  }
+
+  const admin = createAdminClient()
+
+  // Idempotency check — if any booking already has this refund id, we've
+  // already reconciled (likely from the cancelBooking Server Action path).
+  const { data: existing } = await admin
+    .from('bookings')
+    .select('id')
+    .eq('stripe_refund_id', refund.id)
+    .limit(1)
+    .maybeSingle()
+  if (existing) {
+    return
+  }
+
+  // Look up the booking by PaymentIntent. This is the path where an
+  // admin issued the refund manually in the Stripe dashboard.
+  const { data: booking, error: findErr } = await admin
+    .from('bookings')
+    .select('id, status')
+    .eq('stripe_payment_id', paymentIntentId)
+    .is('deleted_at', null)
+    .is('stripe_refund_id', null) // don't reconcile twice
+    .limit(1)
+    .maybeSingle()
+
+  if (findErr) {
+    throw new Error(
+      `Failed to look up booking for refund: ${findErr.message}`,
+    )
+  }
+  if (!booking) {
+    console.info(
+      '[stripe/webhook] charge.refunded: no matching booking (already reconciled or unknown PI)',
+      paymentIntentId,
+    )
+    return
+  }
+
+  const nowIso = new Date().toISOString()
+  const { error: updErr } = await admin
+    .from('bookings')
+    .update({
+      status: 'cancelled',
+      cancelled_at: nowIso,
+      refunded_amount_pence: refund.amount,
+      refunded_at: nowIso,
+      stripe_refund_id: refund.id,
+    })
+    .eq('id', booking.id)
+    // Optimistic guard — if the row state has diverged since the find,
+    // don't overwrite. The caller will see a warning in logs.
+    .is('stripe_refund_id', null)
+
+  if (updErr) {
+    // 23505 = duplicate stripe_refund_id — somehow another path
+    // reconciled in the tiny window between find + update. Treat as
+    // already-done.
+    if ((updErr as { code?: string }).code === '23505') return
+    throw new Error(
+      `Failed to reconcile refund ${refund.id} to booking ${booking.id}: ${updErr.message}`,
     )
   }
 }

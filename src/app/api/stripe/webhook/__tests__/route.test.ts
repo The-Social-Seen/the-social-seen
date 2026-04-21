@@ -20,6 +20,7 @@ function makeSupabaseMock() {
     select: vi.fn(() => chain),
     eq: vi.fn(() => chain),
     is: vi.fn(() => chain),
+    limit: vi.fn(() => chain),
     single,
     maybeSingle,
   }
@@ -161,6 +162,10 @@ describe('POST /api/stripe/webhook', () => {
     expect(supabaseHandle.chain.update).toHaveBeenCalledWith({
       status: 'confirmed',
       stripe_payment_id: 'pi_456',
+      // P2-7b: position is preserved through pending_payment so we can
+      // restore it on Stripe failure; webhook clears it once the seat
+      // is confirmed and queue position is no longer meaningful.
+      waitlist_position: null,
     })
     expect(supabaseHandle.chain.eq).toHaveBeenCalledWith('id', 'b1')
     expect(supabaseHandle.chain.eq).toHaveBeenCalledWith('status', 'pending_payment')
@@ -257,5 +262,150 @@ describe('POST /api/stripe/webhook', () => {
 
     const res = await POST(makeRequest('{}', 't=1,v1=sig'))
     expect(res.status).toBe(200)
+  })
+
+  // ── charge.refunded (P2-7b) ────────────────────────────────────────────
+
+  function chargeRefundedEvent(opts: { refundId: string; paymentIntent: string; amount: number }) {
+    return {
+      type: 'charge.refunded',
+      data: {
+        object: {
+          id: 'ch_123',
+          payment_intent: opts.paymentIntent,
+          refunds: {
+            data: [
+              {
+                id: opts.refundId,
+                amount: opts.amount,
+                created: 1_700_000_000,
+              },
+            ],
+          },
+        },
+      },
+    }
+  }
+
+  it('charge.refunded: reconciles an admin-dashboard refund to its booking', async () => {
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    // 1st maybeSingle: idempotency check (no existing row with this refund_id).
+    // 2nd maybeSingle: find-by-payment-intent (returns the booking).
+    supabaseHandle.maybeSingle
+      .mockResolvedValueOnce({ data: null, error: null }) // idempotency: none
+      .mockResolvedValueOnce({
+        data: { id: 'b1', status: 'confirmed' },
+        error: null,
+      })
+
+    constructEventMock.mockReturnValue(
+      chargeRefundedEvent({ refundId: 're_abc', paymentIntent: 'pi_456', amount: 3500 }),
+    )
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+
+    // UPDATE sets status=cancelled and writes refund audit fields.
+    const updateCalls = (supabaseHandle.chain.update as ReturnType<typeof vi.fn>).mock.calls
+    expect(updateCalls.length).toBe(1)
+    const payload = updateCalls[0][0]
+    expect(payload.status).toBe('cancelled')
+    expect(payload.stripe_refund_id).toBe('re_abc')
+    expect(payload.refunded_amount_pence).toBe(3500)
+    expect(payload.cancelled_at).toBeTruthy()
+    expect(payload.refunded_at).toBeTruthy()
+  })
+
+  it('charge.refunded: no-ops when the refund id has already been reconciled', async () => {
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    // Idempotency check returns an existing row — we've seen this refund before.
+    supabaseHandle.maybeSingle.mockResolvedValueOnce({
+      data: { id: 'b1' },
+      error: null,
+    })
+
+    constructEventMock.mockReturnValue(
+      chargeRefundedEvent({ refundId: 're_abc', paymentIntent: 'pi_456', amount: 3500 }),
+    )
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+    // No UPDATE should fire when we short-circuit on idempotency.
+    expect(supabaseHandle.chain.update).not.toHaveBeenCalled()
+  })
+
+  it('charge.refunded: no-ops when no matching booking is found for the PaymentIntent', async () => {
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    supabaseHandle.maybeSingle
+      .mockResolvedValueOnce({ data: null, error: null }) // idempotency: none
+      .mockResolvedValueOnce({ data: null, error: null }) // find-by-PI: none
+
+    constructEventMock.mockReturnValue(
+      chargeRefundedEvent({ refundId: 're_xyz', paymentIntent: 'pi_unknown', amount: 3500 }),
+    )
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+    expect(supabaseHandle.chain.update).not.toHaveBeenCalled()
+  })
+
+  it('charge.refunded: picks the latest refund when multiple are in the payload', async () => {
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    supabaseHandle.maybeSingle
+      .mockResolvedValueOnce({ data: null, error: null })
+      .mockResolvedValueOnce({
+        data: { id: 'b1', status: 'confirmed' },
+        error: null,
+      })
+
+    constructEventMock.mockReturnValue({
+      type: 'charge.refunded',
+      data: {
+        object: {
+          id: 'ch_123',
+          payment_intent: 'pi_456',
+          refunds: {
+            data: [
+              { id: 're_old', amount: 1000, created: 1_500_000_000 },
+              { id: 're_new', amount: 3500, created: 1_700_000_000 },
+            ],
+          },
+        },
+      },
+    })
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+    const payload = (supabaseHandle.chain.update as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(payload.stripe_refund_id).toBe('re_new')
+    expect(payload.refunded_amount_pence).toBe(3500)
+  })
+
+  it('charge.refunded: no-ops when the payload has no refunds', async () => {
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    constructEventMock.mockReturnValue({
+      type: 'charge.refunded',
+      data: {
+        object: {
+          id: 'ch_123',
+          payment_intent: 'pi_456',
+          refunds: { data: [] },
+        },
+      },
+    })
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+    expect(supabaseHandle.chain.update).not.toHaveBeenCalled()
   })
 })
