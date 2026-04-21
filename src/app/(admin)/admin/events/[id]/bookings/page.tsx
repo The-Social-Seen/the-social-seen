@@ -52,7 +52,11 @@ export default async function AdminEventBookingsPage({ params }: PageProps) {
       </div>
 
       <div className="bg-bg-card border border-border rounded-xl p-6">
-        <BookingsTable bookings={normalisedBookings} eventId={id} />
+        <BookingsTable
+          bookings={normalisedBookings}
+          eventId={id}
+          isPastEvent={new Date(event.date_time) < new Date()}
+        />
       </div>
     </div>
   )
