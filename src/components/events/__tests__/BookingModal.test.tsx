@@ -141,9 +141,9 @@ describe('BookingModal', () => {
     expect(progressBar.children.length).toBe(2)
   })
 
-  // ── Paid event: 3-step flow ──
+  // ── Paid event: Stripe redirect flow (P2-7a) ──
 
-  it('shows "Continue to Payment" for paid events', () => {
+  it('shows "Continue to Payment" CTA for paid events', () => {
     render(
       <BookingModal
         event={makeEvent({ price: 3500 })}
@@ -156,7 +156,10 @@ describe('BookingModal', () => {
     expect(screen.getByText('Continue to Payment')).toBeTruthy()
   })
 
-  it('renders 3 progress bar segments for paid events', () => {
+  it('renders 2 progress bar segments for paid events (confirm → ticket)', () => {
+    // P2-7a: the in-modal payment step was removed. The paid flow is
+    // confirm → Stripe Checkout (external). Ticket card only renders
+    // in-modal for paid-waitlisted bookings.
     render(
       <BookingModal
         event={makeEvent({ price: 3500 })}
@@ -167,10 +170,12 @@ describe('BookingModal', () => {
     )
 
     const progressBar = screen.getByTestId('progress-bar')
-    expect(progressBar.children.length).toBe(3)
+    expect(progressBar.children.length).toBe(2)
   })
 
-  it('shows payment step with disabled inputs when "Continue to Payment" is clicked', () => {
+  it('does not render an in-modal payment/card form for paid events', () => {
+    // P2-7a removed the mocked PaymentStep. Card entry now happens on
+    // Stripe's hosted Checkout page, not inside this modal.
     render(
       <BookingModal
         event={makeEvent({ price: 3500 })}
@@ -180,23 +185,10 @@ describe('BookingModal', () => {
       />
     )
 
-    fireEvent.click(screen.getByText('Continue to Payment'))
-
-    // Payment step renders
-    expect(screen.getByText('Payment')).toBeTruthy()
-    expect(screen.getByText(/Demo mode/)).toBeTruthy()
-    expect(screen.getByText(/Powered by Stripe/)).toBeTruthy()
-
-    // Inputs are disabled and pre-filled
-    const cardInput = screen.getByDisplayValue('4242 4242 4242 4242')
-    expect(cardInput).toBeTruthy()
-    expect((cardInput as HTMLInputElement).disabled).toBe(true)
-
-    const expiryInput = screen.getByDisplayValue('12 / 28')
-    expect((expiryInput as HTMLInputElement).disabled).toBe(true)
-
-    const cvcInput = screen.getByDisplayValue('123')
-    expect((cvcInput as HTMLInputElement).disabled).toBe(true)
+    // None of the old mocked-payment markers should be visible.
+    expect(screen.queryByText(/Demo mode/)).toBeNull()
+    expect(screen.queryByDisplayValue('4242 4242 4242 4242')).toBeNull()
+    expect(screen.queryByDisplayValue('12 / 28')).toBeNull()
   })
 
   // ── Close behaviour ──
