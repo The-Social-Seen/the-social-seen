@@ -163,4 +163,49 @@ describe('OtpDigits', () => {
     const inputs = getInputs()
     expect(inputs[0].className).toContain('border-danger')
   })
+
+  it('refocuses cell 1 when digits are reset from non-empty to empty', async () => {
+    // Simulates the parent clearing digits after a verification error.
+    function ResetHarness() {
+      const [digits, setDigits] = useState(['1', '2', '3', '4', '5', '6'])
+      return (
+        <>
+          <button
+            data-testid="reset"
+            onClick={() => setDigits(['', '', '', '', '', ''])}
+          >
+            reset
+          </button>
+          <OtpDigits
+            digits={digits}
+            onChange={setDigits}
+            onComplete={() => {}}
+          />
+        </>
+      )
+    }
+
+    render(<ResetHarness />)
+    // Cell 6 is focused as if the user just typed digit 6.
+    const inputs = getInputs()
+    inputs[5].focus()
+    expect(document.activeElement).toBe(inputs[5])
+
+    // Trigger the reset.
+    fireEvent.click(screen.getByTestId('reset'))
+
+    // After the digits go from non-empty to empty, focus should jump to cell 1.
+    await new Promise((r) => setTimeout(r, 0)) // flush the effect
+    const after = getInputs()
+    expect(document.activeElement).toBe(after[0])
+  })
+
+  it('does NOT refocus on initial mount when digits start empty', () => {
+    // Mount with empty digits. None of the cells should auto-focus —
+    // initial focus is whatever the document had before render. Tested
+    // here by asserting no input has focus right after mount.
+    render(<Harness />)
+    const inputs = getInputs()
+    inputs.forEach((i) => expect(document.activeElement).not.toBe(i))
+  })
 })

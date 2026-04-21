@@ -12,8 +12,8 @@
  * Anything that fails these checks falls back to the supplied `fallback`
  * (default `/events`).
  *
- * Used by the login, password-reset, and email-verification forms — keep
- * this list in sync with any new redirect-handling forms added in future.
+ * Used by the login and email-verification forms — keep this list in sync
+ * with any new redirect-handling forms added in future.
  */
 export function sanitizeRedirectPath(
   raw: string | null | undefined,

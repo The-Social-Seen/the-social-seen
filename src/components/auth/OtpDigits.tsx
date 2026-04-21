@@ -1,6 +1,7 @@
 'use client'
 
 import {
+  useEffect,
   useRef,
   type KeyboardEvent,
   type ClipboardEvent,
@@ -38,6 +39,26 @@ export function OtpDigits({
   length = 6,
 }: OtpDigitsProps) {
   const inputsRef = useRef<Array<HTMLInputElement | null>>([])
+
+  // Track previous joined value so we only refocus cell 1 when the parent
+  // explicitly resets the digits (e.g. after a verification error). We must
+  // NOT refocus on initial mount when digits start empty — that would steal
+  // focus from whatever was previously focused on the page.
+  const prevJoinedRef = useRef(digits.join(''))
+
+  useEffect(() => {
+    const joined = digits.join('')
+    const wasNonEmpty = prevJoinedRef.current.length > 0
+    const isNowEmpty = joined.length === 0
+    prevJoinedRef.current = joined
+
+    // Reset → focus cell 1. Restores the pre-extraction UX where the parent
+    // explicitly called `inputsRef.current[0]?.focus()` after clearing the
+    // digits on a verification error.
+    if (wasNonEmpty && isNowEmpty && !disabled) {
+      inputsRef.current[0]?.focus()
+    }
+  }, [digits, disabled])
 
   function handleDigitChange(e: ChangeEvent<HTMLInputElement>, index: number) {
     const raw = e.target.value
