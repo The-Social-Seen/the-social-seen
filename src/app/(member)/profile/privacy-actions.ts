@@ -198,9 +198,13 @@ export async function deleteMyAccount(
     return { success: false, error: 'Could not cancel your active bookings.' }
   }
 
-  // Scrub notifications PII.
+  // Scrub notifications PII. Passing `p_user_email` lets the RPC
+  // catch rows where the deleted user was the recipient of an admin
+  // announcement (P2-9 "Email All Attendees") that pre-dated the
+  // recipient_user_id column, or where the FK somehow wasn't set.
   const { error: scrubErr } = await admin.rpc('sanitise_user_notifications', {
     p_user_id: user.id,
+    p_user_email: user.email ?? null,
   })
   if (scrubErr) {
     // Log but proceed — the soft-delete is the primary concern. Admin

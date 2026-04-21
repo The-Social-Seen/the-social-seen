@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { getEventBookings, getAdminEventById } from '../../../actions'
 import BookingsTable from '@/components/admin/BookingsTable'
+import EmailAttendeesForm from '@/components/admin/EmailAttendeesForm'
 
 interface PageProps {
   params: Promise<{ id: string }>
@@ -56,6 +57,22 @@ export default async function AdminEventBookingsPage({ params }: PageProps) {
           bookings={normalisedBookings}
           eventId={id}
           isPastEvent={new Date(event.date_time) < new Date()}
+        />
+      </div>
+
+      <div className="bg-bg-card border border-border rounded-xl p-6">
+        <h2 className="font-serif text-lg text-text-primary mb-1">
+          Email all attendees
+        </h2>
+        <p className="text-sm text-text-tertiary mb-4">
+          Sends a plain-text email to every confirmed attendee. Use sparingly
+          — venue updates, schedule changes, last-minute essentials.
+        </p>
+        <EmailAttendeesForm
+          eventId={id}
+          confirmedCount={
+            normalisedBookings.filter((b) => b.status === 'confirmed').length
+          }
         />
       </div>
     </div>

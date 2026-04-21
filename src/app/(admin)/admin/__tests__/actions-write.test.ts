@@ -26,6 +26,7 @@ vi.mock('@/lib/utils/slugify', () => ({
 
 import {
   cancelEvent,
+  duplicateEvent,
   upsertEventInclusions,
   upsertEventHosts,
 } from '../actions'
@@ -142,6 +143,173 @@ describe('cancelEvent', () => {
     const result = await cancelEvent('evt-not-found')
 
     expect(result).toEqual({ error: 'Event not found' })
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// duplicateEvent
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('duplicateEvent', () => {
+  const baseSource = {
+    id: 'evt-source',
+    title: 'Wine Night',
+    slug: 'wine-night',
+    description: 'long desc',
+    short_description: 'short',
+    date_time: '2026-05-01T18:00:00.000Z',
+    end_time: '2026-05-01T22:00:00.000Z',
+    venue_name: 'Borough Market',
+    venue_address: '8 Southwark St',
+    postcode: 'SE1 1TL',
+    venue_revealed: false,
+    category: 'drinks',
+    price: 3500,
+    capacity: 30,
+    image_url: null,
+    dress_code: 'Smart casual',
+  }
+
+  it('rejects non-admin users', async () => {
+    mockMemberUser()
+    await expect(duplicateEvent('evt-1')).rejects.toThrow('Admin access required')
+  })
+
+  it('returns error when event id is missing', async () => {
+    authenticateAdmin()
+    mockFrom.mockImplementation(() => mockChain({ data: { role: 'admin' } }))
+    const result = await duplicateEvent('')
+    expect(result).toEqual({ error: 'Event ID is required' })
+  })
+
+  it('returns error when source event is not found', async () => {
+    mockAdminWithSequence([
+      // events.select('*').eq('id', ...).is('deleted_at', null).single() → no row
+      { data: null, error: { message: 'no rows' } },
+    ])
+    const result = await duplicateEvent('evt-missing')
+    expect(result).toEqual({ error: 'Event not found' })
+  })
+
+  it('happy path — inserts a new draft with shifted dates, copies inclusions + hosts', async () => {
+    let insertedRow: Record<string, unknown> | null = null
+    let insertedInclusions: unknown = null
+    let insertedHosts: unknown = null
+
+    // uniqueSlug is mocked at module level to return a deterministic slug
+    // without calling the `exists` callback, so the from() sequence is:
+    //   1: requireAdmin → profiles.role
+    //   2: events.select source
+    //   3: events.insert (returns inserted row)
+    //   4: event_inclusions.select
+    //   5: event_inclusions.insert
+    //   6: event_hosts.select
+    //   7: event_hosts.insert
+    authenticateAdmin()
+    let callCount = 0
+    mockFrom.mockImplementation(() => {
+      callCount++
+      if (callCount === 1) return mockChain({ data: { role: 'admin' } })
+      if (callCount === 2) return mockChain({ data: baseSource })
+      if (callCount === 3) {
+        const chain = mockChain({
+          data: { id: 'evt-dup', slug: 'copy-of-wine-night' },
+        })
+        chain.insert = vi.fn((row: unknown) => {
+          insertedRow = row as Record<string, unknown>
+          return chain
+        })
+        return chain
+      }
+      if (callCount === 4) {
+        return mockChain({
+          data: [{ label: 'Welcome Drink', icon: 'wine', sort_order: 0 }],
+        })
+      }
+      if (callCount === 5) {
+        const chain = mockChain({ error: null })
+        chain.insert = vi.fn((rows: unknown) => {
+          insertedInclusions = rows
+          return chain
+        })
+        return chain
+      }
+      if (callCount === 6) {
+        return mockChain({
+          data: [
+            { profile_id: 'host-a', role_label: 'Host', sort_order: 0 },
+          ],
+        })
+      }
+      if (callCount === 7) {
+        const chain = mockChain({ error: null })
+        chain.insert = vi.fn((rows: unknown) => {
+          insertedHosts = rows
+          return chain
+        })
+        return chain
+      }
+      return mockChain({ data: null })
+    })
+
+    const result = await duplicateEvent('evt-source')
+
+    expect(result).toEqual({
+      event: { id: 'evt-dup', slug: 'copy-of-wine-night' },
+    })
+    expect(insertedRow).toMatchObject({
+      title: 'Copy of Wine Night',
+      slug: 'copy-of-wine-night',
+      description: 'long desc',
+      venue_name: 'Borough Market',
+      venue_revealed: false,
+      capacity: 30,
+      is_published: false,
+      is_cancelled: false,
+    })
+    // Date shifted +7 days exactly.
+    const newStart = new Date(insertedRow!.date_time as string).getTime()
+    const newEnd = new Date(insertedRow!.end_time as string).getTime()
+    expect(newStart - new Date(baseSource.date_time).getTime()).toBe(
+      7 * 24 * 60 * 60 * 1000,
+    )
+    expect(newEnd - new Date(baseSource.end_time).getTime()).toBe(
+      7 * 24 * 60 * 60 * 1000,
+    )
+    expect(insertedInclusions).toEqual([
+      { event_id: 'evt-dup', label: 'Welcome Drink', icon: 'wine', sort_order: 0 },
+    ])
+    expect(insertedHosts).toEqual([
+      { event_id: 'evt-dup', profile_id: 'host-a', role_label: 'Host', sort_order: 0 },
+    ])
+  })
+
+  it('does not copy bookings, reviews, or photos (only events/inclusions/hosts touched)', async () => {
+    const tablesTouched: string[] = []
+    authenticateAdmin()
+    let callCount = 0
+    mockFrom.mockImplementation((table: string) => {
+      callCount++
+      tablesTouched.push(table)
+      if (callCount === 1) return mockChain({ data: { role: 'admin' } })
+      if (callCount === 2) return mockChain({ data: baseSource })
+      if (callCount === 3) {
+        return mockChain({ data: { id: 'evt-dup', slug: 'copy-of-wine-night' } })
+      }
+      // No inclusions to copy.
+      if (callCount === 4) return mockChain({ data: [] })
+      // No hosts to copy.
+      if (callCount === 5) return mockChain({ data: [] })
+      return mockChain({ data: null })
+    })
+
+    const result = await duplicateEvent('evt-source')
+    expect('event' in result).toBe(true)
+    // requireAdmin -> profiles, then events x3 (fetch, slug-check, insert),
+    // then event_inclusions, event_hosts. No bookings/reviews/photos.
+    expect(tablesTouched).not.toContain('bookings')
+    expect(tablesTouched).not.toContain('event_reviews')
+    expect(tablesTouched).not.toContain('event_photos')
   })
 })
 

@@ -2,7 +2,10 @@
 
 import { createServerClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
+import { after } from 'next/server'
 import { uniqueSlug } from '@/lib/utils/slugify'
+import { sendEmail } from '@/lib/email/send'
+import { adminAnnouncementTemplate } from '@/lib/email/templates/admin-announcement'
 import { z } from 'zod'
 import type {
   BookingStatus,
@@ -394,6 +397,120 @@ export async function updateEvent(eventId: string, formData: FormData) {
   revalidatePath(`/events/${slug}`)
 
   return { event }
+}
+
+/**
+ * Duplicate an event as a new draft.
+ *
+ * Copies: all event columns (except date — shifted +7 days so the
+ * duplicate doesn't collide with the original) + inclusions + hosts.
+ * Resets: is_published=false, is_cancelled=false, slug regenerated,
+ * title prefixed with "Copy of ". Bookings, reviews, and photos are
+ * NOT copied (they're scoped to the original event).
+ *
+ * Returns the new event id so the caller can redirect to its edit page.
+ */
+export async function duplicateEvent(
+  eventId: string,
+): Promise<{ event: { id: string; slug: string } } | { error: string }> {
+  const { supabase } = await requireAdmin()
+
+  if (!eventId) return { error: 'Event ID is required' }
+
+  const { data: source, error: fetchErr } = await supabase
+    .from('events')
+    .select('*')
+    .eq('id', eventId)
+    .is('deleted_at', null)
+    .single()
+  if (fetchErr || !source) return { error: 'Event not found' }
+
+  const newTitle = `Copy of ${source.title}`
+  const newSlug = await uniqueSlug(newTitle, async (s) => {
+    const { data: existing } = await supabase
+      .from('events')
+      .select('id')
+      .eq('slug', s)
+      .maybeSingle()
+    return !!existing
+  })
+
+  const shiftDays = 7
+  const shiftMs = shiftDays * 24 * 60 * 60 * 1000
+  const newDateTime = new Date(
+    new Date(source.date_time).getTime() + shiftMs,
+  ).toISOString()
+  const newEndTime = new Date(
+    new Date(source.end_time).getTime() + shiftMs,
+  ).toISOString()
+
+  const { data: inserted, error: insertErr } = await supabase
+    .from('events')
+    .insert({
+      slug: newSlug,
+      title: newTitle,
+      description: source.description,
+      short_description: source.short_description,
+      date_time: newDateTime,
+      end_time: newEndTime,
+      venue_name: source.venue_name,
+      venue_address: source.venue_address,
+      postcode: source.postcode,
+      venue_revealed: source.venue_revealed ?? true,
+      category: source.category,
+      price: source.price,
+      capacity: source.capacity,
+      image_url: source.image_url,
+      dress_code: source.dress_code,
+      is_published: false,
+      is_cancelled: false,
+    })
+    .select('id, slug')
+    .single()
+
+  if (insertErr || !inserted) {
+    return { error: insertErr?.message ?? 'Failed to duplicate event' }
+  }
+
+  // Copy inclusions (same labels/icons, preserved order).
+  const { data: inclusions } = await supabase
+    .from('event_inclusions')
+    .select('label, icon, sort_order')
+    .eq('event_id', eventId)
+    .order('sort_order', { ascending: true })
+
+  if (inclusions && inclusions.length > 0) {
+    await supabase.from('event_inclusions').insert(
+      inclusions.map((i) => ({
+        event_id: inserted.id,
+        label: i.label,
+        icon: i.icon,
+        sort_order: i.sort_order,
+      })),
+    )
+  }
+
+  // Copy hosts (same roster).
+  const { data: hosts } = await supabase
+    .from('event_hosts')
+    .select('profile_id, role_label, sort_order')
+    .eq('event_id', eventId)
+    .order('sort_order', { ascending: true })
+
+  if (hosts && hosts.length > 0) {
+    await supabase.from('event_hosts').insert(
+      hosts.map((h) => ({
+        event_id: inserted.id,
+        profile_id: h.profile_id,
+        role_label: h.role_label,
+        sort_order: h.sort_order,
+      })),
+    )
+  }
+
+  revalidatePath('/admin/events')
+
+  return { event: inserted }
 }
 
 export async function softDeleteEvent(eventId: string) {
@@ -962,6 +1079,249 @@ export async function getNotificationHistory() {
   if (error) throw new Error('Failed to fetch notifications')
 
   return data ?? []
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// P2-9 — Failed notifications (admin retry view)
+// ════════════════════════════════════════════════════════════════════════════
+
+const REDACTED_BODY_MARKER = '[redacted'
+
+export interface FailedNotification {
+  id: string
+  template_name: string | null
+  subject: string
+  body: string
+  recipient_email: string | null
+  error_message: string | null
+  sent_at: string
+  retried_at: string | null
+}
+
+/**
+ * Lists notifications that the email send wrapper logged with
+ * `status='failed'`. Limited to 100 most-recent rows — the failure rate
+ * should be low; if it isn't, that's a bigger problem than this view.
+ */
+export async function getFailedNotifications(): Promise<FailedNotification[]> {
+  const { supabase } = await requireAdmin()
+
+  const { data, error } = await supabase
+    .from('notifications')
+    .select(
+      'id, template_name, subject, body, recipient_email, error_message, sent_at, retried_at',
+    )
+    .eq('channel', 'email')
+    .eq('status', 'failed')
+    .order('sent_at', { ascending: false })
+    .limit(100)
+
+  if (error) throw new Error('Failed to fetch failed notifications')
+  return (data ?? []) as FailedNotification[]
+}
+
+/**
+ * Re-fire a failed email send using the stored subject + body +
+ * recipient. Marks the original row's `retried_at` so the admin can
+ * tell when it last cycled. The retry itself logs a fresh row via
+ * the standard send wrapper.
+ *
+ * Refuses to retry rows that have been GDPR-scrubbed
+ * (body/subject/recipient redacted on account deletion) — sending
+ * "[redacted]" to nobody is worse than no-op.
+ */
+export async function retryNotification(
+  notificationId: string,
+): Promise<{ success: true } | { error: string }> {
+  const { supabase } = await requireAdmin()
+
+  if (!notificationId) return { error: 'Notification ID is required' }
+
+  const { data: row, error: fetchErr } = await supabase
+    .from('notifications')
+    .select(
+      'id, template_name, subject, body, recipient_email, channel, status',
+    )
+    .eq('id', notificationId)
+    .single()
+  if (fetchErr || !row) return { error: 'Notification not found' }
+
+  if (row.channel !== 'email') {
+    return { error: 'Only email notifications can be retried here' }
+  }
+  if (row.status !== 'failed') {
+    return { error: 'Only failed notifications can be retried' }
+  }
+  if (!row.recipient_email) {
+    return { error: 'No recipient email — cannot retry' }
+  }
+  if (
+    row.body?.startsWith(REDACTED_BODY_MARKER) ||
+    row.subject?.startsWith('[redacted')
+  ) {
+    return { error: 'This notification has been redacted (account deleted)' }
+  }
+
+  const sendResult = await sendEmail({
+    to: row.recipient_email,
+    subject: row.subject,
+    html: row.body,
+    templateName: row.template_name ?? 'retry',
+  })
+
+  // Stamp the original row as retried regardless of send outcome — the
+  // admin sees the timestamp and can check the new audit row written
+  // by the send wrapper for the actual outcome.
+  await supabase
+    .from('notifications')
+    .update({ retried_at: new Date().toISOString() })
+    .eq('id', notificationId)
+
+  revalidatePath('/admin/notifications/failed')
+
+  if (!sendResult.success) {
+    return { error: `Retry send failed: ${sendResult.error}` }
+  }
+  return { success: true }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// P2-9 — Email all confirmed attendees
+// ════════════════════════════════════════════════════════════════════════════
+
+const announcementSchema = z.object({
+  subject: z
+    .string()
+    .trim()
+    .min(3, 'Subject must be at least 3 characters')
+    .max(150, 'Subject is too long (max 150 chars)')
+    .refine((v) => !/[\r\n]/.test(v), {
+      message: 'Subject cannot contain line breaks',
+    }),
+  body: z
+    .string()
+    .trim()
+    .min(10, 'Body must be at least 10 characters')
+    .max(5000, 'Body is too long (max 5000 chars)'),
+})
+
+/**
+ * Send a plain-text announcement email to every confirmed attendee of
+ * an event. The dispatch loop runs in `next/server.after()` so the
+ * admin gets an immediate response — emails fan out post-response.
+ *
+ * Each send is logged to `notifications` via the existing `sendEmail`
+ * wrapper with `recipient_user_id` + `recipient_event_id` populated so
+ * the GDPR scrub RPC (`sanitise_user_notifications`) can find and
+ * redact these rows when an attendee deletes their account.
+ *
+ * Returns the count we *intend* to send (post-response failures appear
+ * in the failed-notifications admin view).
+ */
+export async function emailEventAttendees(
+  eventId: string,
+  formData: FormData,
+): Promise<{ success: true; recipientCount: number } | { error: string }> {
+  const { supabase, userId: adminId } = await requireAdmin()
+
+  if (!eventId) return { error: 'Event ID is required' }
+
+  const parsed = announcementSchema.safeParse({
+    subject: (formData.get('subject') as string) ?? '',
+    body: (formData.get('body') as string) ?? '',
+  })
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Invalid input' }
+  }
+  const { subject, body } = parsed.data
+
+  const { data: event, error: eventErr } = await supabase
+    .from('events')
+    .select('id, title, slug')
+    .eq('id', eventId)
+    .is('deleted_at', null)
+    .single()
+  if (eventErr || !event) return { error: 'Event not found' }
+
+  // Confirmed attendees only — no waitlist, no cancelled, no pending.
+  // We deliberately do NOT block sending on cancelled events — admins
+  // may legitimately need to email attendees about a cancellation /
+  // refund timeline. The event row's `is_cancelled` is informational
+  // only at this layer; the admin sees the cancelled badge in the UI
+  // when composing.
+  const { data: bookings, error: bookingsErr } = await supabase
+    .from('bookings')
+    .select(`
+      id,
+      user_id,
+      profile:profiles!bookings_user_id_fkey(id, full_name, email)
+    `)
+    .eq('event_id', eventId)
+    .eq('status', 'confirmed')
+    .is('deleted_at', null)
+  if (bookingsErr) return { error: 'Failed to fetch attendees' }
+
+  type Recipient = { userId: string; fullName: string; email: string }
+  const recipients: Recipient[] = []
+  for (const b of bookings ?? []) {
+    const profile = extractJoin<{ id: string; full_name: string; email: string }>(
+      b.profile,
+    )
+    if (!profile?.email) continue
+    recipients.push({
+      userId: profile.id,
+      fullName: profile.full_name ?? '',
+      email: profile.email,
+    })
+  }
+
+  if (recipients.length === 0) {
+    return { error: 'No confirmed attendees to email' }
+  }
+
+  // Snapshot what we need inside `after()` — closure-captured values
+  // outlive the request scope.
+  const eventSnapshot = {
+    id: event.id,
+    title: event.title,
+    slug: event.slug,
+  }
+
+  // FIXME(P3): Resend free tier caps at 10 req/sec. Sequential awaits
+  // naturally throttle for events under ~50 attendees but a 100+
+  // attendee blast will start hitting 429s after the first batch.
+  // Recoverable via the failed-notifications retry view, but worth
+  // adding a small per-iteration delay or `p-limit` cap when event
+  // sizes grow. Tracked in docs/FOLLOW-UPS.md.
+  after(async () => {
+    for (const r of recipients) {
+      const rendered = adminAnnouncementTemplate({
+        fullName: r.fullName,
+        eventTitle: eventSnapshot.title,
+        eventSlug: eventSnapshot.slug,
+        subject,
+        bodyText: body,
+      })
+      await sendEmail({
+        to: r.email,
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+        templateName: 'admin_announcement',
+        relatedProfileId: adminId,
+        recipientUserId: r.userId,
+        recipientEventId: eventSnapshot.id,
+        recipientType: 'event_attendees',
+        notificationType: 'announcement',
+        tags: [
+          { name: 'template', value: 'admin_announcement' },
+          { name: 'event_id', value: eventSnapshot.id },
+        ],
+      })
+    }
+  })
+
+  return { success: true, recipientCount: recipients.length }
 }
 
 // ════════════════════════════════════════════════════════════════════════════

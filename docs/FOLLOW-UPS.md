@@ -163,11 +163,29 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 **Action:** Extract to a shared constant (`src/app/(legal)/_constants.ts` or similar), or pull from `git log` at build time via a script.
 **Priority:** Very low.
 
-### `sanitise_user_notifications` RPC doesn't scrub recipient rows
-**Source:** P2-8b code review (S3) + P2-9 dependency
-**Rationale:** The RPC scrubs `notifications` rows where `sent_by = user_id` (system emails we sent *for* the user). It does NOT scrub rows where the user was the *recipient* of an admin announcement. Today there's no admin-announcement feature surface, so no recipient rows exist — but P2-9 introduces "Email all attendees" which creates exactly those rows.
-**Action:** When P2-9 lands the attendee-messaging feature, extend the RPC to also scrub `recipient_email` matching the deleted user's stored email OR use a new `recipient_user_id` column that FKs to profiles (cleaner). Track and action as part of P2-9.
-**Priority:** Medium (becomes a GDPR completeness gap the moment P2-9 ships).
+<!-- Resolved in P2-9: migration 20260425000001 adds notifications.recipient_user_id
+     FK + extends sanitise_user_notifications to (uuid, text DEFAULT NULL) which
+     scrubs sender rows + recipient rows by FK + recipient rows by email match.
+     deleteMyAccount now passes user.email so all three paths fire. The legacy
+     1-arg overload is dropped explicitly to avoid PostgREST overload ambiguity. -->
+
+### Attendee messaging fan-out has no rate limiting
+**Source:** P2-9 code review (S3)
+**Rationale:** `emailEventAttendees` runs a sequential `await sendEmail(...)` loop inside `next/server.after()`. Resend free tier caps at 10 req/sec — natural per-call latency throttles us under ~50 attendees, but a 100+ attendee blast will start hitting 429s after the first burst. Recoverable via the new failed-notifications retry view, but worth pre-empting.
+**Action:** Add a small per-iteration delay (~120ms) or `p-limit({ concurrency: 8 })` cap before event sizes grow into 3-figure attendees. `src/app/(admin)/admin/actions.ts:emailEventAttendees`.
+**Priority:** Low until typical event size exceeds 50 attendees.
+
+### "Failed sends" link in admin notifications page lacks count badge
+**Source:** P2-9 code review (nit)
+**Rationale:** The original P2-9 plan called for a numeric pill on the failed-sends nav link so admins notice new failures without clicking through. Shipped without it for v1.
+**Action:** Server-fetch a `count(*)` of email/failed rows in `/admin/notifications/page.tsx` and render a small pill if > 0. `src/components/admin/AdminSidebar.tsx` should also surface it on the mobile tab bar.
+**Priority:** Low.
+
+### `[redacted` marker string is duplicated across migration + Server Action
+**Source:** P2-9 code review (nit)
+**Rationale:** `actions.ts:retryNotification` checks `body.startsWith('[redacted')`, mirroring the literal `[redacted — account deleted]` written by the `sanitise_user_notifications` RPC. If the RPC's redaction phrasing ever changes, the retry guard silently drifts.
+**Action:** Extract to a shared TS constant (or expose via the schema) and update the migration's UPDATE values to reference the same prose in a comment.
+**Priority:** Very low.
 
 ---
 
@@ -178,9 +196,9 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
      another re-run. -->
 
 ### Dialog a11y — focus trap + Escape-key on moderation/delete/share dialogs
-**Source:** P2-7a + P2-8a + P2-8b code reviews
-**Rationale:** Three dialogs now in the codebase (`BookingCancelledHandler`'s toast, `MemberModerationDialog`, `DataPrivacySection`'s delete dialog) use `role="dialog" + aria-modal="true"` correctly for screen readers but don't implement focus trap or Escape-key close. Radix Dialog is in deps; wrapping these in `Dialog.Root` + `Dialog.Content` gets focus trap, Escape, portal, and scroll-lock for free.
-**Action:** Migrate the three dialogs to Radix Dialog in a focused a11y PR. Small, mechanical change; no behaviour impact beyond the a11y improvement.
+**Source:** P2-7a + P2-8a + P2-8b + P2-9 code reviews
+**Rationale:** Five dialog/confirm sites now in the codebase (`BookingCancelledHandler`'s toast, `MemberModerationDialog`, `DataPrivacySection`'s delete dialog, `DuplicateEventButton`'s native `confirm()`, `EmailAttendeesForm`'s native `confirm()`) lack focus trap + Escape-key close. The two new P2-9 sites use native `window.confirm` for consistency with the existing `EventsTable` delete pattern, but should migrate alongside the others. Radix Dialog is in deps; wrapping these gets focus trap, Escape, portal, and scroll-lock for free.
+**Action:** Migrate all five sites to Radix Dialog in a focused a11y PR. Small, mechanical change; no behaviour impact beyond the a11y improvement.
 **Priority:** Low. A11y gap, not a blocker. Worth bundling with any other a11y work (e.g. WCAG AA audit).
 
 ### Server-side integration tests for `book_event()` RPC
