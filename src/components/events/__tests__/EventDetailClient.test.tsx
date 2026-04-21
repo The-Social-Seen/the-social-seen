@@ -49,9 +49,28 @@ vi.mock('@/components/events/MobileBookingBar', () => ({
   default: () => <div data-testid="mobile-booking-bar" />,
 }))
 
-// Mock BookingSidebar — tested separately
+// Mock BookingSidebar — tested separately, but expose onBookClick so we can
+// exercise the click-to-book intercept logic in EventDetailClient itself.
 vi.mock('@/components/events/BookingSidebar', () => ({
-  default: vi.fn().mockImplementation(() => <div data-testid="booking-sidebar" />),
+  default: ({ onBookClick }: { onBookClick: () => void }) => (
+    <div data-testid="booking-sidebar">
+      <button data-testid="booking-sidebar-book-btn" onClick={onBookClick}>
+        Book (sidebar mock)
+      </button>
+    </div>
+  ),
+}))
+
+// Mock VerifyPromptModal so we can assert it gets opened on click.
+vi.mock('@/components/auth/VerifyPromptModal', () => ({
+  VerifyPromptModal: ({ isOpen }: { isOpen: boolean }) =>
+    isOpen ? <div data-testid="verify-prompt-modal-open" /> : null,
+}))
+
+// Mock UnverifiedBanner so its content doesn't interfere with text matchers.
+vi.mock('@/components/auth/UnverifiedBanner', () => ({
+  UnverifiedBanner: ({ verified }: { verified: boolean }) =>
+    verified ? null : <div data-testid="unverified-banner" />,
 }))
 
 // Mock StarRating
@@ -196,6 +215,9 @@ const defaultProps = {
   userName: 'Charlotte Moreau' as string | null,
   userAvatar: null as string | null,
   userId: 'user-001' as string | null,
+  // Default to verified so existing tests use the original booking flow.
+  // Booking-gate behaviour for unverified users gets its own test below.
+  emailVerified: true,
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -350,5 +372,47 @@ describe('EventDetailClient', () => {
     render(<EventDetailClient event={makeEventDetail({ confirmed_count: 22 })} {...defaultProps} />)
     const countTexts = screen.getAllByText('22 people going')
     expect(countTexts.length).toBeGreaterThan(0)
+  })
+
+  // ── P2-3: Email-verification booking gate ────────────────────────────────
+
+  it('renders the unverified banner when isLoggedIn and !emailVerified', () => {
+    render(
+      <EventDetailClient
+        event={makeEventDetail()}
+        {...defaultProps}
+        emailVerified={false}
+      />,
+    )
+    expect(screen.getByTestId('unverified-banner')).toBeTruthy()
+  })
+
+  it('does NOT render the unverified banner when emailVerified', () => {
+    render(
+      <EventDetailClient event={makeEventDetail()} {...defaultProps} />,
+    )
+    expect(screen.queryByTestId('unverified-banner')).toBeNull()
+  })
+
+  it('opens VerifyPromptModal (not BookingModal) when unverified user clicks Book', async () => {
+    const { fireEvent } = await import('@testing-library/react')
+    render(
+      <EventDetailClient
+        event={makeEventDetail()}
+        {...defaultProps}
+        emailVerified={false}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('booking-sidebar-book-btn'))
+    expect(screen.getByTestId('verify-prompt-modal-open')).toBeTruthy()
+  })
+
+  it('does NOT open VerifyPromptModal for a verified user clicking Book', async () => {
+    const { fireEvent } = await import('@testing-library/react')
+    render(
+      <EventDetailClient event={makeEventDetail()} {...defaultProps} />,
+    )
+    fireEvent.click(screen.getByTestId('booking-sidebar-book-btn'))
+    expect(screen.queryByTestId('verify-prompt-modal-open')).toBeNull()
   })
 })

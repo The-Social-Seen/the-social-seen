@@ -72,17 +72,19 @@ export default async function EventDetailPage({ params }: PageProps) {
       getUserBookingForEvent(event.id),
     ]);
 
-  // Get user profile info for review form
+  // Get user profile info for review form + email verification gate
   let userName: string | null = null
   let userAvatar: string | null = null
+  let emailVerified = false
   if (user) {
     const { data: profile } = await supabase
       .from('profiles')
-      .select('full_name, avatar_url')
+      .select('full_name, avatar_url, email_verified')
       .eq('id', user.id)
       .single()
     userName = profile?.full_name ?? (user.user_metadata?.full_name as string) ?? null
     userAvatar = profile?.avatar_url ?? null
+    emailVerified = profile?.email_verified ?? false
   }
 
   const ogImage = resolveEventImage(event.image_url);
@@ -140,6 +142,7 @@ export default async function EventDetailPage({ params }: PageProps) {
         userName={userName}
         userAvatar={userAvatar}
         userId={user?.id ?? null}
+        emailVerified={emailVerified}
       />
     </>
   );

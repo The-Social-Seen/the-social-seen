@@ -19,6 +19,8 @@ import { formatDateCard, formatDateFull, formatTimeRange, isPastEvent } from "@/
 import { resolveEventImage, resolveAvatarUrl, getInitials } from "@/lib/utils/images";
 import BookingModal from "@/components/events/BookingModal";
 import BookingSidebar from "@/components/events/BookingSidebar";
+import { VerifyPromptModal } from "@/components/auth/VerifyPromptModal";
+import { UnverifiedBanner } from "@/components/auth/UnverifiedBanner";
 import StarRating from "@/components/reviews/StarRating";
 import ReviewCard from "@/components/reviews/ReviewCard";
 import ReviewForm from "@/components/reviews/ReviewForm";
@@ -42,6 +44,12 @@ interface EventDetailClientProps {
   userName: string | null;
   userAvatar: string | null;
   userId: string | null;
+  /**
+   * Whether the logged-in user has verified their email via OTP (P2-3).
+   * False for logged-out users too — parent should pass `false` when
+   * !isLoggedIn so the booking gate still works sensibly.
+   */
+  emailVerified: boolean;
 }
 
 const fadeInUp = {
@@ -73,11 +81,24 @@ export default function EventDetailClient({
   userName,
   userAvatar,
   userId,
+  emailVerified,
 }: EventDetailClientProps) {
   const [bookingOpen, setBookingOpen] = useState(false);
+  const [verifyPromptOpen, setVerifyPromptOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
+
+  // Intercept booking clicks for authenticated-but-unverified users.
+  // Logged-out users keep their existing path (usually a "log in to book"
+  // redirect inside BookingSidebar / MobileBookingBar).
+  function handleBookClick() {
+    if (isLoggedIn && !emailVerified) {
+      setVerifyPromptOpen(true);
+      return;
+    }
+    setBookingOpen(true);
+  }
 
   const isPast = isPastEvent(event.date_time);
   const isFree = event.price === 0;
@@ -96,6 +117,9 @@ export default function EventDetailClient({
   return (
     <>
       <main className="min-h-screen bg-bg-primary">
+        {/* Unverified-email banner — only renders when logged in & not verified */}
+        {isLoggedIn && <UnverifiedBanner verified={emailVerified} />}
+
         {/* Hero Section */}
         <section className="relative h-[50vh] min-h-[400px] overflow-hidden">
           {heroImage ? (
@@ -412,7 +436,7 @@ export default function EventDetailClient({
               isPast={isPast}
               isLoggedIn={isLoggedIn}
               userName={userName}
-              onBookClick={() => setBookingOpen(true)}
+              onBookClick={handleBookClick}
             />
           </div>
         </section>
@@ -492,7 +516,7 @@ export default function EventDetailClient({
         isFree={isFree}
         isSoldOut={isSoldOut}
         isPast={isPast}
-        onBookClick={() => setBookingOpen(true)}
+        onBookClick={handleBookClick}
         sidebarRef={sidebarRef}
       />
 
@@ -502,6 +526,12 @@ export default function EventDetailClient({
         isOpen={bookingOpen}
         onClose={() => setBookingOpen(false)}
         userName={userName}
+      />
+
+      {/* Verify-email prompt — intercepts booking for unverified users */}
+      <VerifyPromptModal
+        isOpen={verifyPromptOpen}
+        onClose={() => setVerifyPromptOpen(false)}
       />
 
       {/* Review Modal */}

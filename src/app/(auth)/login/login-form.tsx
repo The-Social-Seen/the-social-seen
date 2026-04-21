@@ -7,21 +7,14 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { motion } from 'framer-motion'
 import { Eye, EyeOff } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
+import { sanitizeRedirectPath } from '@/lib/utils/redirect'
 import { track, identifyUser } from '@/lib/analytics/track'
 import { signIn } from '../actions'
 
 export function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const rawRedirect = searchParams.get('redirect')
-  const redirectTo =
-    rawRedirect &&
-    rawRedirect.startsWith('/') &&
-    !rawRedirect.startsWith('//') &&
-    !rawRedirect.startsWith('\\/') &&
-    !rawRedirect.includes('://')
-      ? rawRedirect
-      : '/events'
+  const redirectTo = sanitizeRedirectPath(searchParams.get('redirect'))
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')

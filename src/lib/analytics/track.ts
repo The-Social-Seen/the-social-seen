@@ -14,6 +14,11 @@ export interface AnalyticsEvents {
   logout: Record<string, never>;
   password_reset_requested: Record<string, never>;
   password_reset_completed: Record<string, never>;
+  email_verification_requested: { source: "banner" | "modal" | "direct" };
+  email_verification_completed: Record<string, never>;
+  email_verification_failed: {
+    reason: "invalid_code" | "rate_limit" | "send_failed" | "other";
+  };
   event_view: { event_id: string; event_slug: string };
   booking_created: {
     event_id: string;

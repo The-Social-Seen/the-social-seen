@@ -1,10 +1,12 @@
 import { redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase/server'
+import { UnverifiedBanner } from '@/components/auth/UnverifiedBanner'
 
 /**
  * Member layout — protects all routes under (member)/.
  * Redirects unauthenticated users to /login.
  * Redirects users who haven't completed onboarding to /join?step=2.
+ * Renders the unverified-email banner for users who haven't verified yet.
  */
 export default async function MemberLayout({
   children,
@@ -21,7 +23,7 @@ export default async function MemberLayout({
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('onboarding_complete')
+    .select('onboarding_complete, email_verified')
     .eq('id', user.id)
     .single()
 
@@ -29,5 +31,10 @@ export default async function MemberLayout({
     redirect('/join?step=2')
   }
 
-  return <>{children}</>
+  return (
+    <>
+      <UnverifiedBanner verified={profile?.email_verified ?? false} />
+      {children}
+    </>
+  )
 }
