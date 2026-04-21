@@ -6,6 +6,7 @@ import { ProfileHeader } from '@/components/profile/ProfileHeader'
 import { ProfileCompletionBanner } from '@/components/profile/ProfileCompletionBanner'
 import { EditProfileForm } from '@/components/profile/EditProfileForm'
 import { BookingsList } from '@/components/profile/BookingsList'
+import DataPrivacySection from '@/components/profile/DataPrivacySection'
 import type { Profile, BookingWithEvent } from '@/types'
 
 interface ProfilePageClientProps {
@@ -75,6 +76,8 @@ export function ProfilePageClient({
           userAvatar={profile.avatar_url}
         />
       </section>
+
+      <DataPrivacySection />
 
       <EditProfileForm profile={profile} open={editOpen} onOpenChange={setEditOpen} />
     </>

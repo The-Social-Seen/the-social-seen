@@ -1069,6 +1069,32 @@ export async function reinstateMember(
   return setMemberStatus({ memberId, newStatus: 'active', reason })
 }
 
+// ── P2-8b: deletion queue ────────────────────────────────────────────────
+
+/**
+ * Lists soft-deleted profiles — the "deletion queue" for admins to
+ * review before the 30-day hard-delete cut-off. The Server Action
+ * `deleteMyAccount` has already anonymised the row (email and full_name
+ * replaced with placeholders, PII cleared) at the time of soft-delete;
+ * this view surfaces what's still sitting in the table.
+ *
+ * Phase 3 will cron-automate hard deletion after 30 days. For now the
+ * admin performs the final cleanup manually (or via SQL) — which keeps
+ * us deliberately cautious while the flow is new.
+ */
+export async function getDeletedAccounts() {
+  const { supabase } = await requireAdmin()
+
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, full_name, email, deleted_at, created_at')
+    .not('deleted_at', 'is', null)
+    .order('deleted_at', { ascending: false })
+
+  if (error) throw new Error('Failed to fetch deleted accounts')
+  return data ?? []
+}
+
 // ── No-show tracking ──────────────────────────────────────────────────────
 
 /**

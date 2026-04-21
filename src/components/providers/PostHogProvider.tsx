@@ -4,10 +4,17 @@ import { useEffect } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import posthog from "posthog-js";
 import { PostHogProvider as PHProvider } from "posthog-js/react";
+import { onConsentChange, readConsent } from "@/lib/analytics/consent";
 
 /**
  * PostHog provider that initialises the client SDK and tracks pageviews
  * on every route change. Only runs in the browser.
+ *
+ * P2-8b: consent-gated. `posthog.init()` fires only when the user has
+ * explicitly granted analytics consent via the cookie banner. If they
+ * decline, no cookies set, no network calls made. If they toggle from
+ * denied → granted later, the consent listener re-initialises without
+ * a reload (and revocation opts out).
  *
  * Config:
  *   - `capture_pageview: false` because we manually capture on route changes
@@ -62,7 +69,25 @@ function PageviewTracker() {
 
 export function PostHogProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
-    initPostHog();
+    // First paint: only init if consent already granted from a prior
+    // visit. Fresh visitors see the banner first and toggle consent
+    // from there.
+    if (readConsent() === "granted") {
+      initPostHog();
+    }
+
+    // React to in-session consent changes without a page reload.
+    // posthog-js doesn't expose a clean shutdown, but `opt_out_capturing`
+    // stops network calls and clears its cookies — good enough.
+    const unsubscribe = onConsentChange((state) => {
+      if (state === "granted") {
+        initPostHog();
+        if (posthog.__loaded) posthog.opt_in_capturing();
+      } else if (posthog.__loaded) {
+        posthog.opt_out_capturing();
+      }
+    });
+    return unsubscribe;
   }, []);
 
   return (

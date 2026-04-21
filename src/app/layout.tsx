@@ -5,6 +5,7 @@ import { ThemeProvider } from "@/components/layout/ThemeProvider";
 import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
 import { PostHogProvider } from "@/components/providers/PostHogProvider";
+import CookieConsentBanner from "@/components/layout/CookieConsentBanner";
 import "./globals.css";
 
 const playfair = Playfair_Display({
@@ -105,6 +106,9 @@ export default async function RootLayout({
             {!isAdmin && <Header />}
             <main>{children}</main>
             {!isAdmin && <Footer />}
+            {/* P2-8b: consent banner. Shown only until the user
+                decides; respects admin-layout chromeless preference. */}
+            {!isAdmin && <CookieConsentBanner />}
           </ThemeProvider>
         </PostHogProvider>
       </body>
