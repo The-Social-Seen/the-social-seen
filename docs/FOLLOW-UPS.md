@@ -139,6 +139,16 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 
 ## 🧪 Testing gaps
 
+<!-- Resolved in P2-8b (PR #24): wrapped the assertion in `waitFor(...)`
+     after it flaked two CI runs in a row. Inline fix preferred over
+     another re-run. -->
+
+### Dialog a11y — focus trap + Escape-key on moderation/delete/share dialogs
+**Source:** P2-7a + P2-8a + P2-8b code reviews
+**Rationale:** Three dialogs now in the codebase (`BookingCancelledHandler`'s toast, `MemberModerationDialog`, `DataPrivacySection`'s delete dialog) use `role="dialog" + aria-modal="true"` correctly for screen readers but don't implement focus trap or Escape-key close. Radix Dialog is in deps; wrapping these in `Dialog.Root` + `Dialog.Content` gets focus trap, Escape, portal, and scroll-lock for free.
+**Action:** Migrate the three dialogs to Radix Dialog in a focused a11y PR. Small, mechanical change; no behaviour impact beyond the a11y improvement.
+**Priority:** Low. A11y gap, not a blocker. Worth bundling with any other a11y work (e.g. WCAG AA audit).
+
 ### Server-side integration tests for `book_event()` RPC
 **Source:** P2-3 backend handover
 **Rationale:** The new email_verified guard in `book_event()` is only covered by a live staging smoke test (anon-style call via service role). Vitest can't run Supabase functions directly.
