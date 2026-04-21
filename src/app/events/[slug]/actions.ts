@@ -1,10 +1,16 @@
 'use server'
 
+import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 import { createServerClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { sendEmail } from '@/lib/email/send'
 import { bookingConfirmationTemplate } from '@/lib/email/templates/booking-confirmation'
 import { formatDateFull, formatTime } from '@/lib/utils/dates'
+import {
+  createBookingCheckoutSession,
+  ensureStripeCustomer,
+} from '@/lib/stripe/checkout'
 import type { BookingStatus } from '@/types'
 
 // ── Result type ────────���─────────────────────────────��──────────────────────
@@ -15,6 +21,12 @@ interface ActionResult {
   bookingId?: string
   status?: BookingStatus
   waitlistPosition?: number | null
+  /**
+   * Stripe-hosted Checkout URL. Populated for paid events in the
+   * pending_payment branch. The client MUST navigate to this URL to
+   * complete payment.
+   */
+  checkoutUrl?: string
 }
 
 // ── createBooking ───────────────────────────────────────────────────────────
@@ -159,6 +171,241 @@ async function sendBookingConfirmationEmail(args: {
       err instanceof Error ? err.message : err,
     )
   }
+}
+
+// ── createPaidCheckout ──────────────────────────────────────────────────────
+
+/**
+ * Paid-event booking flow (P2-7a):
+ *   1. `book_event_paid` RPC inserts a `pending_payment` row (or
+ *      `waitlisted` if the event is full) under a row lock so concurrent
+ *      bookings can't oversell.
+ *   2. If waitlisted: send a waitlist confirmation email and return —
+ *      no Stripe interaction for this booking.
+ *   3. If pending_payment: lazy-create the Stripe Customer (first paid
+ *      booking for this profile), create a Checkout Session with
+ *      metadata.booking_id, stash the session id on the booking row,
+ *      and return the Stripe-hosted URL.
+ *
+ * The client navigates to `checkoutUrl`. Stripe takes over UI. On
+ * success Stripe POSTs to our webhook (confirms the booking) and
+ * redirects the user to /events/:slug/booking-success. On cancel Stripe
+ * redirects to /events/:slug/?cancelled=1.
+ *
+ * If Stripe fails mid-flow we roll the booking back to `cancelled` so
+ * the seat is freed and the user can retry.
+ */
+export async function createPaidCheckout(
+  eventId: string,
+): Promise<ActionResult> {
+  if (!eventId) {
+    return { success: false, error: 'Event ID is required' }
+  }
+
+  const supabase = await createServerClient()
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser()
+  if (authError || !user) {
+    return { success: false, error: 'Authentication required' }
+  }
+
+  // Race-safe paid booking. Inserts pending_payment or waitlisted.
+  const { data: rpcData, error: rpcError } = await supabase.rpc(
+    'book_event_paid',
+    { p_user_id: user.id, p_event_id: eventId },
+  )
+
+  if (rpcError) {
+    console.error('[createPaidCheckout] RPC error:', rpcError.message)
+    return { success: false, error: 'Something went wrong. Please try again.' }
+  }
+
+  const result = rpcData as Record<string, unknown>
+  if (result.error) {
+    return { success: false, error: result.error as string }
+  }
+
+  const bookingId = result.booking_id as string
+  const status = result.status as BookingStatus
+  const waitlistPosition = (result.waitlist_position as number | null) ?? null
+
+  revalidatePath('/events')
+  revalidatePath('/bookings')
+
+  // Waitlisted paid event → no Stripe. Same shape as free-event
+  // waitlist response; send the confirmation email and return.
+  if (status === 'waitlisted') {
+    void sendBookingConfirmationEmail({
+      userId: user.id,
+      eventId,
+      status: 'waitlisted',
+      waitlistPosition,
+    })
+    return { success: true, bookingId, status, waitlistPosition }
+  }
+
+  if (status !== 'pending_payment') {
+    // Defensive — book_event_paid shouldn't return anything else.
+    console.error(
+      '[createPaidCheckout] unexpected status from book_event_paid:',
+      status,
+    )
+    return { success: false, error: 'Unexpected booking state' }
+  }
+
+  // ── Create Stripe Checkout Session ────────────────────────────────────
+  try {
+    // Fetch event + profile for Checkout line-items and Customer.
+    const [eventRes, profileRes] = await Promise.all([
+      supabase
+        .from('events')
+        .select('title, slug, price')
+        .eq('id', eventId)
+        .single(),
+      supabase
+        .from('profiles')
+        .select('full_name, email')
+        .eq('id', user.id)
+        .single(),
+    ])
+
+    const event = eventRes.data
+    const profile = profileRes.data
+    if (!event || !profile?.email) {
+      throw new Error('Missing event or profile data for checkout')
+    }
+
+    // Lazy-customer-create uses the admin client because it writes back
+    // to profiles.stripe_customer_id, which the user's own RLS policy
+    // allows only on their own row — fine today, but using admin keeps
+    // the helper usable from future cron/retry paths too.
+    const admin = createAdminClient()
+    const stripeCustomerId = await ensureStripeCustomer(admin, {
+      userId: user.id,
+      email: profile.email,
+      fullName: profile.full_name,
+    })
+
+    const origin = await resolveOrigin()
+    const successUrl = `${origin}/events/${event.slug}/booking-success?session_id={CHECKOUT_SESSION_ID}`
+    const cancelUrl = `${origin}/events/${event.slug}?cancelled=1`
+
+    const { sessionId, url } = await createBookingCheckoutSession({
+      bookingId,
+      userId: user.id,
+      userEmail: profile.email,
+      eventId,
+      eventTitle: event.title,
+      eventSlug: event.slug,
+      priceInPence: event.price,
+      successUrl,
+      cancelUrl,
+      stripeCustomerId,
+    })
+
+    // Persist the session id for webhook lookup + audit. Non-critical —
+    // the webhook also uses metadata.booking_id, so a failure here
+    // doesn't break confirmation.
+    const { error: updErr } = await supabase
+      .from('bookings')
+      .update({ stripe_checkout_session_id: sessionId })
+      .eq('id', bookingId)
+    if (updErr) {
+      console.warn(
+        '[createPaidCheckout] Failed to store checkout session id:',
+        updErr.message,
+      )
+    }
+
+    return { success: true, bookingId, status, checkoutUrl: url }
+  } catch (err) {
+    // Roll the booking back so the seat is freed and the user can retry.
+    // Can't DELETE (no hard deletes); instead mark as cancelled.
+    console.error(
+      '[createPaidCheckout] Stripe flow failed, rolling back booking:',
+      err instanceof Error ? err.message : err,
+    )
+    await supabase
+      .from('bookings')
+      .update({ status: 'cancelled' as BookingStatus })
+      .eq('id', bookingId)
+      .eq('status', 'pending_payment') // optimistic guard
+
+    return {
+      success: false,
+      error: 'Could not start checkout. Please try again.',
+    }
+  }
+}
+
+async function resolveOrigin(): Promise<string> {
+  // Prefer the explicit site URL env var (set in production). Fall back
+  // to the request's forwarded host — works on localhost + Vercel
+  // preview without any config.
+  const explicit = process.env.NEXT_PUBLIC_SITE_URL
+  if (explicit) return explicit.replace(/\/$/, '')
+  const h = await headers()
+  const host = h.get('x-forwarded-host') ?? h.get('host')
+  const proto = h.get('x-forwarded-proto') ?? 'https'
+  if (host) return `${proto}://${host}`
+
+  // Nothing found — only safe in local dev. In production this
+  // indicates NEXT_PUBLIC_SITE_URL is misconfigured and Stripe would
+  // redirect users to localhost (broken flow).
+  if (process.env.NODE_ENV === 'production') {
+    console.error(
+      '[createPaidCheckout] No origin found — set NEXT_PUBLIC_SITE_URL. Stripe return URLs will be broken.',
+    )
+  }
+  return 'http://localhost:3000'
+}
+
+// ── abandonPendingCheckout ──────────────────────────────────────────────────
+
+/**
+ * Called when the user clicks "← Back" out of Stripe's hosted Checkout
+ * (Stripe redirects them to our `cancel_url` with `?cancelled=1`). Soft-
+ * cancels their still-`pending_payment` booking for this event so the
+ * seat is freed immediately, rather than waiting for Stripe's 30-minute
+ * session expiry.
+ *
+ * Idempotent: the `.eq('status', 'pending_payment')` guard means a
+ * repeat call (user refreshes) no-ops.
+ */
+export async function abandonPendingCheckout(
+  eventId: string,
+): Promise<ActionResult> {
+  if (!eventId) {
+    return { success: false, error: 'Event ID is required' }
+  }
+
+  const supabase = await createServerClient()
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser()
+  if (authError || !user) {
+    return { success: false, error: 'Authentication required' }
+  }
+
+  const { error } = await supabase
+    .from('bookings')
+    .update({ status: 'cancelled' as BookingStatus })
+    .eq('user_id', user.id)
+    .eq('event_id', eventId)
+    .eq('status', 'pending_payment')
+    .is('deleted_at', null)
+
+  if (error) {
+    console.error('[abandonPendingCheckout]', error.message)
+    return { success: false, error: 'Could not release the booking' }
+  }
+
+  revalidatePath(`/events`)
+  revalidatePath('/bookings')
+  return { success: true }
 }
 
 // ── cancelBooking ────────────────���──────────────────────────────────────────

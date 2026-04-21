@@ -33,6 +33,12 @@ vi.mock('next/image', () => ({
   default: ({ alt, src }: { alt: string; src: string }) => <img alt={alt} src={src} />,
 }))
 
+// BookingCancelledHandler uses Next's router hooks — not needed for the
+// EventDetailClient render assertions.
+vi.mock('@/components/events/BookingCancelledHandler', () => ({
+  default: () => null,
+}))
+
 vi.mock('next/link', () => ({
   default: ({ children, href }: React.PropsWithChildren<{ href: string }>) => (
     <a href={href}>{children}</a>

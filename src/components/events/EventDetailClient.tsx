@@ -27,6 +27,7 @@ import ReviewForm from "@/components/reviews/ReviewForm";
 import EventCard from "@/components/events/EventCard";
 import MobileBookingBar from "@/components/events/MobileBookingBar";
 import ShareActions from "@/components/shared/ShareActions";
+import BookingCancelledHandler from "@/components/events/BookingCancelledHandler";
 import type {
   EventDetail,
   ReviewWithAuthor,
@@ -117,6 +118,7 @@ export default function EventDetailClient({
 
   return (
     <>
+      <BookingCancelledHandler eventId={event.id} />
       <main className="min-h-screen bg-bg-primary">
         {/* Unverified-email banner — only renders when logged in & not verified */}
         {isLoggedIn && <UnverifiedBanner verified={emailVerified} />}

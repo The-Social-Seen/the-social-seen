@@ -15,7 +15,14 @@ export type EventCategory =
   | 'networking'
   | 'activity'
 
-export type BookingStatus = 'confirmed' | 'cancelled' | 'waitlisted' | 'no_show'
+export type BookingStatus =
+  | 'confirmed'
+  | 'cancelled'
+  | 'waitlisted'
+  | 'no_show'
+  // P2-7: paid bookings live here between book_event_paid() and the Stripe
+  // webhook flipping them to 'confirmed'. See migration 20260422000001.
+  | 'pending_payment'
 
 export type NotificationType = 'reminder' | 'announcement' | 'waitlist' | 'event_update'
 

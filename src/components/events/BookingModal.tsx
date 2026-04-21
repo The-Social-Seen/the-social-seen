@@ -8,12 +8,9 @@ import {
   X,
   Calendar,
   MapPin,
-  CreditCard,
-  Lock,
   Share2,
   CalendarPlus,
   AlertTriangle,
-  Info,
   ChevronDown,
   Loader2,
 } from "lucide-react";
@@ -21,7 +18,7 @@ import { formatDateModal, formatTime } from "@/lib/utils/dates";
 import { formatPrice } from "@/lib/utils/currency";
 import { downloadIcsFile } from "@/lib/utils/calendar";
 import { buildEventShareUrl, nativeShareOrCopy } from "@/lib/utils/share";
-import { createBooking } from "@/app/events/[slug]/actions";
+import { createBooking, createPaidCheckout } from "@/app/events/[slug]/actions";
 import type { EventDetail, BookingStatus } from "@/types";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -48,7 +45,12 @@ export default function BookingModal({
   userName,
 }: BookingModalProps) {
   const isFree = event.price === 0;
-  const totalSteps = isFree ? 2 : 3;
+  // P2-7a: paid flow no longer shows an in-modal payment step —
+  // clicking Book redirects to Stripe Checkout directly. The
+  // TicketCard step is only reached for free confirmations and for
+  // paid-event waitlisting (no Stripe interaction). totalSteps=2
+  // applies to both flows.
+  const totalSteps = 2;
 
   const [step, setStep] = useState(1);
   const [error, setError] = useState<string | null>(null);
@@ -81,15 +83,33 @@ export default function BookingModal({
     return () => document.removeEventListener("keydown", handleEscape);
   }, [isOpen, handleClose]);
 
-  // Submit booking via Server Action
+  // Submit booking via Server Action.
+  //
+  // Free event: createBooking() inserts a confirmed/waitlisted row;
+  // advance to the in-modal TicketCard.
+  //
+  // Paid event: createPaidCheckout() inserts pending_payment + returns
+  // a Stripe-hosted URL; navigate away. If the paid event is full the
+  // RPC falls to 'waitlisted' (no Stripe) — same as free waitlist flow.
   function handleBook() {
     setError(null);
     startTransition(async () => {
-      const result = await createBooking(event.id);
+      const result = isFree
+        ? await createBooking(event.id)
+        : await createPaidCheckout(event.id);
+
       if (!result.success) {
         setError(result.error ?? "Something went wrong. Please try again.");
         return;
       }
+
+      // Paid-event happy path: redirect to Stripe. The user leaves this
+      // modal entirely — Stripe returns them to /events/[slug]/booking-success.
+      if (result.checkoutUrl) {
+        window.location.href = result.checkoutUrl;
+        return;
+      }
+
       setBookingResult({
         bookingId: result.bookingId!,
         status: result.status!,
@@ -101,8 +121,6 @@ export default function BookingModal({
   }
 
   // Determine which step triggers booking
-  const isLastStepBeforeSuccess = isFree ? step === 1 : step === 2;
-
   return (
     <AnimatePresence>
       {isOpen && (
@@ -196,20 +214,6 @@ export default function BookingModal({
                     isFree={isFree}
                     error={error}
                     isPending={isPending}
-                    onSubmit={isFree ? handleBook : () => setStep(2)}
-                  />
-                )}
-
-                {step === 2 && !isFree && (
-                  <PaymentStep
-                    key="payment"
-                    event={event}
-                    error={error}
-                    isPending={isPending}
-                    onBack={() => {
-                      setError(null);
-                      setStep(1);
-                    }}
                     onSubmit={handleBook}
                   />
                 )}
@@ -342,133 +346,8 @@ function ConfirmStep({
   );
 }
 
-// ── Step 2: Payment (paid events only) ───────────────────────────────────────
-
-function PaymentStep({
-  event,
-  error,
-  isPending,
-  onBack,
-  onSubmit,
-}: {
-  event: EventDetail;
-  error: string | null;
-  isPending: boolean;
-  onBack: () => void;
-  onSubmit: () => void;
-}) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, x: 20 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: -20 }}
-      transition={{ duration: 0.2 }}
-    >
-      <h3 className="mb-1 font-serif text-xl font-bold text-text-primary">
-        Payment
-      </h3>
-      <p className="mb-6 text-sm text-text-primary/60">
-        Complete your booking securely
-      </p>
-
-      {/* Demo mode banner */}
-      <div className="mb-6 flex items-start gap-2.5 rounded-xl border border-blue-200 bg-blue-50 p-3 dark:border-blue-800 dark:bg-blue-950/30">
-        <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-blue-600 dark:text-blue-300" />
-        <p className="text-sm text-blue-700 dark:text-blue-300">
-          Demo mode — no real charges will be made to this card
-        </p>
-      </div>
-
-      {/* Card inputs (disabled, pre-filled) */}
-      <div className="mb-6 space-y-4">
-        <div>
-          <label className="mb-2 block text-sm font-medium text-text-primary">
-            Card number
-          </label>
-          <div className="flex items-center rounded-xl border border-blush/60 bg-bg-primary px-4 py-3">
-            <CreditCard className="mr-3 h-4 w-4 text-text-primary/40" />
-            <input
-              type="text"
-              disabled
-              value="4242 4242 4242 4242"
-              className="w-full bg-transparent text-sm text-text-primary/80 opacity-80"
-            />
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="mb-2 block text-sm font-medium text-text-primary">
-              Expiry
-            </label>
-            <input
-              type="text"
-              disabled
-              value="12 / 28"
-              className="w-full rounded-xl border border-blush/60 bg-bg-primary px-4 py-3 text-sm text-text-primary/80 opacity-80"
-            />
-          </div>
-          <div>
-            <label className="mb-2 block text-sm font-medium text-text-primary">
-              CVC
-            </label>
-            <input
-              type="text"
-              disabled
-              value="123"
-              className="w-full rounded-xl border border-blush/60 bg-bg-primary px-4 py-3 text-sm text-text-primary/80 opacity-80"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Total */}
-      <div className="mb-6 rounded-xl bg-bg-primary p-4">
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-text-primary/60">Total</span>
-          <span className="text-lg font-bold text-text-primary">
-            {formatPrice(event.price)}
-          </span>
-        </div>
-      </div>
-
-      {/* Error alert */}
-      {error && <ErrorAlert message={error} />}
-
-      {/* Buttons */}
-      <div className="flex gap-3">
-        <button
-          onClick={onBack}
-          className="flex-1 rounded-2xl border border-blush/60 py-4 text-sm font-semibold text-text-primary transition-all hover:bg-bg-primary"
-        >
-          Back
-        </button>
-        <button
-          onClick={onSubmit}
-          disabled={isPending}
-          className="flex-[2] rounded-2xl bg-charcoal py-4 text-sm font-semibold text-white transition-all hover:bg-charcoal/90 active:scale-[0.98] disabled:opacity-60"
-        >
-          {isPending ? (
-            <span className="flex items-center justify-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Processing…
-            </span>
-          ) : (
-            <span className="flex items-center justify-center gap-2">
-              <Lock className="h-3.5 w-3.5" />
-              Pay {formatPrice(event.price)}
-            </span>
-          )}
-        </button>
-      </div>
-
-      {/* Stripe footer */}
-      <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-text-primary/40">
-        <Lock className="h-3 w-3" />
-        Powered by Stripe
-      </p>
-    </motion.div>
-  );
-}
+// P2-7a: the mocked in-modal PaymentStep was removed — the paid flow now
+// redirects to Stripe-hosted Checkout. See handleBook() above.
 
 // ── Ticket Card (confirmation) ───────────────────────────────────────────────
 
