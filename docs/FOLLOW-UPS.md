@@ -202,6 +202,36 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 **Action:** New page under `src/app/(admin)/admin/notifications/failed/page.tsx` listing `notifications` where `channel='email' AND status='failed'`, with a "Retry" button that invokes `sendEmail()` with the stored `body`/`subject`/`recipient_email`.
 **Priority:** Medium — lands in P2-9.
 
+### `sendWithLog` silently drops sends on non-dedupe insert failure
+**Source:** P2-5 code review
+**Rationale:** In the daily edge function, if the `notifications` INSERT fails with anything other than 23505 (e.g. transient connection hiccup, CHECK violation), we log via `console.error` and return `false` — the email is never attempted and the retry loop can't see it (retry queries for `status='failed'` rows, but this row was never written). So drops are invisible.
+**Action:** Either attempt the send before writing the audit row (and log both outcomes), or emit a distinct `Sentry.captureException` with `tags: { surface: 'edge-function-audit-insert' }` so these drops don't hide among legitimate 23505s in log volume. `supabase/functions/daily-notifications/index.ts:461-468`.
+**Priority:** Low — path is monitored via console.error → Sentry, but misclassified.
+
+### Retry loop doesn't filter by event state
+**Source:** P2-5 code review
+**Rationale:** `processRetries` re-sends any failed `notifications.email` row < 3 days old without checking whether the underlying event was subsequently cancelled or soft-deleted. A cancelled event producing a retry-delivered reminder the next day would be confusing.
+**Action:** When retrying, re-parse the `template_name` / `dedupe_key` to recover the event id, then skip if the event is now `is_cancelled = true` or `deleted_at IS NOT NULL`. Or (simpler) store `recipient_event_id` on the reminder rows (it's currently only populated for admin announcements) and filter on that in the retry query. `supabase/functions/daily-notifications/index.ts:358-384`.
+**Priority:** Low — rare edge case at current event volume.
+
+### Retry path has a theoretical double-send race under concurrent invocation
+**Source:** P2-5 code review
+**Rationale:** If the function is invoked twice concurrently (manual backfill while cron fires), two runs could both pick up the same failed row, both re-send, both update `retried_at`. The 12-hour cooldown window makes this unlikely in practice but not impossible.
+**Action:** 2-line mitigation: change the retry `UPDATE` to an optimistic guard — `.eq('retried_at', row.retried_at ?? null)` — so the second concurrent update no-ops. Or use a `SELECT ... FOR UPDATE SKIP LOCKED` via an RPC. The first option is cheaper.
+**Priority:** Very low.
+
+### No attendee-batch cap in the daily function
+**Source:** P2-5 code review
+**Rationale:** The function sends to every confirmed attendee sequentially in a single run. At Resend free-tier rate limits (~2 req/sec) a 600-attendee event would need ~5 min which is close to the edge function timeout. Not an issue at demo scale (20-40 attendees) but a trap for Phase 3.
+**Action:** Introduce a batch loop with a sleep between batches (e.g. 20 per second). Or use Resend's batch-send API (`resend.batch.send`) which bundles up to 100 recipients in one call. `supabase/functions/daily-notifications/index.ts:176-200`.
+**Priority:** Low — revisit before growth.
+
+### `type: 'reminder'` hardcoded for all new system-email rows
+**Source:** P2-5 code review
+**Rationale:** `sendWithLog` inserts every new row with `type = 'reminder'` regardless of whether it's `venue_reveal`, `review_request`, `reminder_2day`, or `reminder_today`. Column is informational only (no code branches on it) so not a bug, but it makes the admin notifications view misleading.
+**Action:** Either extend the `notification_type` enum with `venue_reveal` + `review_request`, or map to the closest existing value (`event_update` for venue_reveal; `reminder` stays for the two reminder variants). Enum change is cleaner but requires a migration.
+**Priority:** Very low.
+
 ### Hide venue on public event listing cards
 **Source:** P2-5 frontend
 **Rationale:** `EventCard.tsx` still shows `venue_name` on listing cards. The P2-5 plan scopes the reveal gate to the event detail page, so cards are unchanged for now. Arguably the venue name on the card is part of the teaser; arguably it should be hidden for consistency with the detail page.
