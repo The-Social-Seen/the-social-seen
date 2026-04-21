@@ -3,21 +3,17 @@
 import Image from "next/image";
 import { motion } from "framer-motion";
 import { Quote, Star } from "lucide-react";
-import { pastEvents } from "@/data/events";
 import { cn } from "@/lib/utils/cn";
-import type { LegacyEventReview as EventReview } from "@/types";
+import { resolveAvatarUrl } from "@/lib/utils/images";
+import type { HomepageReview } from "@/lib/supabase/queries/reviews";
 
-function getTopReviews(): EventReview[] {
-  const allReviews = pastEvents
-    .filter((e) => e.reviews && e.reviews.length > 0)
-    .flatMap((e) => e.reviews!);
-
-  return allReviews.sort((a, b) => b.rating - a.rating).slice(0, 3);
+interface TestimonialsSectionProps {
+  reviews: HomepageReview[];
 }
 
 function StarRating({ rating }: { rating: number }) {
   return (
-    <div className="flex gap-1">
+    <div className="flex gap-1" aria-label={`${rating} out of 5 stars`}>
       {Array.from({ length: 5 }).map((_, i) => (
         <Star
           key={i}
@@ -25,7 +21,7 @@ function StarRating({ rating }: { rating: number }) {
             "h-4 w-4",
             i < rating
               ? "fill-gold text-gold"
-              : "fill-none text-text-tertiary/40"
+              : "fill-none text-text-tertiary/40",
           )}
         />
       ))}
@@ -51,13 +47,23 @@ const cardVariants = {
   },
 };
 
-export function TestimonialsSection() {
-  const topReviews = getTopReviews();
+function getInitials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+export function TestimonialsSection({ reviews }: TestimonialsSectionProps) {
+  // Empty state — render nothing rather than a stub. Once events have
+  // run and members have left reviews, the section appears.
+  if (reviews.length === 0) return null;
 
   return (
     <section className="bg-charcoal px-6 py-24 md:py-32">
       <div className="mx-auto max-w-6xl">
-        {/* Section header */}
         <motion.div
           initial={{ opacity: 0, y: 30 }}
           whileInView={{ opacity: 1, y: 0 }}
@@ -73,7 +79,6 @@ export function TestimonialsSection() {
           </h2>
         </motion.div>
 
-        {/* Testimonials cards */}
         <motion.div
           className="grid gap-8 md:grid-cols-3"
           variants={containerVariants}
@@ -81,47 +86,52 @@ export function TestimonialsSection() {
           whileInView="visible"
           viewport={{ once: true, margin: "-50px" }}
         >
-          {topReviews.map((review) => (
+          {reviews.map((review) => {
+            const avatar = resolveAvatarUrl(review.author.avatar_url);
+            return (
             <motion.div
               key={review.id}
               variants={cardVariants}
               className="group relative rounded-2xl bg-white/5 p-8 backdrop-blur-sm transition-colors hover:bg-white/10"
             >
-              {/* Quote icon */}
               <Quote className="mb-6 h-8 w-8 text-gold/40" />
 
-              {/* Review text */}
               <p className="mb-8 font-sans text-base italic leading-relaxed text-white/80">
-                &ldquo;{review.reviewText}&rdquo;
+                &ldquo;{review.review_text}&rdquo;
               </p>
 
-              {/* Rating */}
               <div className="mb-6">
                 <StarRating rating={review.rating} />
               </div>
 
-              {/* Author */}
               <div className="flex items-center gap-4">
-                <div className="relative h-12 w-12 overflow-hidden rounded-full">
-                  <Image
-                    src={review.userAvatar}
-                    alt={review.userName}
-                    fill
-                    className="object-cover"
-                    sizes="48px"
-                  />
+                <div className="relative h-12 w-12 overflow-hidden rounded-full bg-gold/20">
+                  {avatar ? (
+                    <Image
+                      src={avatar}
+                      alt={review.author.full_name}
+                      fill
+                      className="object-cover"
+                      sizes="48px"
+                    />
+                  ) : (
+                    <span className="flex h-full w-full items-center justify-center text-sm font-semibold text-gold">
+                      {getInitials(review.author.full_name)}
+                    </span>
+                  )}
                 </div>
-                <div>
-                  <p className="font-sans text-sm font-semibold text-white">
-                    {review.userName}
+                <div className="min-w-0">
+                  <p className="truncate font-sans text-sm font-semibold text-white">
+                    {review.author.full_name}
                   </p>
-                  <p className="font-sans text-xs text-white/50">
-                    Verified Member
+                  <p className="truncate font-sans text-xs text-white/50">
+                    {review.event.title || "Verified Member"}
                   </p>
                 </div>
               </div>
             </motion.div>
-          ))}
+            );
+          })}
         </motion.div>
       </div>
     </section>

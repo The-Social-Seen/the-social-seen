@@ -7,6 +7,7 @@ interface MockQueryBuilder {
   eq: ReturnType<typeof vi.fn>
   neq: ReturnType<typeof vi.fn>
   is: ReturnType<typeof vi.fn>
+  not: ReturnType<typeof vi.fn>
   lt: ReturnType<typeof vi.fn>
   in: ReturnType<typeof vi.fn>
   order: ReturnType<typeof vi.fn>
@@ -27,7 +28,7 @@ function createQueryBuilder(): MockQueryBuilder {
 
   const builder = {} as MockQueryBuilder
   const chainMethods: (keyof MockQueryBuilder)[] = [
-    'select', 'eq', 'neq', 'is', 'lt', 'in', 'order', 'limit', 'single', 'maybeSingle',
+    'select', 'eq', 'neq', 'is', 'not', 'lt', 'in', 'order', 'limit', 'single', 'maybeSingle',
   ]
 
   for (const method of chainMethods) {
@@ -71,7 +72,7 @@ vi.mock('@/lib/supabase/server', () => ({
 
 // ── Import after mocks ──────────────────────────────────────────────────────
 
-import { getReviewableEvents } from '../reviews'
+import { getReviewableEvents, getTopHomepageReviews } from '../reviews'
 
 // ── Setup ───────────────────────────────────────────────────────────────────
 
@@ -140,6 +141,63 @@ describe('getReviewableEvents', () => {
     expect(console.error).toHaveBeenCalledWith(
       '[getReviewableEvents]',
       'connection refused'
+    )
+  })
+})
+
+// ── getTopHomepageReviews (P2-10) ──────────────────────────────────────────
+
+describe('getTopHomepageReviews', () => {
+  it('filters by is_visible=true and excludes empty review_text', async () => {
+    const builder = createQueryBuilder()
+    builder.mockResolve([])
+    fromBuilders['event_reviews'] = builder
+
+    await getTopHomepageReviews(3)
+
+    expect(builder.eq).toHaveBeenCalledWith('is_visible', true)
+    expect(builder.not).toHaveBeenCalledWith('review_text', 'is', null)
+    expect(builder.neq).toHaveBeenCalledWith('review_text', '')
+    // Order chain: rating desc THEN created_at desc.
+    const orderCalls = builder.order.mock.calls
+    expect(orderCalls[0]).toEqual(['rating', { ascending: false }])
+    expect(orderCalls[1]).toEqual(['created_at', { ascending: false }])
+    expect(builder.limit).toHaveBeenCalledWith(3)
+  })
+
+  it('normalises Supabase array-shape joins to single objects', async () => {
+    const builder = createQueryBuilder()
+    builder.mockResolve([
+      {
+        id: 'r1',
+        rating: 5,
+        review_text: 'Brilliant evening.',
+        created_at: '2026-04-20T10:00:00Z',
+        // Supabase sometimes returns FK joins as arrays even for single FKs.
+        author: [{ full_name: 'Anna Lee', avatar_url: null }],
+        event: { slug: 'wine-night', title: 'Wine Night' },
+      },
+    ])
+    fromBuilders['event_reviews'] = builder
+
+    const reviews = await getTopHomepageReviews()
+
+    expect(reviews).toHaveLength(1)
+    expect(reviews[0].author.full_name).toBe('Anna Lee')
+    expect(reviews[0].event.slug).toBe('wine-night')
+  })
+
+  it('returns empty array on query error and logs', async () => {
+    const builder = createQueryBuilder()
+    builder.mockReject('connection refused')
+    fromBuilders['event_reviews'] = builder
+
+    const reviews = await getTopHomepageReviews()
+
+    expect(reviews).toEqual([])
+    expect(console.error).toHaveBeenCalledWith(
+      '[getTopHomepageReviews]',
+      'connection refused',
     )
   })
 })

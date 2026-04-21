@@ -225,3 +225,42 @@ ${renderButton('Leave a Review', reviewUrl)}
   const html = renderShell('A quick review helps other members pick events.', body)
   return { subject, html, text: htmlToText(html) }
 }
+
+// ── Profile completion nudge ────────────────────────────────────────────────
+
+export interface ProfileNudgeInput {
+  fullName: string
+  /** 0–100 integer percentage. Always < 50 when this template fires. */
+  completionScore: number
+  /** Up to 3 human-readable labels of high-impact missing fields. */
+  topMissingLabels: string[]
+  siteUrl: string
+}
+
+export function profileNudgeTemplate(input: ProfileNudgeInput): Rendered {
+  const firstName = input.fullName.split(/\s+/)[0] || input.fullName
+  const profileUrl = `${input.siteUrl}/profile`
+  const subject = 'Finish setting up your profile'
+
+  const missingHtml = input.topMissingLabels.length
+    ? `<ul style="margin:0 0 24px 0;padding-left:20px;color:${COLORS.charcoal};">${input.topMissingLabels
+        .map(
+          (l) =>
+            `<li style="margin:0 0 4px 0;">${escapeHtml(l)}</li>`,
+        )
+        .join('')}</ul>`
+    : ''
+
+  const body = `<h1 style="margin:0 0 16px 0;font-family:${SERIF_STACK};font-size:28px;font-weight:bold;color:${COLORS.charcoal};">A few more details and you&rsquo;re set.</h1>
+<p style="margin:0 0 16px 0;">Hi ${escapeHtml(firstName)} &mdash; welcome to The Social Seen. Your profile is currently <strong>${input.completionScore}%</strong> complete.</p>
+<p style="margin:0 0 16px 0;">Members with a fuller profile get more out of events &mdash; hosts know who they&rsquo;re welcoming, and other members can find common ground before turning up. The biggest wins:</p>
+${missingHtml}
+${renderButton('Complete My Profile', profileUrl)}
+<p style="margin:32px 0 0 0;font-size:14px;color:${COLORS.textSecondary};">See you at an event soon.</p>
+<p style="margin:8px 0 0 0;color:${COLORS.textSecondary};font-size:14px;">&mdash; The Social Seen team</p>`
+  const html = renderShell(
+    `Your profile is ${input.completionScore}% complete \u2014 a few quick wins below.`,
+    body,
+  )
+  return { subject, html, text: htmlToText(html) }
+}
