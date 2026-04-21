@@ -158,14 +158,17 @@ If unset, the cron job NOTICEs and exits — safe to apply migrations before thi
 
 ### 5. Known follow-ups (live in `docs/FOLLOW-UPS.md`)
 
-At end of Sprint 2: ~25 items across security/UX/testing/analytics/docs. Highlights worth knowing before Sprint 3:
+At end of Sprint 2: **44 live items** in `docs/FOLLOW-UPS.md` across security / UX / analytics / testing / docs / P2-6 cleanup / P2-8a+b cleanup / operator setup / Phase 3 ideas. Highlights worth knowing before Sprint 3:
 
 - **Dialog a11y** — 3 dialogs in the codebase (`BookingCancelledHandler` toast, `MemberModerationDialog`, `DataPrivacySection` delete dialog) lack focus trap + Escape-key. Radix Dialog is in deps. Bundle into a focused a11y PR or alongside WCAG AA audit.
 - **Middleware DB round-trip per auth request** — reads `profiles.status` on every authenticated request. Phase 3 fix: JWT custom claim via Supabase auth hook.
+- **Middleware deleted_at gap** — parallel to the ban check; defence-in-depth for the rare `auth.signOut` silent-fail path during account deletion.
 - **Image-host allowlist sync test** — one-liner test asserting `ALLOWED_IMAGE_HOSTS` matches `next.config.ts`. Prevents drift.
-- **`sanitise_user_notifications` recipient gap** — current RPC scrubs rows where user was sender, not recipient. Admin attendee-messaging (P2-9) will introduce recipient rows and needs this fix.
+- **`sanitise_user_notifications` recipient gap** — current RPC scrubs rows where user was sender, not recipient. Admin attendee-messaging (P2-9) will introduce recipient rows and must extend the RPC as part of that batch (GDPR completeness).
+- **`?account_deleted=1` lands silently on the homepage** — no visible confirmation. Small `BookingCancelledHandler`-style component would fix.
 - **Admin retry UI for failed notifications** — P2-5 plan parked this; P2-9 picks it up.
 - **WCAG AA audit** — gold on white contrast flagged for small-text cases.
+- **Legal-page "Last updated" dates** — hardcoded in two places; extract to a shared constant.
 
 ### 6. Unchanged context still relevant (from Sprint 1 handover)
 
