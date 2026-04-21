@@ -5,11 +5,13 @@ import { revalidatePath } from 'next/cache'
 import { uniqueSlug } from '@/lib/utils/slugify'
 import { z } from 'zod'
 import type {
+  BookingStatus,
   EventCategory,
   EventWithStats,
   MemberWithStats,
   NotificationRecipient,
   NotificationType,
+  UserStatus,
 } from '@/types'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -960,4 +962,165 @@ export async function getNotificationHistory() {
   if (error) throw new Error('Failed to fetch notifications')
 
   return data ?? []
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// P2-8a — Member moderation
+// ════════════════════════════════════════════════════════════════════════════
+
+const moderationSchema = z.object({
+  memberId: z.string().uuid('Invalid member id'),
+  reason: z
+    .string()
+    .trim()
+    .min(3, 'Please enter a reason (3+ chars)')
+    .max(500, 'Reason is too long (max 500 chars)'),
+})
+
+/**
+ * Shared implementation for ban/suspend/reinstate. Records the
+ * moderation audit columns (reason, actor, timestamp) atomically with
+ * the status change. Refuses:
+ *   - self-moderation (an admin can't ban themselves)
+ *   - moderation of other admins (defence against compromised admin
+ *     accidentally locking out the team; admins must use the DB
+ *     directly to moderate each other, which is intentional friction).
+ *
+ * Reinstate paths pass reason = 'Reinstated' by default — the audit
+ * column stays populated so the history is preserved.
+ */
+async function setMemberStatus(args: {
+  memberId: string
+  newStatus: UserStatus
+  reason: string
+}): Promise<{ success: true } | { error: string }> {
+  const { supabase, userId: adminId } = await requireAdmin()
+
+  if (args.memberId === adminId) {
+    return { error: 'You can\u2019t moderate your own account.' }
+  }
+
+  const parsed = moderationSchema.safeParse({
+    memberId: args.memberId,
+    reason: args.reason,
+  })
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Invalid input' }
+  }
+
+  const { data: target, error: fetchErr } = await supabase
+    .from('profiles')
+    .select('id, role')
+    .eq('id', args.memberId)
+    .is('deleted_at', null)
+    .single()
+  if (fetchErr || !target) {
+    return { error: 'Member not found' }
+  }
+  if (target.role === 'admin') {
+    return { error: 'Admin accounts can\u2019t be moderated via this UI.' }
+  }
+
+  const { error: updErr } = await supabase
+    .from('profiles')
+    .update({
+      status: args.newStatus,
+      moderation_reason: args.reason,
+      moderation_at: new Date().toISOString(),
+      moderation_by: adminId,
+    })
+    .eq('id', args.memberId)
+
+  if (updErr) {
+    console.error('[setMemberStatus]', updErr.message)
+    return { error: 'Could not update member status' }
+  }
+
+  revalidatePath('/admin/members')
+  revalidatePath(`/admin/members/${args.memberId}`)
+  return { success: true }
+}
+
+/** Suspend a member — keep login + browse, block booking. */
+export async function suspendMember(
+  memberId: string,
+  reason: string,
+): Promise<{ success: true } | { error: string }> {
+  return setMemberStatus({ memberId, newStatus: 'suspended', reason })
+}
+
+/** Ban a member — middleware signs them out on next request. */
+export async function banMember(
+  memberId: string,
+  reason: string,
+): Promise<{ success: true } | { error: string }> {
+  return setMemberStatus({ memberId, newStatus: 'banned', reason })
+}
+
+/**
+ * Restore an actioned member to 'active'. `reason` is optional; we
+ * default to "Reinstated" so the audit columns stay populated (the
+ * moderation history is preserved across reinstatements).
+ */
+export async function reinstateMember(
+  memberId: string,
+  reason: string = 'Reinstated',
+): Promise<{ success: true } | { error: string }> {
+  return setMemberStatus({ memberId, newStatus: 'active', reason })
+}
+
+// ── No-show tracking ──────────────────────────────────────────────────────
+
+/**
+ * Toggle a booking's status between `confirmed` and `no_show`. Only
+ * applies to confirmed bookings for past events — marking a no-show on
+ * an upcoming event is a no-op (doesn't make sense). Also refuses
+ * bookings that were cancelled or waitlisted.
+ *
+ * `on=true` → `no_show`; `on=false` → `confirmed` (undo the mark).
+ */
+export async function setNoShow(
+  bookingId: string,
+  on: boolean,
+): Promise<{ success: true } | { error: string }> {
+  const { supabase } = await requireAdmin()
+
+  if (!bookingId) return { error: 'Booking ID is required' }
+
+  // Fetch to verify the booking exists, belongs to a past event, and is
+  // in a valid source status for the toggle.
+  const { data: booking, error: fetchErr } = await supabase
+    .from('bookings')
+    .select('id, status, event:events!inner(date_time)')
+    .eq('id', bookingId)
+    .is('deleted_at', null)
+    .single()
+  if (fetchErr || !booking) return { error: 'Booking not found' }
+
+  const eventRow = Array.isArray(booking.event) ? booking.event[0] : booking.event
+  if (!eventRow || new Date((eventRow as { date_time: string }).date_time) > new Date()) {
+    return { error: 'No-show can only be marked for past events' }
+  }
+
+  const sourceStatus = on ? 'confirmed' : 'no_show'
+  const targetStatus: BookingStatus = on ? 'no_show' : 'confirmed'
+
+  if (booking.status !== sourceStatus) {
+    return {
+      error: on
+        ? 'Only confirmed bookings can be marked no-show'
+        : 'Only no-show bookings can be reverted',
+    }
+  }
+
+  const { error: updErr } = await supabase
+    .from('bookings')
+    .update({ status: targetStatus })
+    .eq('id', bookingId)
+    .eq('status', sourceStatus)
+  if (updErr) return { error: updErr.message }
+
+  revalidatePath('/admin/events')
+  revalidatePath('/admin/members')
+  return { success: true }
 }

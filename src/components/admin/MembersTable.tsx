@@ -3,11 +3,12 @@
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useState, useEffect, useTransition } from 'react'
 import Image from 'next/image'
-import { Download, Search } from 'lucide-react'
+import { Download, Search, ShieldAlert } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { cn } from '@/lib/utils/cn'
 import { exportMembersCSV } from '@/app/(admin)/admin/actions'
-import type { MemberWithStats } from '@/types'
+import type { MemberWithStats, UserStatus } from '@/types'
+import MemberModerationDialog from './MemberModerationDialog'
 
 interface MembersTableProps {
   members: MemberWithStats[]
@@ -19,11 +20,39 @@ const SORT_OPTIONS = [
   { value: 'alphabetical', label: 'Alphabetical' },
 ] as const
 
+function statusBadge(status: UserStatus) {
+  switch (status) {
+    case 'active':
+      return (
+        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:bg-emerald-950/30 dark:text-emerald-400">
+          Active
+        </span>
+      )
+    case 'suspended':
+      return (
+        <span className="rounded-full bg-gold/10 px-2 py-0.5 text-xs font-medium text-gold">
+          Suspended
+        </span>
+      )
+    case 'banned':
+      return (
+        <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-600 dark:bg-red-950/30 dark:text-red-400">
+          Banned
+        </span>
+      )
+  }
+}
+
 export default function MembersTable({ members }: MembersTableProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [search, setSearch] = useState(searchParams.get('search') ?? '')
   const [isExporting, startExport] = useTransition()
+  const [moderating, setModerating] = useState<{
+    id: string
+    full_name: string
+    status: UserStatus
+  } | null>(null)
 
   // Debounced search via URL params
   useEffect(() => {
@@ -108,6 +137,8 @@ export default function MembersTable({ members }: MembersTableProps) {
                 <th className="pb-3 font-medium text-text-tertiary hidden lg:table-cell">Company</th>
                 <th className="pb-3 font-medium text-text-tertiary hidden md:table-cell">Events</th>
                 <th className="pb-3 font-medium text-text-tertiary hidden md:table-cell">Joined</th>
+                <th className="pb-3 font-medium text-text-tertiary">Status</th>
+                <th className="pb-3 font-medium text-text-tertiary text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -150,11 +181,42 @@ export default function MembersTable({ members }: MembersTableProps) {
                   <td className="py-3 pr-4 text-text-tertiary hidden md:table-cell whitespace-nowrap">
                     {formatDistanceToNow(new Date(member.created_at), { addSuffix: true })}
                   </td>
+                  <td className="py-3 pr-4">
+                    {statusBadge(member.status)}
+                  </td>
+                  <td className="py-3 text-right">
+                    {member.role === 'admin' ? (
+                      <span className="text-xs text-text-tertiary">—</span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setModerating({
+                            id: member.id,
+                            full_name: member.full_name,
+                            status: member.status,
+                          })
+                        }
+                        className="inline-flex items-center gap-1 rounded-full border border-border px-3 py-1 text-xs font-medium text-text-primary hover:bg-bg-secondary"
+                      >
+                        <ShieldAlert className="h-3 w-3" />
+                        Moderate
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+
+      {moderating && (
+        <MemberModerationDialog
+          open={true}
+          member={moderating}
+          onClose={() => setModerating(null)}
+        />
       )}
     </div>
   )

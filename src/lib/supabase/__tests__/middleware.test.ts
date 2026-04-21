@@ -6,10 +6,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // ---------------------------------------------------------------------------
 
 const mockGetUser = vi.fn()
+const mockProfileStatus = vi.fn(() => ({ data: { status: 'active' }, error: null }))
+const mockSignOut = vi.fn()
 
 vi.mock('@supabase/ssr', () => ({
   createServerClient: vi.fn(() => ({
-    auth: { getUser: mockGetUser },
+    auth: {
+      getUser: mockGetUser,
+      signOut: mockSignOut,
+    },
+    from: vi.fn(() => ({
+      select: vi.fn(() => ({
+        eq: vi.fn(() => ({
+          single: () => Promise.resolve(mockProfileStatus()),
+        })),
+      })),
+    })),
   })),
 }))
 
@@ -225,6 +237,57 @@ describe('updateSession middleware', () => {
 
     await updateSession(makeRequest('/bookings'))
 
+    expect(NextResponse.redirect).not.toHaveBeenCalled()
+  })
+
+  // ── P2-8a: banned-user enforcement ───────────────────────────────────────
+
+  it('signs out and redirects to /account-suspended when user is banned', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'banned-user', email: 'b@example.com' } },
+    })
+    mockProfileStatus.mockReturnValueOnce({
+      data: { status: 'banned' },
+      error: null,
+    })
+
+    await updateSession(makeRequest('/events'))
+
+    expect(mockSignOut).toHaveBeenCalledTimes(1)
+    expect(NextResponse.redirect).toHaveBeenCalled()
+    const redirectUrl = (NextResponse.redirect as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(redirectUrl.pathname).toBe('/account-suspended')
+  })
+
+  it('does NOT sign out a suspended user (they can still browse)', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'suspended-user', email: 's@example.com' } },
+    })
+    mockProfileStatus.mockReturnValueOnce({
+      data: { status: 'suspended' },
+      error: null,
+    })
+
+    await updateSession(makeRequest('/events'))
+
+    expect(mockSignOut).not.toHaveBeenCalled()
+    expect(NextResponse.redirect).not.toHaveBeenCalled()
+  })
+
+  it('does NOT re-redirect on /account-suspended itself (avoids loop)', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'banned-user', email: 'b@example.com' } },
+    })
+    mockProfileStatus.mockReturnValueOnce({
+      data: { status: 'banned' },
+      error: null,
+    })
+
+    await updateSession(makeRequest('/account-suspended'))
+
+    // Signed-out flow doesn't fire the redirect when we're already on
+    // the target page — guard against an infinite redirect loop.
+    expect(mockSignOut).not.toHaveBeenCalled()
     expect(NextResponse.redirect).not.toHaveBeenCalled()
   })
 })

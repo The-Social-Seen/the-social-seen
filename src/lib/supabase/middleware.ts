@@ -69,6 +69,42 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(redirectUrl)
   }
 
+  // P2-8a: banned-user enforcement.
+  //
+  // When an admin bans a member (profiles.status = 'banned'), we want
+  // that to take effect on their next request without having to wait
+  // for the Supabase session cookie to expire. We:
+  //   1. Read the status column for the authenticated user.
+  //   2. If banned, sign them out (revokes cookies) and redirect to
+  //      /account-suspended. Any further request is handled as
+  //      unauthenticated until they log back in, at which point this
+  //      check fires again.
+  //
+  // Done in middleware rather than layout/page so it catches BOTH
+  // protected and public routes (a banned user shouldn't be able to
+  // maintain a session by hitting the landing page either).
+  //
+  // Suspended users are NOT signed out — they can browse events, just
+  // not book. That gate is in the booking RPCs.
+  //
+  // Skipped on /account-suspended itself to avoid a redirect loop if
+  // the cookie hasn't cleared yet.
+  if (user && pathname !== '/account-suspended') {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('status')
+      .eq('id', user.id)
+      .single()
+
+    if (profile?.status === 'banned') {
+      await supabase.auth.signOut()
+      const redirectUrl = request.nextUrl.clone()
+      redirectUrl.pathname = '/account-suspended'
+      redirectUrl.search = ''
+      return NextResponse.redirect(redirectUrl)
+    }
+  }
+
   // Forward pathname to root layout so it can conditionally render Header/Footer
   supabaseResponse.headers.set('x-pathname', pathname)
 

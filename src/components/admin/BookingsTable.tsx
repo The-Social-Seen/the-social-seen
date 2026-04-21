@@ -2,9 +2,9 @@
 
 import { useState, useTransition } from 'react'
 import { formatDistanceToNow } from 'date-fns'
-import { Download } from 'lucide-react'
+import { Download, UserX, Undo2 } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
-import { exportEventAttendeesCSV } from '@/app/(admin)/admin/actions'
+import { exportEventAttendeesCSV, setNoShow } from '@/app/(admin)/admin/actions'
 import PromoteButton from './PromoteButton'
 
 interface BookingRow {
@@ -48,13 +48,20 @@ function paymentBadge(b: BookingRow) {
 interface BookingsTableProps {
   bookings: BookingRow[]
   eventId: string
+  /**
+   * P2-8a: true if the event's date_time is in the past. Enables the
+   * "Mark No-Show" toggle on confirmed attendee rows.
+   */
+  isPastEvent?: boolean
 }
 
+// P2-8a: no_show is a new admin-visible status.
 const TABS = [
   { key: 'all', label: 'All' },
   { key: 'confirmed', label: 'Confirmed' },
   { key: 'waitlisted', label: 'Waitlisted' },
   { key: 'cancelled', label: 'Cancelled' },
+  { key: 'no_show', label: 'No-shows' },
 ] as const
 
 function statusBadge(status: string) {
@@ -72,7 +79,11 @@ function statusBadge(status: string) {
   }
 }
 
-export default function BookingsTable({ bookings, eventId }: BookingsTableProps) {
+export default function BookingsTable({
+  bookings,
+  eventId,
+  isPastEvent = false,
+}: BookingsTableProps) {
   const [activeTab, setActiveTab] = useState<string>('all')
   const [isExporting, startExport] = useTransition()
 
@@ -169,6 +180,12 @@ export default function BookingsTable({ bookings, eventId }: BookingsTableProps)
                       {booking.status === 'waitlisted' && (
                         <PromoteButton bookingId={booking.id} />
                       )}
+                      {isPastEvent && booking.status === 'confirmed' && (
+                        <NoShowButton bookingId={booking.id} on={true} />
+                      )}
+                      {isPastEvent && booking.status === 'no_show' && (
+                        <NoShowButton bookingId={booking.id} on={false} />
+                      )}
                     </td>
                   </tr>
                 )
@@ -178,5 +195,45 @@ export default function BookingsTable({ bookings, eventId }: BookingsTableProps)
         </div>
       )}
     </div>
+  )
+}
+
+// ── Per-row no-show toggle ────────────────────────────────────────────────
+
+/**
+ * `on={true}` — promote confirmed → no_show.
+ * `on={false}` — revert no_show → confirmed (undo a mistaken mark).
+ */
+function NoShowButton({ bookingId, on }: { bookingId: string; on: boolean }) {
+  const [isPending, startTransition] = useTransition()
+  const [error, setError] = useState<string | null>(null)
+
+  function handleClick() {
+    setError(null)
+    startTransition(async () => {
+      const result = await setNoShow(bookingId, on)
+      if ('error' in result) setError(result.error)
+    })
+  }
+
+  return (
+    <span className="inline-flex flex-col items-end gap-0.5">
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={isPending}
+        title={on ? 'Mark this attendee as a no-show' : 'Undo no-show — restore to confirmed'}
+        className={cn(
+          'inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50',
+          on
+            ? 'border-danger/30 text-danger hover:bg-danger/5'
+            : 'border-border text-text-primary hover:bg-bg-secondary',
+        )}
+      >
+        {on ? <UserX className="h-3 w-3" /> : <Undo2 className="h-3 w-3" />}
+        {isPending ? '…' : on ? 'No-show' : 'Undo'}
+      </button>
+      {error && <span className="text-[10px] text-danger">{error}</span>}
+    </span>
   )
 }

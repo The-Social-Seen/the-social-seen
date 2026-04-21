@@ -1,0 +1,25 @@
+-- Migration: stripe_customer_id_revoke_authenticated (P2-8a follow-up)
+--
+-- Tightens the column grants on `profiles.stripe_customer_id` to match
+-- the "secure by default" model established in P2-2.
+--
+-- Context: migration 20260422000001 (P2-7a) added `stripe_customer_id`
+-- and REVOKEd SELECT from `anon`. It did NOT revoke from `authenticated`
+-- — an oversight flagged during the P2-8a code review while applying
+-- the same lesson to moderation_* columns.
+--
+-- Exposure: without this revoke, a logged-in member could query
+--   /rest/v1/profiles?select=stripe_customer_id
+-- and see every other member's Stripe Customer id. The id itself isn't
+-- directly exploitable (Stripe requires secret-key auth for operations
+-- on the customer) but it's PII in the GDPR sense (links a
+-- pseudonymous identifier to a known member), and leaking internal
+-- payment-provider ids is a bad pattern.
+--
+-- Fix: REVOKE from authenticated. Paid-booking Server Actions use the
+-- admin client (service_role) for the lazy-customer-create path
+-- (`ensureStripeCustomer` in `src/lib/stripe/checkout.ts`), so admin
+-- writes are unaffected. No user-side code reads `stripe_customer_id`
+-- directly — Stripe Checkout Sessions are created server-side.
+
+REVOKE SELECT (stripe_customer_id) ON public.profiles FROM authenticated;
