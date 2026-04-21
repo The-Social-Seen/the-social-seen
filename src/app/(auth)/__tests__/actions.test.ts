@@ -6,6 +6,8 @@ const mockSignUp = vi.fn()
 const mockSignInWithPassword = vi.fn()
 const mockGetUser = vi.fn()
 const mockFrom = vi.fn()
+const mockSignInWithOtp = vi.fn()
+const mockVerifyOtp = vi.fn()
 
 vi.mock('@/lib/supabase/server', () => ({
   createServerClient: vi.fn(() =>
@@ -14,6 +16,8 @@ vi.mock('@/lib/supabase/server', () => ({
         signUp: mockSignUp,
         signInWithPassword: mockSignInWithPassword,
         getUser: mockGetUser,
+        signInWithOtp: mockSignInWithOtp,
+        verifyOtp: mockVerifyOtp,
       },
       from: mockFrom,
     })
@@ -29,7 +33,14 @@ vi.mock('next/navigation', () => ({
   redirect: vi.fn(),
 }))
 
-import { signUp, signIn, saveInterests, completeOnboarding } from '../actions'
+import {
+  signUp,
+  signIn,
+  saveInterests,
+  completeOnboarding,
+  sendVerificationOtp,
+  verifyEmailOtp,
+} from '../actions'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -401,5 +412,185 @@ describe('completeOnboarding', () => {
     expect(mockFrom).toHaveBeenCalledWith('profiles')
     expect(chain.update).toHaveBeenCalledWith({ onboarding_complete: true })
     expect(chain.eq).toHaveBeenCalledWith('id', 'user-1')
+  })
+})
+
+describe('sendVerificationOtp', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('returns error when user is not authenticated', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: null },
+      error: { message: 'Not authenticated' },
+    })
+
+    const result = await sendVerificationOtp()
+
+    expect(result).toHaveProperty('error')
+    if ('error' in result) {
+      expect(result.error).toContain('signed in')
+    }
+    expect(mockSignInWithOtp).not.toHaveBeenCalled()
+  })
+
+  it('short-circuits with alreadyVerified flag when profile.email_verified is true', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'user-1', email: 'charlotte@example.com' } },
+      error: null,
+    })
+    // Profile lookup returns email_verified: true
+    mockSupabaseChain({ data: { email_verified: true }, error: null })
+
+    const result = await sendVerificationOtp()
+
+    // Caller (verify-form) keys off alreadyVerified to skip the code-entry screen.
+    expect(result).toEqual({ success: true, alreadyVerified: true })
+    // Should NOT trigger another OTP email for an already-verified user
+    expect(mockSignInWithOtp).not.toHaveBeenCalled()
+  })
+
+  it('calls signInWithOtp with shouldCreateUser: false when profile is unverified', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'user-1', email: 'charlotte@example.com' } },
+      error: null,
+    })
+    mockSupabaseChain({ data: { email_verified: false }, error: null })
+    mockSignInWithOtp.mockResolvedValue({ error: null })
+
+    const result = await sendVerificationOtp()
+
+    expect(result).toEqual({ success: true })
+    expect(mockSignInWithOtp).toHaveBeenCalledWith({
+      email: 'charlotte@example.com',
+      options: { shouldCreateUser: false },
+    })
+  })
+
+  it('surfaces friendly rate-limit message when Supabase returns rate-limit error', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'user-1', email: 'charlotte@example.com' } },
+      error: null,
+    })
+    mockSupabaseChain({ data: { email_verified: false }, error: null })
+    mockSignInWithOtp.mockResolvedValue({
+      error: { message: 'Email rate limit exceeded' },
+    })
+
+    const result = await sendVerificationOtp()
+
+    expect(result).toHaveProperty('error')
+    if ('error' in result) {
+      expect(result.error.toLowerCase()).toContain('wait')
+      // Must NOT leak raw Supabase message
+      expect(result.error).not.toContain('Email rate limit exceeded')
+    }
+  })
+
+  it('returns generic error when Supabase returns non-rate-limit error', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'user-1', email: 'charlotte@example.com' } },
+      error: null,
+    })
+    mockSupabaseChain({ data: { email_verified: false }, error: null })
+    mockSignInWithOtp.mockResolvedValue({
+      error: { message: 'Some internal failure' },
+    })
+
+    const result = await sendVerificationOtp()
+
+    expect(result).toHaveProperty('error')
+    if ('error' in result) {
+      expect(result.error).not.toContain('Some internal failure')
+    }
+  })
+})
+
+describe('verifyEmailOtp', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('returns error when code is too short', async () => {
+    const result = await verifyEmailOtp({ code: '12345' })
+    expect(result).toHaveProperty('error')
+    if ('error' in result) {
+      expect(result.error).toContain('6-digit')
+    }
+    expect(mockVerifyOtp).not.toHaveBeenCalled()
+  })
+
+  it('returns error when code contains letters', async () => {
+    const result = await verifyEmailOtp({ code: 'abcdef' })
+    expect(result).toHaveProperty('error')
+    expect(mockVerifyOtp).not.toHaveBeenCalled()
+  })
+
+  it('returns error when user is not authenticated', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: null },
+      error: { message: 'Not authenticated' },
+    })
+
+    const result = await verifyEmailOtp({ code: '123456' })
+
+    expect(result).toHaveProperty('error')
+    if ('error' in result) {
+      expect(result.error).toContain('signed in')
+    }
+    expect(mockVerifyOtp).not.toHaveBeenCalled()
+  })
+
+  it('calls verifyOtp with type "email" and the 6-digit token', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'user-1', email: 'charlotte@example.com' } },
+      error: null,
+    })
+    mockVerifyOtp.mockResolvedValue({ error: null })
+    mockSupabaseChain({ data: null, error: null })
+
+    const result = await verifyEmailOtp({ code: '123456' })
+
+    expect(result).toEqual({ success: true })
+    expect(mockVerifyOtp).toHaveBeenCalledWith({
+      email: 'charlotte@example.com',
+      token: '123456',
+      type: 'email',
+    })
+  })
+
+  it('sets email_verified = true on the profile on success', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'user-1', email: 'charlotte@example.com' } },
+      error: null,
+    })
+    mockVerifyOtp.mockResolvedValue({ error: null })
+    const chain = mockSupabaseChain({ data: null, error: null })
+
+    await verifyEmailOtp({ code: '123456' })
+
+    expect(mockFrom).toHaveBeenCalledWith('profiles')
+    expect(chain.update).toHaveBeenCalledWith({ email_verified: true })
+    expect(chain.eq).toHaveBeenCalledWith('id', 'user-1')
+  })
+
+  it('returns friendly "invalid or expired" message when verifyOtp fails', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'user-1', email: 'charlotte@example.com' } },
+      error: null,
+    })
+    mockVerifyOtp.mockResolvedValue({
+      error: { message: 'Token has expired or is invalid' },
+    })
+
+    const result = await verifyEmailOtp({ code: '999999' })
+
+    expect(result).toHaveProperty('error')
+    if ('error' in result) {
+      expect(result.error).toContain('invalid or has expired')
+      // Must NOT leak the raw Supabase message
+      expect(result.error).not.toContain('Token has expired or is invalid')
+    }
   })
 })
