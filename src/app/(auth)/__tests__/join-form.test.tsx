@@ -438,7 +438,13 @@ describe('JoinForm — Step 3 (Welcome)', () => {
 
   it('calls completeOnboarding on render', async () => {
     await advanceToStep3()
-    expect(mockCompleteOnboarding).toHaveBeenCalled()
+    // `completeOnboarding` fires in a mount-time `useEffect` after
+    // the step 3 transition. Wrap the assertion in `waitFor` so the
+    // microtask queue drains on slower CI runners — otherwise this
+    // test is flaky (caught in P2-8a + P2-8b CI runs).
+    await waitFor(() => {
+      expect(mockCompleteOnboarding).toHaveBeenCalled()
+    })
   })
 })
 

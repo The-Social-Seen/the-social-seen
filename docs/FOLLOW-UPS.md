@@ -139,11 +139,9 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 
 ## 🧪 Testing gaps
 
-### Flaky `join-form.test.tsx` Step 3 assertion
-**Source:** P2-8a CI run
-**Rationale:** `src/app/(auth)/__tests__/join-form.test.tsx > JoinForm — Step 3 (Welcome) > calls completeOnboarding on render` occasionally fails on GitHub Actions with `expected "vi.fn()" to be called at least once`. Passes locally and on the retry run. The test races `advanceToStep3()` (which triggers a Supabase call + state transitions) against `expect(mockCompleteOnboarding).toHaveBeenCalled()`. CI's slower runners don't reliably drain the microtask queue before the assertion.
-**Action:** Wrap the assertion in `waitFor(...)`, or `await flushPromises()` (e.g. two `await Promise.resolve()` before the expect). Pre-existing from Sprint 1 P2-2; low impact because the retry always passes. Tracking here so the next Sprint 1 touch-up can fix.
-**Priority:** Low.
+<!-- Resolved in P2-8b (PR #24): wrapped the assertion in `waitFor(...)`
+     after it flaked two CI runs in a row. Inline fix preferred over
+     another re-run. -->
 
 ### Dialog a11y — focus trap + Escape-key on moderation/delete/share dialogs
 **Source:** P2-7a + P2-8a + P2-8b code reviews
