@@ -18,24 +18,67 @@ function isAbsoluteUrl(value: string): boolean {
 }
 
 /**
+ * Hosts allowed through `next/image`. Must stay in sync with
+ * `next.config.ts` `images.remotePatterns`. If a seeded or admin-entered
+ * `image_url` points to a host not on this list, `next/image` would throw
+ * a runtime error — the `<GlobalError>` boundary would then replace the
+ * whole page. The resolve helpers below return `null` for disallowed
+ * hosts so the UI falls back to the placeholder instead.
+ *
+ * Entries are either a literal hostname or a `*.suffix` wildcard.
+ *
+ * Reason this lives here and not imported from `next.config.ts`: the Next
+ * config is not easily consumable at runtime (it's transformed by the
+ * Next build), and this file runs on both server and client.
+ */
+const ALLOWED_IMAGE_HOSTS: ReadonlyArray<string> = [
+  'images.unsplash.com',
+  '*.supabase.co',
+]
+
+export function isAllowedImageHost(url: string): boolean {
+  try {
+    const { hostname } = new URL(url)
+    return ALLOWED_IMAGE_HOSTS.some((pattern) => {
+      if (pattern.startsWith('*.')) {
+        // "*.supabase.co" matches "foo.supabase.co" but NOT "supabase.co"
+        // itself (consistent with next/image wildcard semantics).
+        const suffix = pattern.slice(1) // ".supabase.co"
+        return hostname.endsWith(suffix) && hostname.length > suffix.length
+      }
+      return hostname === pattern
+    })
+  } catch {
+    // Malformed URL — treat as not allowed so the caller falls back.
+    return false
+  }
+}
+
+/**
  * Resolve an event image_url to a display-ready URL.
  * - null/undefined → null (caller renders a placeholder)
- * - External URL  → returned as-is
- * - Storage path  → prefixed with the Supabase Storage public URL
+ * - External URL on an allowed host → returned as-is
+ * - External URL on a disallowed host → null (prevents next/image crash)
+ * - Storage path → prefixed with the Supabase Storage public URL
  */
 export function resolveEventImage(path: string | null | undefined): string | null {
   if (!path) return null
-  if (isAbsoluteUrl(path)) return path
+  if (isAbsoluteUrl(path)) {
+    return isAllowedImageHost(path) ? path : null
+  }
   return storageUrl(STORAGE_BUCKETS.eventImages, path)
 }
 
 /**
  * Resolve a profile avatar_url.
  * Returns null when no avatar is set — the UI should fall back to initials.
+ * Same disallowed-host fallback as resolveEventImage.
  */
 export function resolveAvatarUrl(path: string | null | undefined): string | null {
   if (!path) return null
-  if (isAbsoluteUrl(path)) return path
+  if (isAbsoluteUrl(path)) {
+    return isAllowedImageHost(path) ? path : null
+  }
   return storageUrl(STORAGE_BUCKETS.avatars, path)
 }
 
@@ -48,7 +91,9 @@ export function resolveStorageUrl(
   bucket: string
 ): string | null {
   if (!path) return null
-  if (isAbsoluteUrl(path)) return path
+  if (isAbsoluteUrl(path)) {
+    return isAllowedImageHost(path) ? path : null
+  }
   return storageUrl(bucket, path)
 }
 

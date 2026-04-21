@@ -10,6 +10,7 @@ let resolveEventImage: (path: string | null | undefined) => string | null
 let resolveAvatarUrl: (path: string | null | undefined) => string | null
 let resolveStorageUrl: (path: string | null | undefined, bucket: string) => string | null
 let getInitials: (fullName: string) => string
+let isAllowedImageHost: (url: string) => boolean
 
 beforeAll(async () => {
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', MOCK_SUPABASE_URL)
@@ -19,6 +20,7 @@ beforeAll(async () => {
   resolveAvatarUrl   = mod.resolveAvatarUrl
   resolveStorageUrl  = mod.resolveStorageUrl
   getInitials        = mod.getInitials
+  isAllowedImageHost = mod.isAllowedImageHost
 })
 
 afterAll(() => {
@@ -41,14 +43,21 @@ describe('resolveEventImage', () => {
     expect(resolveEventImage('')).toBeNull()
   })
 
-  it('returns an https:// URL as-is (external image)', () => {
+  it('returns an https:// URL as-is when host is allowed', () => {
     const url = 'https://images.unsplash.com/photo-abc123'
     expect(resolveEventImage(url)).toBe(url)
   })
 
-  it('returns an http:// URL as-is', () => {
-    const url = 'http://example.com/image.jpg'
+  it('returns a Supabase Storage URL as-is (wildcard host match)', () => {
+    const url = 'https://project.supabase.co/storage/v1/object/public/event-images/x.jpg'
     expect(resolveEventImage(url)).toBe(url)
+  })
+
+  it('returns null for a disallowed external host (next/image would crash)', () => {
+    // Seed data includes these; without the allowlist guard next/image would
+    // throw and the global error boundary would replace the whole page.
+    expect(resolveEventImage('https://res.dayoutwiththekids.co.uk/x.jpg')).toBeNull()
+    expect(resolveEventImage('http://example.com/image.jpg')).toBeNull()
   })
 
   it('resolves a Supabase storage path to a full public URL', () => {
@@ -81,9 +90,13 @@ describe('resolveAvatarUrl', () => {
     expect(resolveAvatarUrl(undefined)).toBeNull()
   })
 
-  it('returns an external URL as-is', () => {
-    const url = 'https://cdn.example.com/avatar.png'
+  it('returns an allowed external URL as-is', () => {
+    const url = 'https://images.unsplash.com/avatar.png'
     expect(resolveAvatarUrl(url)).toBe(url)
+  })
+
+  it('returns null for a disallowed host', () => {
+    expect(resolveAvatarUrl('https://cdn.example.com/avatar.png')).toBeNull()
   })
 
   it('resolves a storage path to the avatars bucket', () => {
@@ -110,15 +123,54 @@ describe('resolveStorageUrl', () => {
     expect(resolveStorageUrl(undefined, 'my-bucket')).toBeNull()
   })
 
-  it('returns external URL as-is regardless of bucket', () => {
-    const url = 'https://cdn.example.com/file.pdf'
+  it('returns allowed external URL as-is regardless of bucket', () => {
+    const url = 'https://images.unsplash.com/file.pdf'
     expect(resolveStorageUrl(url, 'docs')).toBe(url)
+  })
+
+  it('returns null for a disallowed external host', () => {
+    expect(resolveStorageUrl('https://cdn.example.com/file.pdf', 'docs')).toBeNull()
   })
 
   it('uses the provided bucket name in the URL', () => {
     expect(resolveStorageUrl('file.txt', 'custom-bucket')).toBe(
       `${MOCK_SUPABASE_URL}/storage/v1/object/public/custom-bucket/file.txt`
     )
+  })
+})
+
+// ── isAllowedImageHost ────────────────────────────────────────────────────────
+
+describe('isAllowedImageHost', () => {
+  it('allows images.unsplash.com (literal match)', () => {
+    expect(isAllowedImageHost('https://images.unsplash.com/photo-x')).toBe(true)
+  })
+
+  it('allows subdomains of supabase.co (wildcard match)', () => {
+    expect(isAllowedImageHost('https://project.supabase.co/file.jpg')).toBe(true)
+    expect(isAllowedImageHost('https://another-project.supabase.co/x')).toBe(true)
+  })
+
+  it('rejects the bare wildcard suffix itself', () => {
+    // "*.supabase.co" should NOT match "supabase.co" with no subdomain —
+    // next/image wildcard semantics require at least one label.
+    expect(isAllowedImageHost('https://supabase.co/x')).toBe(false)
+  })
+
+  it('rejects disallowed hosts', () => {
+    expect(isAllowedImageHost('https://cdn.example.com/x.jpg')).toBe(false)
+    expect(isAllowedImageHost('https://res.dayoutwiththekids.co.uk/x.jpg')).toBe(false)
+    expect(isAllowedImageHost('https://ca-times.brightspotcdn.com/x.jpg')).toBe(false)
+  })
+
+  it('rejects similar-looking but distinct hosts', () => {
+    // Guards against `endsWith` matching "evil-images.unsplash.com.attacker.com"
+    expect(isAllowedImageHost('https://images.unsplash.com.attacker.com/x')).toBe(false)
+  })
+
+  it('returns false for a malformed URL', () => {
+    expect(isAllowedImageHost('not a url')).toBe(false)
+    expect(isAllowedImageHost('')).toBe(false)
   })
 })
 
