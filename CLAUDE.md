@@ -36,6 +36,8 @@
 
 These were extracted from the approved HTML prototype and are non-negotiable. Do NOT improvise colours or fonts.
 
+> **Documented exception:** `src/lib/email/templates/_shared.ts` may use literal hex values (the brand palette below) because email clients don't support CSS variables and inlining is required for cross-client rendering. The hex values must match this palette exactly. No other file in the codebase should use literal hex.
+
 ### Colours
 
 ```

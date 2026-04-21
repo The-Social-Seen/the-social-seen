@@ -145,9 +145,14 @@ export interface UserInterest {
   created_at: string
 }
 
+export type NotificationChannel = 'in_app' | 'email' | 'sms'
+export type NotificationStatus = 'sent' | 'failed' | 'pending'
+
 export interface Notification {
   id:                 string
-  sent_by:            string
+  // Nullable since migration 20260421000001 — system emails (cron-driven
+  // reminders, etc.) have no requesting user.
+  sent_by:            string | null
   recipient_type:     NotificationRecipient
   recipient_event_id: string | null
   type:               NotificationType
@@ -155,6 +160,13 @@ export interface Notification {
   body:               string
   sent_at:            string
   created_at:         string
+  // Added by migration 20260421000001 (P2-4 transactional email):
+  channel:            NotificationChannel
+  recipient_email:    string | null
+  provider_message_id: string | null
+  status:             NotificationStatus
+  error_message:      string | null
+  template_name:      string | null
 }
 
 // ── View types ────────────────────────────────────────────────────────────────

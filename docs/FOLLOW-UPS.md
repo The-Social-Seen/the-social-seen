@@ -120,17 +120,61 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 
 ## 📝 Documentation
 
+### Resend domain verification (BLOCKS P2-4 demo)
+**Source:** P2-4 prep test
+**Rationale:** Resend's free-tier sandbox mode (without a verified domain) will ONLY send emails to the account owner's address — `mitesh@skillmeup.co`. Sending to any other recipient returns HTTP 403 `validation_error`. This means P2-4 transactional emails (welcome, booking confirmation, venue reveal, etc.) work for the account owner only until DNS is verified.
+**Action:** Cofounder adds the 3 DNS records (SPF, DKIM, DMARC) Resend gives you to `the-social-seen.com`. Verification usually takes 5 min – 48 h depending on the DNS provider. Then update the FROM address from `onboarding@resend.dev` to `hello@the-social-seen.com` (or whichever is chosen) — single-line change in `src/lib/email/send.ts`.
+**Priority:** HIGH — blocks demo. Start the cofounder hand-off now.
+
 ### Document Supabase Auth Management API config
 **Source:** P2-3 backend handover
 **Rationale:** Several Supabase auth settings are now configured live via the Management API (`mailer_otp_length: 6`, `mailer_otp_exp: 600`, plus future changes). These aren't represented anywhere in git, so production deployment will need the same PATCH calls and nobody will remember.
 **Action:** Create `docs/SUPABASE-CONFIG.md` documenting the current non-default settings and a curl snippet to re-apply them. Update whenever a config change is made. Alternatively, a small `scripts/apply-supabase-config.sh` that wraps the API calls.
 **Priority:** Medium. Will bite hard when we create the production project and forget what was customised.
 
-### Customise Supabase email templates
-**Source:** P2-3 backend handover
-**Rationale:** OTP email currently uses Supabase's default copy. Works, but not branded.
-**Action:** Customise via Dashboard → Authentication → Email Templates, or the Management API. Or replace entirely with Resend-sent emails in P2-4.
-**Priority:** Will be handled by P2-4 (transactional email). If P2-4 slips, pick this up as a standalone fix.
+### Wire Supabase OTP email through Resend
+**Source:** P2-4 backend handover
+**Rationale:** Supabase's default OTP email still flows via Supabase's built-in mailer, not Resend. Means OTP emails aren't branded and aren't logged in our notifications audit. We've built the `otpVerificationTemplate` already; just need to swap the delivery path.
+**Action:** Two options:
+1. **Configure Supabase to use Resend as its SMTP provider** via the Management API (`POST /v1/projects/{ref}/config/auth` with `smtp_host`, `smtp_user='resend'`, `smtp_pass=$RESEND_API_KEY`, `smtp_admin_email='hello@the-social-seen.com'`). Lowest code change but Supabase will still use its own template — we'd need to also customise the template via the Management API to render our HTML.
+2. **Custom OTP issuance**: generate the 6-digit code ourselves, store with TTL in a `verification_codes` table, send via our Resend wrapper using `otpVerificationTemplate`, verify by lookup. More code but full control + audit logging.
+**Priority:** Medium. Useful for branding consistency and admin retry visibility, but Supabase's default works.
+
+### Admin retry view for failed notifications
+**Source:** P2-4 backend handover
+**Rationale:** The `notifications` table now logs every email send (success and failure) but there's no UI to surface failures. If a welcome email or booking confirmation fails (e.g. Resend rate limit, transient outage), nobody knows.
+**Action:** Add an admin page at `/admin/notifications/failures` that lists rows where `channel = 'email' AND status = 'failed'` ordered by `sent_at DESC`. Each row gets a "Retry" button that re-fires the send via the original template (template_name + recipient_email + body are stored). Use the existing admin-only RLS — no new policies needed.
+**Priority:** Medium. Currently failures are only visible via DB query.
+
+### React Email migration
+**Source:** P2-4 backend handover
+**Rationale:** P2-4 templates use hand-written inline-style HTML in `src/lib/email/templates/`. Works, but the dev experience for designing rich emails with tables, columns, and cross-client compatibility is painful. React Email (`@react-email/components` + `@react-email/render`) gives JSX-style template authoring and renders to email-safe HTML. Cost: ~25kb of dev/build deps.
+**Action:** Add `@react-email/components` + `@react-email/render`, migrate the three existing templates (welcome, booking-confirmation, otp-verification) to JSX. Tests stay roughly the same since they assert on the rendered HTML output.
+**Priority:** Low. Current templates work fine. Revisit once we have 5+ templates.
+
+### PII purge cascade for email audit log
+**Source:** P2-4 code review
+**Rationale:** `notifications.body` stores the full rendered HTML of every email sent. For booking confirmations that includes the recipient's full name and the venue address. The `sent_by` FK has `ON DELETE CASCADE` from profiles, so when account-deletion lands in P2-8 the audit row IS removed for the deleted user. But emails sent on behalf of OTHER users (e.g. admin announcements that mention this user) wouldn't cascade. Worth a deliberate purge step in the GDPR-deletion flow that also nulls/scrubs `body` for any row referencing the deleted user.
+**Action:** When P2-8 builds the GDPR deletion path, audit `notifications` for rows whose `body` (HTML) or `recipient_email` references the deleted user, and either delete or null those fields.
+**Priority:** Medium — required for full GDPR compliance before launch.
+
+### Sentry tagging on email audit-log soft-fail
+**Source:** P2-4 code review
+**Rationale:** When the `notifications` insert fails inside `sendEmail`, we `console.error` and swallow. Sentry's auto-instrumentation does pick up console.error, but explicit `Sentry.captureException(err, { tags: { surface: 'email-audit-log' } })` adds a filterable tag and richer context.
+**Action:** Replace the `console.error` in `src/lib/email/send.ts:logSendAttempt` with `Sentry.captureException(err, { tags: { surface: 'email-audit-log', template: input.templateName } })`.
+**Priority:** Low — observability nice-to-have.
+
+### Production warning on `getSiteUrl()` fallback
+**Source:** P2-4 code review
+**Rationale:** `getSiteUrl()` in `src/lib/email/templates/_shared.ts` falls back to a hardcoded Vercel preview URL when both `NEXT_PUBLIC_SITE_URL` and `NEXT_PUBLIC_VERCEL_URL` are unset. In production this means a misconfiguration would silently route email links to the preview deploy instead of failing loudly.
+**Action:** Add `if (process.env.NODE_ENV === 'production') console.warn('NEXT_PUBLIC_SITE_URL not set; emails will link to the preview URL')` in the fallback branch. Or throw — but warn is safer for the demo.
+**Priority:** Low — soft fallback works, just easier to miss a misconfig.
+
+### Unsubscribe page + per-template suppression list
+**Source:** P2-4 backend handover
+**Rationale:** Every email currently has a placeholder unsubscribe link (`href="#"`). UK GDPR + PECR require a working one-click unsubscribe for marketing emails. Transactional emails (booking confirmations, OTP) are exempt, but marketing-adjacent ones (event reminders, post-event review requests in P2-5/P2-10) need it.
+**Action:** Build `/unsubscribe?token=<signed-token>` page that toggles `profiles.email_consent = false`, AND introduce a `notification_preferences` table for per-template granularity (e.g. "I want booking confirmations but not event reminders"). Email send wrapper checks preferences before sending.
+**Priority:** Medium. Required before launching email marketing in Phase 3, also a soft requirement for the Sprint 2 venue-reveal/reminder emails.
 
 ---
 
