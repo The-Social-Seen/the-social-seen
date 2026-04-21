@@ -87,6 +87,22 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 
 ---
 
+## 🧹 Image-host fix (PR #19) follow-ups
+
+### Allowlist drift between `images.ts` and `next.config.ts`
+**Source:** PR #19 code review (I1)
+**Rationale:** `ALLOWED_IMAGE_HOSTS` in `src/lib/utils/images.ts:33-36` must stay in sync with `images.remotePatterns` in `next.config.ts:7-14`. Today they match, but if someone adds a new host to the Next config and forgets the runtime list, valid images silently fall back to the placeholder (or vice versa, allowing a URL we then can't render).
+**Action:** A test that imports both and asserts they match. Or a lint rule. Or — at minimum — a one-line reminder in CLAUDE.md's image section. The Next config is transformed at build time so can't be imported directly at runtime; a test file can `require()` it in Node and compare.
+**Priority:** Low. No drift today.
+
+### Protocol check is implicit in `isAllowedImageHost`
+**Source:** PR #19 code review (I2)
+**Rationale:** `isAbsoluteUrl()` accepts both `http://` and `https://`, but `next/image` `remotePatterns` defaults to `https` only. If seed data ever has an `http://` URL on an allowlisted host, `isAllowedImageHost` returns `true` and the URL passes through, only to be rejected by `next/image` at render time — a different failure mode than the one this fix addresses but still broken.
+**Action:** Inside `isAllowedImageHost`, also assert `url.protocol === 'https:'` (after the `new URL()` call).
+**Priority:** Low. No `http://` URLs in current seed data.
+
+---
+
 ## 🧹 P2-6 code-review follow-ups (low priority cleanup)
 
 ### Refactor ShareActions feature-detect to `useSyncExternalStore`
