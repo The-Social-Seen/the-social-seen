@@ -61,7 +61,7 @@ function makeEvent(overrides: Partial<EventWithStats> = {}): EventWithStats {
     category: 'drinks',
     price: 3500, // £35 in pence
     capacity: 30,
-    image_url: 'https://example.com/cocktails.jpg',
+    image_url: 'https://images.unsplash.com/photo-cocktails',
     dress_code: 'Smart casual',
     is_published: true,
     is_cancelled: false,

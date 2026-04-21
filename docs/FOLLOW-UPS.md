@@ -80,13 +80,44 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 
 ---
 
-## 🐛 Bugs
+<!-- Resolved by fix/image-host-fallback (pre-Sprint-2-P2-7):
+     `src/lib/utils/images.ts` now exports `isAllowedImageHost()` and all
+     three resolve helpers return null for disallowed hosts. +8 new tests.
+     Event detail pages no longer crash on seed data. -->
 
-### Event detail page crashes on seed-data image hosts
-**Source:** P2-6 preview verification
-**Rationale:** Seed events in the staging DB include `image_url` values from hosts (`res.dayoutwiththekids.co.uk`, `ca-times.brightspotcdn.com`) that aren't in `next.config.ts` `images.remotePatterns`. `next/image` throws a runtime error, the `<GlobalError>` boundary catches it, and the entire event detail page falls back to the error state — blocking local browser verification of any feature on those pages. Not caused by P2-6; reproducible on `main`.
-**Action (proper fix):** Make `resolveEventImage()` (`src/lib/utils/images.ts`) defensive — check the hostname against the allowlist and return `null` (falling back to the placeholder) rather than letting `next/image` throw. Alternative: switch seed data to Unsplash-hosted images only.
-**Priority:** Medium. Blocks local dev verification; unclear whether Vercel preview hits the same error (it uses a managed image optimizer that may be more permissive).
+---
+
+## 🧹 P2-6 code-review follow-ups (low priority cleanup)
+
+### Refactor ShareActions feature-detect to `useSyncExternalStore`
+**Source:** P2-6 code review (I1)
+**Rationale:** `src/components/shared/ShareActions.tsx:40-55` uses `useState(false) + useEffect(() => setState(...))` with an `eslint-disable-next-line react-hooks/set-state-in-effect` to suppress the rule. `useSyncExternalStore` is React's canonical pattern for reading post-hydration browser capabilities — one-shot paint, no effect cascade, no eslint-disable.
+**Action:** Replace the `useState` + `useEffect` pair with `useSyncExternalStore(() => () => {}, () => navigator.share != null, () => false)`.
+**Priority:** Very low. Works correctly today.
+
+### Timer-overlap flicker in "Copied" state
+**Source:** P2-6 code review (I2)
+**Rationale:** `handleCopy` and `handleNativeShare` both write to the same `copied` state with independent `setTimeout` handles. Rapid successive clicks can make the "Copied" label flicker for one tick before settling. `src/components/shared/ShareActions.tsx:69-95`.
+**Action:** Track the timer with a `useRef`; clear the previous timer before starting a new one.
+**Priority:** Very low.
+
+### Share copy string duplicated
+**Source:** P2-6 code review (I4)
+**Rationale:** `Join me at ${eventTitle}` appears inline in both `ShareActions.tsx:88` (native share text) and `share.ts:29` (WhatsApp message). They can drift.
+**Action:** Export a `buildShareText(title: string)` helper from `src/lib/utils/share.ts` and use it in both places.
+**Priority:** Very low.
+
+### `BookingModal` "Link copied" toast now also fires on native-share success
+**Source:** P2-6 code review (I5)
+**Rationale:** Previous behaviour was clipboard-only. After the refactor, the `linkCopied` state is set for both `'copied'` AND `'shared'` outcomes — meaning the "Link copied" toast appears when the user actually used a native share sheet (WhatsApp, AirDrop, etc.). Cosmetic copy drift.
+**Action:** Either rename the state and copy to be outcome-agnostic ("Shared!") or branch on outcome in the handler. `src/components/events/BookingModal.tsx:504-513`.
+**Priority:** Very low.
+
+### `buildEventShareUrl` SSR fallback returns relative URL
+**Source:** P2-6 code review (S1)
+**Rationale:** `src/lib/utils/share.ts:16-20` returns `/events/${slug}` when `window` is undefined. Callers today fire from click handlers only, but a future Server Component prebuilding a share href would quietly break (relative URLs don't work in pasted messages).
+**Action:** Either throw in dev (`process.env.NODE_ENV !== 'production'`) as a tripwire, or take the origin as an explicit parameter for Server usage.
+**Priority:** Very low. Defensive.
 
 ---
 
