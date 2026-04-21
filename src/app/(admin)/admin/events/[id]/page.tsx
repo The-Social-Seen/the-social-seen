@@ -36,6 +36,8 @@ export default async function AdminEventEditPage({ params }: PageProps) {
       end_time: data.end_time,
       venue_name: data.venue_name,
       venue_address: data.venue_address,
+      postcode: data.postcode ?? null,
+      venue_revealed: data.venue_revealed ?? true,
       category: data.category as EventCategory,
       price: data.price,
       capacity: data.capacity,

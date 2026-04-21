@@ -79,6 +79,12 @@ const eventFormSchema = z.object({
   end_time: z.string().datetime({ message: 'Valid ISO datetime required' }),
   venue_name: z.string().min(2, 'Venue name must be at least 2 characters'),
   venue_address: z.string().min(5, 'Venue address must be at least 5 characters'),
+  postcode: z
+    .string()
+    .max(16, 'Postcode too long')
+    .nullable()
+    .transform((v) => (v && v.trim() ? v.trim() : null)),
+  venue_revealed: z.boolean(),
   category: z.enum(EVENT_CATEGORIES),
   price: z.number().min(0, 'Price cannot be negative'),
   capacity: z.number().int().positive().nullable(),
@@ -128,6 +134,9 @@ function parseEventFormData(formData: FormData) {
     end_time: normaliseDatetime((formData.get('end_time') as string) ?? ''),
     venue_name: (formData.get('venue_name') as string) ?? '',
     venue_address: (formData.get('venue_address') as string) ?? '',
+    postcode: (formData.get('postcode') as string) || null,
+    // Form checkbox is "Hide venue until 1 week before". Invert for DB.
+    venue_revealed: formData.get('venue_hidden') !== 'true',
     category: (formData.get('category') as string) ?? '',
     price: priceInPence,
     capacity,
@@ -287,6 +296,8 @@ export async function createEvent(formData: FormData) {
       end_time: data.end_time,
       venue_name: data.venue_name,
       venue_address: data.venue_address,
+      postcode: data.postcode,
+      venue_revealed: data.venue_revealed,
       category: data.category as EventCategory,
       price: data.price,
       capacity: data.capacity,
@@ -361,6 +372,8 @@ export async function updateEvent(eventId: string, formData: FormData) {
       end_time: data.end_time,
       venue_name: data.venue_name,
       venue_address: data.venue_address,
+      postcode: data.postcode,
+      venue_revealed: data.venue_revealed,
       category: data.category as EventCategory,
       price: data.price,
       capacity: data.capacity,

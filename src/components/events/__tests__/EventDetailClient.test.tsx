@@ -122,6 +122,8 @@ function makeEventDetail(overrides: Partial<EventDetail> = {}): EventDetail {
     end_time: '2027-05-10T22:00:00Z',
     venue_name: 'The Cellar',
     venue_address: '123 London Rd',
+    venue_revealed: true,
+    postcode: null,
     category: 'dining',
     price: 3500,
     capacity: 30,

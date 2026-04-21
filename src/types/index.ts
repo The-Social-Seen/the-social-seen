@@ -75,6 +75,12 @@ export interface Event {
   end_time:          string   // ISO timestamptz — always UTC from DB
   venue_name:        string
   venue_address:     string
+  // P2-5: if false, venue_name + venue_address are hidden on the public
+  // event page until 1 week before date_time. Daily cron flips to true and
+  // emails confirmed attendees.
+  venue_revealed:    boolean
+  // P2-5: UK postcode, used for Google Maps link. Null on legacy events.
+  postcode:          string | null
   category:          EventCategory
   price:             number   // stored in pence; £35 = 3500
   capacity:          number | null  // null = unlimited capacity

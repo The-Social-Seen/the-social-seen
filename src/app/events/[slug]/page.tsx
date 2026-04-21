@@ -98,16 +98,27 @@ export default async function EventDetailPage({ params }: PageProps) {
     endDate: event.end_time,
     eventStatus: "https://schema.org/EventScheduled",
     eventAttendanceMode: "https://schema.org/OfflineEventAttendanceMode",
-    location: {
-      "@type": "Place",
-      name: event.venue_name,
-      address: {
-        "@type": "PostalAddress",
-        streetAddress: event.venue_address,
-        addressLocality: "London",
-        addressCountry: "GB",
-      },
-    },
+    location: event.venue_revealed
+      ? {
+          "@type": "Place",
+          name: event.venue_name,
+          address: {
+            "@type": "PostalAddress",
+            streetAddress: event.venue_address,
+            addressLocality: "London",
+            postalCode: event.postcode ?? undefined,
+            addressCountry: "GB",
+          },
+        }
+      : {
+          "@type": "Place",
+          name: "Venue revealed 1 week before the event",
+          address: {
+            "@type": "PostalAddress",
+            addressLocality: "London",
+            addressCountry: "GB",
+          },
+        },
     organizer: {
       "@type": "Organization",
       name: "The Social Seen",

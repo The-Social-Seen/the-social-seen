@@ -178,6 +178,38 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 
 ---
 
+## 🧩 P2-5 operator setup (once per environment)
+
+### Deploy `daily-notifications` edge function and configure cron
+**Source:** P2-5 backend
+**Rationale:** The daily edge function + cron scheduling land as code in this batch, but each Supabase project needs per-environment wiring before they do anything.
+**Action (per environment — staging now, production later):**
+1. Apply the three new migrations (`20260421000002` → `20260421000004`) via `supabase db push`.
+2. `supabase functions deploy daily-notifications --no-verify-jwt`
+3. `supabase secrets set RESEND_API_KEY=... FROM_ADDRESS='The Social Seen <onboarding@resend.dev>' REPLY_TO_ADDRESS=info@the-social-seen.com SANDBOX_FALLBACK_RECIPIENT=mitesh@skillmeup.co NEXT_PUBLIC_SITE_URL=https://the-social-seen.vercel.app` (omit `SANDBOX_FALLBACK_RECIPIENT` in prod).
+4. Via SQL editor: `ALTER DATABASE postgres SET app.settings.edge_function_url = 'https://<ref>.supabase.co/functions/v1/daily-notifications';` and `ALTER DATABASE postgres SET app.settings.service_role_key = '<jwt>';`
+5. Verify: `curl -X POST "$NEXT_PUBLIC_SUPABASE_URL/functions/v1/daily-notifications" -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"` — should return `{ ok: true, counts: {...} }`.
+**Priority:** P2-5 blocker. Must be done before scheduled emails fire (otherwise the cron logs a NOTICE and exits — no harm, just no email).
+
+### Integration test for edge function date-window selection
+**Source:** P2-5 backend
+**Rationale:** Unit-testing the Deno edge function's selection queries from Vitest is awkward (Deno runtime + remote imports). Current coverage is template rendering on the Node side plus a manual smoke test. An integration test (seed DB → invoke function → assert `notifications` rows) would catch regressions in the scheduled-job logic.
+**Priority:** Medium.
+
+### Admin "failed notifications" view with retry button
+**Source:** P2-5 plan (deferred to P2-9)
+**Rationale:** P2-5 plan mentions this but it fits more naturally with the other admin QoL work in P2-9. The retry mechanism in the edge function is the automatic half; this is the manual half.
+**Action:** New page under `src/app/(admin)/admin/notifications/failed/page.tsx` listing `notifications` where `channel='email' AND status='failed'`, with a "Retry" button that invokes `sendEmail()` with the stored `body`/`subject`/`recipient_email`.
+**Priority:** Medium — lands in P2-9.
+
+### Hide venue on public event listing cards
+**Source:** P2-5 frontend
+**Rationale:** `EventCard.tsx` still shows `venue_name` on listing cards. The P2-5 plan scopes the reveal gate to the event detail page, so cards are unchanged for now. Arguably the venue name on the card is part of the teaser; arguably it should be hidden for consistency with the detail page.
+**Action:** Replace the `venue_name` label on cards with "Venue revealed 1 week before" when `venue_revealed = false`. UX call whether we want this.
+**Priority:** Low.
+
+---
+
 ## 🚀 Out-of-scope product ideas (Phase 3+)
 
 These were mentioned in reviews or handovers but are explicitly Phase 3 — logged here for completeness, not action.
