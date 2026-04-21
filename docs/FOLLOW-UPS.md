@@ -181,6 +181,24 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 **Action:** Server-fetch a `count(*)` of email/failed rows in `/admin/notifications/page.tsx` and render a small pill if > 0. `src/components/admin/AdminSidebar.tsx` should also surface it on the mobile tab bar.
 **Priority:** Low.
 
+### `EventsPageClient` (upcoming events list) doesn't filter event images via `resolveEventImage`
+**Source:** P2-10 preview verification
+**Rationale:** The new `/events/past` page wraps `event.image_url` in `resolveEventImage()` so disallowed hosts fall through to a placeholder rather than crashing the page (the bug PR #19 originally fixed). The pre-existing `/events` listing client passes `event.image_url` straight to `next/image`, which still crashes for the seed data containing `ca-times.brightspotcdn.com`. The brightspot URL only doesn't currently take down `/events` because the affected event happens to be past — but as soon as a seeded upcoming event is added on a disallowed host, the listing dies.
+**Action:** Switch `EventsPageClient` (and any other components that take `event.image_url` directly) to use `resolveEventImage()`. Also audit `EventCard`, `RelatedEvents`, etc. Likely a 30-min PR; bundle with the allowlist-drift test follow-up above.
+**Priority:** Medium. Live foot-gun the moment seed data lands on a non-allowed host.
+
+### Profile completion weights duplicated between Node and Deno
+**Source:** P2-10 self-review
+**Rationale:** `src/lib/utils/profile-completion.ts` (Node, source of truth, Vitest-tested) and `supabase/functions/daily-notifications/index.ts` (Deno, edge function) carry identical `PROFILE_FIELD_WEIGHTS` + `PROFILE_FIELD_LABELS` definitions. Drift would surface as the banner showing one percentage and the nudge email another. Vitest doesn't run Deno code, so no automated guard.
+**Action:** Extract weights to a JSON file both runtimes can read, or write a script that reads both files and asserts the constants match (run in CI). Lower-effort interim: a comment in both files cross-referencing each other is already in place.
+**Priority:** Low until the weights need to change.
+
+### Profile-nudge cron window can permanently miss users when cron skips ≥2 days
+**Source:** P2-10 self-review
+**Rationale:** `processProfileNudges` matches profiles created in `[Y-4d, Y-3d]` on day Y. If pg_cron skips a day, the user falls outside both that window and any subsequent run's window — they never get nudged. The `profile_nudge_email_sent_at` column never gets stamped because they were never selected. The result is a silent drop, not an error.
+**Action:** Widen the window or use a "no nudge sent AND created > 3 days ago AND created < 30 days ago" predicate. The current narrow window was chosen so the same user matches exactly once across runs; a wider predicate needs the `profile_nudge_email_sent_at IS NULL` check to remain the dedupe (which it already is — so widening is safe).
+**Priority:** Low. Cron has been reliable to date.
+
 ### `[redacted` marker string is duplicated across migration + Server Action
 **Source:** P2-9 code review (nit)
 **Rationale:** `actions.ts:retryNotification` checks `body.startsWith('[redacted')`, mirroring the literal `[redacted — account deleted]` written by the `sanitise_user_notifications` RPC. If the RPC's redaction phrasing ever changes, the retry guard silently drifts.

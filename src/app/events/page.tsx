@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 import { getPublishedEvents } from "@/lib/supabase/queries/events";
 import EventsPageClient from "@/components/events/EventsPageClient";
 import type { Metadata } from "next";
@@ -24,6 +26,13 @@ export default async function EventsPage() {
             delight. From intimate dinners to cultural excursions, find your next
             unforgettable evening.
           </p>
+          <Link
+            href="/events/past"
+            className="mt-6 inline-flex items-center gap-1.5 text-sm font-medium text-gold hover:underline underline-offset-2"
+          >
+            See past events
+            <ArrowRight className="h-4 w-4" />
+          </Link>
         </div>
       </section>
 

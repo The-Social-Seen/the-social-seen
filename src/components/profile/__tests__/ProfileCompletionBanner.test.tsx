@@ -4,8 +4,12 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import type { Profile } from '@/types'
 
 vi.mock('lucide-react', () => ({
-  X: ({ className }: { className?: string }) => <span data-testid="x-icon" className={className} />,
-  UserCircle: ({ className }: { className?: string }) => <span data-testid="user-icon" className={className} />,
+  X: ({ className }: { className?: string }) => (
+    <span data-testid="x-icon" className={className} />
+  ),
+  UserCircle: ({ className }: { className?: string }) => (
+    <span data-testid="user-icon" className={className} />
+  ),
 }))
 
 import { ProfileCompletionBanner } from '../ProfileCompletionBanner'
@@ -22,11 +26,11 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     company: 'Monzo',
     industry: 'Fintech',
     bio: 'Design enthusiast',
-    linkedin_url: null,
+    linkedin_url: 'https://linkedin.com/in/charlotte',
     role: 'member',
     onboarding_complete: true,
     referral_source: null,
-    phone_number: null,
+    phone_number: '+447700900000',
     email_consent: false,
     email_verified: false,
     status: 'active',
@@ -40,52 +44,55 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('ProfileCompletionBanner', () => {
-  it('renders when job_title is null', () => {
-    const profile = makeProfile({ job_title: null })
+  it('renders when score is below 100', () => {
+    const profile = makeProfile({ avatar_url: null, bio: null })
     render(<ProfileCompletionBanner profile={profile} onCompleteClick={() => {}} />)
-
-    expect(screen.getByText(/Profiles with a photo get noticed more/)).toBeTruthy()
+    expect(screen.getByText(/Complete your profile/)).toBeTruthy()
   })
 
-  it('renders when avatar_url is null', () => {
-    const profile = makeProfile({ avatar_url: null })
+  it('shows the computed percentage and a progress bar', () => {
+    const profile = makeProfile({ avatar_url: null }) // missing avatar = 80%
     render(<ProfileCompletionBanner profile={profile} onCompleteClick={() => {}} />)
-
-    expect(screen.getByText(/Profiles with a photo get noticed more/)).toBeTruthy()
+    expect(screen.getByText('80%')).toBeTruthy()
+    const bar = screen.getByRole('progressbar')
+    expect(bar.getAttribute('aria-valuenow')).toBe('80')
   })
 
-  it('does not render when profile is complete (has both job_title and avatar_url)', () => {
-    const profile = makeProfile() // both set
+  it('lists missing field labels (up to 3)', () => {
+    const profile = makeProfile({
+      avatar_url: null,
+      bio: null,
+      linkedin_url: null,
+      job_title: null,
+    })
+    render(<ProfileCompletionBanner profile={profile} onCompleteClick={() => {}} />)
+    expect(screen.getByText(/Profile photo/)).toBeTruthy()
+    expect(screen.getByText(/\+ 1 more/)).toBeTruthy()
+  })
+
+  it('does not render when profile is 100% complete', () => {
+    const profile = makeProfile()
     const { container } = render(
       <ProfileCompletionBanner profile={profile} onCompleteClick={() => {}} />,
     )
-
     expect(container.innerHTML).toBe('')
   })
 
-  it('calls onCompleteClick when "Complete yours" is clicked', () => {
+  it('calls onCompleteClick when the CTA is clicked', () => {
     const onComplete = vi.fn()
-    const profile = makeProfile({ job_title: null })
+    const profile = makeProfile({ avatar_url: null })
     render(<ProfileCompletionBanner profile={profile} onCompleteClick={onComplete} />)
-
     fireEvent.click(screen.getByText(/Complete yours/))
-
     expect(onComplete).toHaveBeenCalledOnce()
   })
 
   it('is dismissed when the X button is clicked', () => {
-    const profile = makeProfile({ job_title: null })
+    const profile = makeProfile({ avatar_url: null })
     const { container } = render(
       <ProfileCompletionBanner profile={profile} onCompleteClick={() => {}} />,
     )
-
-    // Banner should be visible initially
-    expect(screen.getByText(/Profiles with a photo get noticed more/)).toBeTruthy()
-
-    // Click dismiss button
+    expect(screen.getByText(/Complete your profile/)).toBeTruthy()
     fireEvent.click(screen.getByLabelText('Dismiss banner'))
-
-    // Banner should be gone
     expect(container.innerHTML).toBe('')
   })
 })

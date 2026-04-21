@@ -32,6 +32,99 @@ export async function getPublishedEvents(): Promise<EventWithStats[]> {
   return (data ?? []) as EventWithStats[]
 }
 
+// ── Past events (with review snippet) ───────────────────────────────────────
+
+export interface PastEventWithSnippet extends EventWithStats {
+  /** A representative high-rated review for the card, if one exists. */
+  top_review: {
+    rating: number
+    review_text: string
+    author_name: string
+  } | null
+  /** Up to 3 photos for the card thumbnail/strip. */
+  photos: { image_url: string }[]
+}
+
+/**
+ * Past, published events ordered most-recent first. Joins a representative
+ * top review (visible only) and a few photos so the listing card can show
+ * a snippet without a per-event fetch on the client.
+ */
+export async function getPastEvents(): Promise<PastEventWithSnippet[]> {
+  const supabase = await createServerClient()
+
+  const nowIso = new Date().toISOString()
+  const { data: events, error } = await supabase
+    .from('event_with_stats')
+    .select('*')
+    .eq('is_published', true)
+    .eq('is_cancelled', false)
+    .lt('date_time', nowIso)
+    .order('date_time', { ascending: false })
+    .limit(60)
+
+  if (error) {
+    console.error('[getPastEvents]', error.message)
+    return []
+  }
+
+  const rows = (events ?? []) as EventWithStats[]
+  if (rows.length === 0) return []
+
+  const eventIds = rows.map((e) => e.id)
+
+  // Fetch all visible reviews + photos for the page in two parallel
+  // queries. Cheaper than N+1 per-card lookups.
+  const [reviewsRes, photosRes] = await Promise.all([
+    supabase
+      .from('event_reviews')
+      .select('event_id, rating, review_text, author:profiles!event_reviews_user_id_fkey(full_name)')
+      .in('event_id', eventIds)
+      .eq('is_visible', true)
+      .not('review_text', 'is', null)
+      .order('rating', { ascending: false })
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('event_photos')
+      .select('event_id, image_url')
+      .in('event_id', eventIds)
+      .order('sort_order', { ascending: true }),
+  ])
+
+  if (reviewsRes.error) {
+    console.error('[getPastEvents:reviews]', reviewsRes.error.message)
+  }
+  if (photosRes.error) {
+    console.error('[getPastEvents:photos]', photosRes.error.message)
+  }
+
+  const reviewsByEvent = new Map<string, PastEventWithSnippet['top_review']>()
+  for (const r of reviewsRes.data ?? []) {
+    if (reviewsByEvent.has(r.event_id as string)) continue // first match (top-rated)
+    const author = Array.isArray(r.author) ? r.author[0] : r.author
+    reviewsByEvent.set(r.event_id as string, {
+      rating: r.rating as number,
+      review_text: r.review_text as string,
+      author_name: ((author?.full_name as string) ?? 'A member'),
+    })
+  }
+
+  const photosByEvent = new Map<string, { image_url: string }[]>()
+  for (const p of photosRes.data ?? []) {
+    const list = photosByEvent.get(p.event_id as string) ?? []
+    if (list.length < 3) {
+      list.push({ image_url: p.image_url as string })
+      photosByEvent.set(p.event_id as string, list)
+    }
+  }
+
+  return rows.map((e) => ({
+    ...e,
+    top_review: reviewsByEvent.get(e.id) ?? null,
+    photos: photosByEvent.get(e.id) ?? [],
+  }))
+}
+
 // ── Single event by slug (detail page) ───────────────────────────────────────
 
 /**

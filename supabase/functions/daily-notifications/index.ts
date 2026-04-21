@@ -45,6 +45,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4'
 import {
   eventReminderTemplate,
+  profileNudgeTemplate,
   reviewRequestTemplate,
   venueRevealTemplate,
   type Rendered,
@@ -100,6 +101,7 @@ interface Counts {
   reminders_2day: number
   reminders_today: number
   review_requests: number
+  profile_nudges: number
   retries: number
 }
 
@@ -134,6 +136,7 @@ Deno.serve(async (req: Request) => {
     reminders_2day: 0,
     reminders_today: 0,
     review_requests: 0,
+    profile_nudges: 0,
     retries: 0,
   }
 
@@ -142,6 +145,7 @@ Deno.serve(async (req: Request) => {
     counts.reminders_2day = await processReminders(supabase, twoDaysOut, '2day')
     counts.reminders_today = await processReminders(supabase, today, 'today')
     counts.review_requests = await processReviewRequests(supabase, yesterday)
+    counts.profile_nudges = await processProfileNudges(supabase)
     counts.retries = await processRetries(supabase)
   } catch (err) {
     console.error('daily-notifications: fatal error', err)
@@ -333,6 +337,142 @@ async function processReviewRequests(
     }
   }
 
+  return sent
+}
+
+// ── Section F — Profile completion nudge ────────────────────────────────────
+//
+// Sent ~3 days after registration if completion < 50%, exactly once per
+// member (gated by profiles.profile_nudge_email_sent_at). Mirrors the
+// weighting in src/lib/utils/profile-completion.ts — change both
+// together if the weights ever shift.
+//
+// Mirroring rather than importing because edge functions run under Deno
+// and can't reach into src/. The Vitest suite covers the source-of-truth
+// version; a drift would surface as a divergence between the banner score
+// and the email's stated score.
+
+const PROFILE_FIELD_WEIGHTS = {
+  avatar_url: 20,
+  bio: 15,
+  linkedin_url: 15,
+  full_name: 10,
+  job_title: 10,
+  company: 10,
+  industry: 10,
+  phone_number: 10,
+} as const
+
+const PROFILE_FIELD_LABELS: Record<keyof typeof PROFILE_FIELD_WEIGHTS, string> = {
+  avatar_url: 'Profile photo',
+  bio: 'Bio',
+  linkedin_url: 'LinkedIn',
+  full_name: 'Full name',
+  job_title: 'Job title',
+  company: 'Company',
+  industry: 'Industry',
+  phone_number: 'Phone number',
+}
+
+interface NudgeProfileRow {
+  id: string
+  full_name: string | null
+  email: string | null
+  avatar_url: string | null
+  bio: string | null
+  linkedin_url: string | null
+  job_title: string | null
+  company: string | null
+  industry: string | null
+  phone_number: string | null
+}
+
+function isFilled(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function computeCompletion(p: NudgeProfileRow): {
+  score: number
+  missingLabels: string[]
+} {
+  let score = 0
+  const ordered = (Object.entries(PROFILE_FIELD_WEIGHTS) as Array<
+    [keyof typeof PROFILE_FIELD_WEIGHTS, number]
+  >).sort(([, a], [, b]) => b - a)
+
+  const missingLabels: string[] = []
+  for (const [key, weight] of ordered) {
+    if (isFilled(p[key])) {
+      score += weight
+    } else {
+      missingLabels.push(PROFILE_FIELD_LABELS[key])
+    }
+  }
+  return { score, missingLabels }
+}
+
+async function processProfileNudges(
+  supabase: ReturnType<typeof createClient>,
+): Promise<number> {
+  // Window: registered between 4 days ago and 3 days ago (so we hit
+  // approximately the 3-day mark even with cron jitter — running daily,
+  // the same user only matches once because we set the sent_at column
+  // on first send).
+  const fourDaysAgo = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString()
+  const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
+
+  const { data: profiles, error } = await supabase
+    .from('profiles')
+    .select(
+      'id, full_name, email, avatar_url, bio, linkedin_url, job_title, company, industry, phone_number',
+    )
+    .gte('created_at', fourDaysAgo)
+    .lte('created_at', threeDaysAgo)
+    .is('deleted_at', null)
+    .is('profile_nudge_email_sent_at', null)
+    .eq('email_consent', true)
+    .neq('status', 'banned')
+  if (error) {
+    console.error('processProfileNudges: query failed', error)
+    return 0
+  }
+
+  let sent = 0
+  for (const row of (profiles ?? []) as NudgeProfileRow[]) {
+    if (!row.email) continue
+    const { score, missingLabels } = computeCompletion(row)
+    if (score >= 50) continue
+
+    const rendered = profileNudgeTemplate({
+      fullName: row.full_name ?? 'there',
+      completionScore: score,
+      topMissingLabels: missingLabels.slice(0, 3),
+      siteUrl: SITE_URL,
+    })
+
+    const ok = await sendWithLog(supabase, {
+      to: row.email,
+      rendered,
+      templateName: 'profile_nudge',
+      relatedProfileId: row.id,
+      // One-shot per profile — but the column is the real gate; the
+      // dedupe_key is belt-and-braces in case the column update fails.
+      dedupeKey: `profile_nudge:${row.id}`,
+    })
+
+    // Stamp the column whether the send succeeded or failed. A failed
+    // send sits in the failed-notifications view for admin retry; we
+    // don't want the cron job to re-attempt the same nudge tomorrow.
+    const { error: updErr } = await supabase
+      .from('profiles')
+      .update({ profile_nudge_email_sent_at: new Date().toISOString() })
+      .eq('id', row.id)
+    if (updErr) {
+      console.error('profile_nudge_email_sent_at update failed for', row.id, updErr)
+    }
+
+    if (ok) sent++
+  }
   return sent
 }
 
