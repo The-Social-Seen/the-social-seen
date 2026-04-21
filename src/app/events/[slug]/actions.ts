@@ -108,7 +108,7 @@ async function sendBookingConfirmationEmail(args: {
         .single(),
       supabase
         .from('events')
-        .select('title, slug, date_time, venue_name, venue_address')
+        .select('title, slug, date_time, venue_name, venue_address, venue_revealed')
         .eq('id', args.eventId)
         .single(),
     ])
@@ -130,9 +130,7 @@ async function sendBookingConfirmationEmail(args: {
       eventTime: formatTime(event.date_time),
       venueName: event.venue_name,
       venueAddress: event.venue_address,
-      // P2-5 will introduce events.venue_revealed. Until then, every
-      // event reveals the venue on booking — current behaviour preserved.
-      venueRevealed: true,
+      venueRevealed: event.venue_revealed,
       status: args.status,
       waitlistPosition: args.waitlistPosition,
     })

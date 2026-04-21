@@ -83,6 +83,13 @@ const BookingSidebar = forwardRef<HTMLDivElement, BookingSidebarProps>(
 
 export default BookingSidebar;
 
+function buildMapsUrl(event: EventDetail): string {
+  const query = [event.venue_name, event.venue_address, event.postcode]
+    .filter(Boolean)
+    .join(", ");
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+
 // ── Shared info block ─────────────────────────────────────────────────────────
 
 function EventInfoBlock({ event }: { event: EventDetail }) {
@@ -119,14 +126,34 @@ function EventInfoBlock({ event }: { event: EventDetail }) {
         </div>
         <div className="flex items-start gap-3">
           <MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-gold" />
-          <div>
-            <p className="text-sm font-semibold text-text-primary">
-              {event.venue_name}
-            </p>
-            <p className="text-sm text-text-primary/50">
-              {event.venue_address}
-            </p>
-          </div>
+          {event.venue_revealed ? (
+            <div>
+              <p className="text-sm font-semibold text-text-primary">
+                {event.venue_name}
+              </p>
+              <p className="text-sm text-text-primary/50">
+                {event.venue_address}
+                {event.postcode ? `, ${event.postcode}` : ""}
+              </p>
+              <a
+                href={buildMapsUrl(event)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-block text-xs font-medium text-gold hover:text-gold-dark"
+              >
+                Get directions
+              </a>
+            </div>
+          ) : (
+            <div>
+              <p className="text-sm font-semibold text-text-primary">
+                Venue revealed 1 week before
+              </p>
+              <p className="text-sm text-text-primary/50">
+                We&rsquo;ll email you the address closer to the date.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -291,7 +318,11 @@ function ConfirmedState({
         </div>
         <div className="flex items-center gap-2 text-sm text-text-primary/60">
           <MapPin className="h-3.5 w-3.5 text-gold" />
-          <span>{event.venue_name}</span>
+          <span>
+            {event.venue_revealed
+              ? event.venue_name
+              : "Venue revealed 1 week before"}
+          </span>
         </div>
       </div>
 

@@ -56,6 +56,8 @@ function makeEvent(overrides: Partial<EventWithStats> = {}): EventWithStats {
     end_time: '2027-03-14T22:00:00Z',
     venue_name: 'Sky Lounge',
     venue_address: '1 Rooftop Way, London',
+    venue_revealed: true,
+    postcode: null,
     category: 'drinks',
     price: 3500, // £35 in pence
     capacity: 30,

@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Supabase Edge Functions run on Deno — remote imports + different
+    // globals. Don't lint them with the Node/Next config.
+    "supabase/functions/**",
   ]),
 ]);
 

@@ -56,6 +56,8 @@ function makeEvent(overrides: Partial<EventWithStats> = {}): EventWithStats {
     end_time: '2036-01-01T22:00:00Z',
     venue_name: 'Test Venue',
     venue_address: '1 London Rd',
+    venue_revealed: true,
+    postcode: null,
     category: 'drinks',
     price: 0,
     capacity: 30,

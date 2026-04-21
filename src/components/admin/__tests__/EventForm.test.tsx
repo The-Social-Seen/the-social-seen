@@ -36,6 +36,8 @@ describe('EventForm', () => {
           end_time: '2026-06-15T22:00:00.000Z',
           venue_name: 'Wine Cellar',
           venue_address: '1 Bank End',
+          postcode: 'SE1 9BU',
+          venue_revealed: true,
           category: 'drinks',
           price: 3500,
           capacity: 20,

@@ -22,6 +22,8 @@ interface EventData {
   end_time: string
   venue_name: string
   venue_address: string
+  postcode: string | null
+  venue_revealed: boolean
   category: EventCategory
   price: number
   capacity: number | null
@@ -207,9 +209,37 @@ export default function EventForm({ event, inclusions: initialInclusions }: Even
             required
             defaultValue={event?.venue_address ?? ''}
             className="form-input"
-            placeholder="1 Bank End, London SE1 9BU"
+            placeholder="1 Bank End, London"
           />
         </FormField>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <FormField label="Postcode" hint="Optional — used for the map link">
+          <input
+            name="postcode"
+            type="text"
+            defaultValue={event?.postcode ?? ''}
+            className="form-input"
+            placeholder="SE1 9BU"
+          />
+        </FormField>
+
+        <div className="flex items-end pb-2">
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              name="venue_hidden"
+              type="checkbox"
+              value="true"
+              defaultChecked={event ? !event.venue_revealed : true}
+              className="sr-only peer"
+            />
+            <div className="relative w-11 h-6 bg-bg-tertiary rounded-full peer peer-checked:bg-gold transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-gold/50 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
+            <span className="text-sm font-medium text-text-primary">
+              Hide venue until 1 week before
+            </span>
+          </label>
+        </div>
       </div>
 
       <FormField label="Capacity" hint="Leave empty for unlimited">
