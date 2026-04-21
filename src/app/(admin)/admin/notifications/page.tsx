@@ -1,3 +1,5 @@
+import Link from 'next/link'
+import { AlertTriangle } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { getNotificationHistory } from '../actions'
 import NotificationForm from '@/components/admin/NotificationForm'
@@ -17,7 +19,16 @@ export default async function AdminNotificationsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="font-serif text-2xl text-text-primary">Notifications</h1>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <h1 className="font-serif text-2xl text-text-primary">Notifications</h1>
+        <Link
+          href="/admin/notifications/failed"
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-border hover:bg-bg-secondary transition-colors text-sm font-medium text-text-primary min-h-[44px]"
+        >
+          <AlertTriangle className="w-4 h-4 text-amber-500" />
+          Failed sends
+        </Link>
+      </div>
 
       {/* Send form */}
       <div className="bg-bg-card border border-border rounded-xl p-6">

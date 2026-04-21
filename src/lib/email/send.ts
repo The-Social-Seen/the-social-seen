@@ -47,6 +47,30 @@ export interface SendEmailInput {
    * reminders) leave undefined and the log row uses NULL.
    */
   relatedProfileId?: string
+  /**
+   * Optional FK to the recipient's profile. Set this for admin-initiated
+   * sends (e.g. "Email All Attendees") so the GDPR scrub RPC can find
+   * and redact the row by `recipient_user_id` when the user is deleted.
+   */
+  recipientUserId?: string
+  /**
+   * Optional FK to the event this email is about. Populated for
+   * event-scoped sends (reminders, venue reveals, attendee
+   * announcements). Helps admin filter/audit by event.
+   */
+  recipientEventId?: string
+  /**
+   * Notification recipient classification. Defaults to 'custom' (1:1
+   * transactional). Set to 'event_attendees' for admin announcements
+   * to a whole confirmed-attendee list.
+   */
+  recipientType?: 'all' | 'event_attendees' | 'waitlisted' | 'custom'
+  /**
+   * Notification type classification. Defaults to 'announcement' to
+   * preserve previous behaviour. Use 'reminder' / 'event_update' /
+   * 'waitlist' where appropriate for richer audit filtering.
+   */
+  notificationType?: 'reminder' | 'announcement' | 'waitlist' | 'event_update'
 }
 
 export type SendEmailResult =
@@ -185,8 +209,10 @@ async function logSendAttempt(
     const admin = createAdminClient()
     await admin.from('notifications').insert({
       sent_by: input.relatedProfileId ?? null,
-      recipient_type: 'custom',
-      type: 'announcement',
+      recipient_type: input.recipientType ?? 'custom',
+      recipient_event_id: input.recipientEventId ?? null,
+      recipient_user_id: input.recipientUserId ?? null,
+      type: input.notificationType ?? 'announcement',
       subject: input.subject,
       body: input.html,
       channel: 'email',

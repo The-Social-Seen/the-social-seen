@@ -202,6 +202,7 @@ describe('deleteMyAccount', () => {
     ])
     expect(mockAdminRpc).toHaveBeenCalledWith('sanitise_user_notifications', {
       p_user_id: 'user-1',
+      p_user_email: 'u@example.com',
     })
     // Free-event member — no Stripe Customer to delete.
     expect(mockStripeCustomersDel).not.toHaveBeenCalled()
