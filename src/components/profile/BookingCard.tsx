@@ -2,12 +2,14 @@
 
 import Link from 'next/link'
 import Image from 'next/image'
-import { Calendar, MapPin } from 'lucide-react'
+import { Calendar, CalendarPlus, MapPin } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { resolveEventImage } from '@/lib/utils/images'
 import { formatDateCard, formatTime, isWithin48Hours } from '@/lib/utils/dates'
+import { downloadIcsFile } from '@/lib/utils/calendar'
 import { categoryLabel } from '@/types'
 import type { BookingWithEvent } from '@/types'
+import ShareActions from '@/components/shared/ShareActions'
 
 interface BookingCardProps {
   booking: BookingWithEvent
@@ -93,13 +95,41 @@ export function BookingCard({ booking, variant, isReviewable, onReviewClick }: B
           </div>
 
           {/* Actions */}
-          <div className="mt-3 flex items-center gap-3">
+          <div className="mt-3 flex flex-wrap items-center gap-3">
             <Link
               href={`/events/${event.slug}`}
               className="text-xs font-medium text-gold transition-colors hover:text-gold-hover"
             >
               View Event
             </Link>
+            {variant === 'upcoming' && booking.status === 'confirmed' && (
+              <>
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadIcsFile({
+                      title: event.title,
+                      dateTime: event.date_time,
+                      endTime: event.end_time,
+                      venueName: event.venue_name,
+                      venueAddress: event.venue_address,
+                      shortDescription: event.short_description,
+                      slug: event.slug,
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-full border border-blush/60 px-3 py-1 text-xs font-medium text-text-primary transition-colors hover:bg-bg-primary"
+                  aria-label={`Add ${event.title} to your calendar`}
+                >
+                  <CalendarPlus className="h-3.5 w-3.5" />
+                  Add to calendar
+                </button>
+                <ShareActions
+                  eventTitle={event.title}
+                  eventSlug={event.slug}
+                  variant="compact"
+                />
+              </>
+            )}
             {variant === 'past' && isReviewable && onReviewClick && (
               <button
                 type="button"

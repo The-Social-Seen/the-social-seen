@@ -20,6 +20,7 @@ import {
 import { formatDateModal, formatTime } from "@/lib/utils/dates";
 import { formatPrice } from "@/lib/utils/currency";
 import { downloadIcsFile } from "@/lib/utils/calendar";
+import { buildEventShareUrl, nativeShareOrCopy } from "@/lib/utils/share";
 import { createBooking } from "@/app/events/[slug]/actions";
 import type { EventDetail, BookingStatus } from "@/types";
 
@@ -501,19 +502,13 @@ function TicketCard({
   }
 
   async function handleShare() {
-    const shareUrl = `${window.location.origin}/events/${event.slug}`;
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: event.title,
-          text: `Join me at ${event.title}!`,
-          url: shareUrl,
-        });
-      } catch {
-        // User cancelled share — ignore
-      }
-    } else {
-      await navigator.clipboard.writeText(shareUrl);
+    const shareUrl = buildEventShareUrl(event.slug);
+    const outcome = await nativeShareOrCopy({
+      title: event.title,
+      text: `Join me at ${event.title}!`,
+      url: shareUrl,
+    });
+    if (outcome === 'copied' || outcome === 'shared') {
       setLinkCopied(true);
       setTimeout(() => setLinkCopied(false), 2000);
     }

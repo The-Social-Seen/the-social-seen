@@ -80,6 +80,16 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 
 ---
 
+## 🐛 Bugs
+
+### Event detail page crashes on seed-data image hosts
+**Source:** P2-6 preview verification
+**Rationale:** Seed events in the staging DB include `image_url` values from hosts (`res.dayoutwiththekids.co.uk`, `ca-times.brightspotcdn.com`) that aren't in `next.config.ts` `images.remotePatterns`. `next/image` throws a runtime error, the `<GlobalError>` boundary catches it, and the entire event detail page falls back to the error state — blocking local browser verification of any feature on those pages. Not caused by P2-6; reproducible on `main`.
+**Action (proper fix):** Make `resolveEventImage()` (`src/lib/utils/images.ts`) defensive — check the hostname against the allowlist and return `null` (falling back to the placeholder) rather than letting `next/image` throw. Alternative: switch seed data to Unsplash-hosted images only.
+**Priority:** Medium. Blocks local dev verification; unclear whether Vercel preview hits the same error (it uses a managed image optimizer that may be more permissive).
+
+---
+
 ## 🧪 Testing gaps
 
 ### Server-side integration tests for `book_event()` RPC

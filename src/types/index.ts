@@ -202,7 +202,17 @@ export interface EventDetail extends EventWithStats {
 export interface BookingWithEvent extends Booking {
   event: Pick<
     Event,
-    'id' | 'slug' | 'title' | 'date_time' | 'end_time' | 'venue_name' | 'image_url' | 'category' | 'dress_code'
+    | 'id'
+    | 'slug'
+    | 'title'
+    | 'short_description'
+    | 'date_time'
+    | 'end_time'
+    | 'venue_name'
+    | 'venue_address'
+    | 'image_url'
+    | 'category'
+    | 'dress_code'
   >
 }
 
