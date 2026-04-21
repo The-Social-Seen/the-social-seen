@@ -205,6 +205,24 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 **Action:** Extract to a shared TS constant (or expose via the schema) and update the migration's UPDATE values to reference the same prose in a comment.
 **Priority:** Very low.
 
+### `/events/past` omits cancelled events silently (no transparency)
+**Source:** P2-10 post-merge code review (nit)
+**Rationale:** `getPastEvents` filters `eq('is_cancelled', false)`. An attendee searching the archive for an event they remember booking won't find it if it was cancelled. Defensible (we'd rather not surface failures), but reduces transparency.
+**Action:** Either show cancelled past events with a "Cancelled" badge variant, or accept the current omission and document it on the empty state. Product call. `src/lib/supabase/queries/events.ts:getPastEvents`.
+**Priority:** Low.
+
+### `/events/past` has no pagination beyond the first 60
+**Source:** P2-10 post-merge code review (nit)
+**Rationale:** `getPastEvents` caps at `.limit(60)` with no "Load more" affordance. As the archive grows past 60 events the oldest get dropped silently from the public archive. At today's cadence this is years away.
+**Action:** Add cursor-based pagination via `created_at` (or a "Load more" Server Action that appends the next 60). `src/app/events/past/page.tsx` + `src/lib/supabase/queries/events.ts`.
+**Priority:** Low. Not urgent at current event volume.
+
+### Document the `sent_by` = recipient convention for cron-driven sends
+**Source:** P2-10 post-merge code review (nit, partially actioned)
+**Rationale:** The Deno edge function's `sendWithLog` writes `sent_by = relatedProfileId` where `relatedProfileId` is the recipient's profile id (not the cron's identity). This is critical for the GDPR scrub via path 1 (`sent_by = p_user_id`). The follow-up commit on the P2-11 branch added `recipient_user_id` population so the FK path also covers it, but the `sent_by` convention remains the legacy guard.
+**Action:** Add a CONTRIBUTING/architecture note (or extend the comment in `sendWithLog`) explicitly warning future maintainers not to "fix" `sent_by` to a system uuid without keeping `recipient_user_id` populated.
+**Priority:** Low. The inline comment now exists; documentation expansion is just-in-case.
+
 ---
 
 ## 🧪 Testing gaps
