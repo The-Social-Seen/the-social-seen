@@ -6,6 +6,7 @@ import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
 import { PostHogProvider } from "@/components/providers/PostHogProvider";
 import CookieConsentBanner from "@/components/layout/CookieConsentBanner";
+import AccountDeletedHandler from "@/components/layout/AccountDeletedHandler";
 import { JsonLd } from "@/components/seo/JsonLd";
 import { organizationJsonLd } from "@/lib/seo/organization";
 import { getCanonicalSiteUrl } from "@/lib/utils/site";
@@ -124,6 +125,7 @@ export default async function RootLayout({
             {/* P2-8b: consent banner. Shown only until the user
                 decides; respects admin-layout chromeless preference. */}
             {!isAdmin && <CookieConsentBanner />}
+            <AccountDeletedHandler />
           </ThemeProvider>
         </PostHogProvider>
       </body>

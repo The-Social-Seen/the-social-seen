@@ -10,14 +10,30 @@
  * Absolute URL for a public event, suitable for pasting into WhatsApp,
  * email, or any chat client. Uses `window.location.origin` so dev/preview
  * deploys produce working links for their own domain.
+ *
+ * Client-side only. In non-production environments we throw when called
+ * server-side as a tripwire — a relative URL pasted into WhatsApp would
+ * silently break. If a future Server Component needs to prebuild a share
+ * href, add an `origin` parameter rather than widening this fallback.
  */
 export function buildEventShareUrl(slug: string): string {
   if (typeof window === 'undefined') {
-    // Server-side fallback — callers should avoid this path, but we
-    // return something parseable rather than throwing.
+    if (process.env.NODE_ENV !== 'production') {
+      throw new Error(
+        'buildEventShareUrl() called server-side. Pass the origin explicitly or call from a client handler.',
+      )
+    }
     return `/events/${slug}`
   }
   return `${window.location.origin}/events/${slug}`
+}
+
+/**
+ * Canonical share-message copy. Centralised so the native-share text,
+ * WhatsApp deep link, and any future channel stay in sync.
+ */
+export function buildShareText(title: string): string {
+  return `Join me at ${title}`
 }
 
 /**
@@ -26,7 +42,7 @@ export function buildEventShareUrl(slug: string): string {
  * mobile, WhatsApp Web on desktop with a fallback to the install page).
  */
 export function buildWhatsappShareUrl(title: string, shareUrl: string): string {
-  const message = `Join me at ${title}: ${shareUrl}`
+  const message = `${buildShareText(title)}: ${shareUrl}`
   return `https://wa.me/?text=${encodeURIComponent(message)}`
 }
 

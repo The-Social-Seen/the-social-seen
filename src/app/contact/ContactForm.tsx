@@ -73,10 +73,10 @@ export default function ContactForm() {
       {/* Honeypot — visually hidden but DOM-present. Bots fill in
           fields they see; real users don't. */}
       <div aria-hidden="true" style={{ position: 'absolute', left: '-9999px' }}>
-        <label htmlFor="company_website">Leave this field blank</label>
+        <label htmlFor="fax_number">Leave this field blank</label>
         <input
-          id="company_website"
-          name="company_website"
+          id="fax_number"
+          name="fax_number"
           type="text"
           tabIndex={-1}
           autoComplete="off"

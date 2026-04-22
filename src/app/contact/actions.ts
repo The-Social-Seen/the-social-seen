@@ -7,7 +7,7 @@
  * These actions accept anonymous input from the public web. They MUST:
  *   - Validate strictly with zod (no DB write — just an email send).
  *   - Reject obvious bot submissions via three layers:
- *       1. Hidden honeypot field "company_website" that real users
+ *       1. Hidden honeypot field "fax_number" that real users
  *          never see. Any non-empty value = bot.
  *       2. Form-render timestamp ("ts" hidden field): submissions that
  *          arrive < 2 seconds after the page rendered are almost
@@ -41,7 +41,7 @@ import {
 
 // ── Bot defences ────────────────────────────────────────────────────────────
 
-const HONEYPOT_FIELD = 'company_website'
+const HONEYPOT_FIELD = 'fax_number'
 const MIN_SUBMIT_DELAY_MS = 2000
 
 function isLikelyBot(formData: FormData): boolean {

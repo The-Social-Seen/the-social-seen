@@ -99,9 +99,15 @@ describe('EventCard', () => {
     expect(screen.getByText('Rooftop Cocktails')).toBeTruthy()
   })
 
-  it('renders venue name', () => {
+  it('renders venue name when venue_revealed is true', () => {
     render(<EventCard event={makeEvent()} />)
     expect(screen.getByText('Sky Lounge')).toBeTruthy()
+  })
+
+  it('hides venue name behind "revealed 1 week before" when venue_revealed is false', () => {
+    render(<EventCard event={makeEvent({ venue_revealed: false })} />)
+    expect(screen.queryByText('Sky Lounge')).toBeNull()
+    expect(screen.getByText(/venue revealed 1 week before/i)).toBeTruthy()
   })
 
   it('links to the event detail page using slug', () => {

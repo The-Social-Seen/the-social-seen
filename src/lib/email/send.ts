@@ -115,6 +115,16 @@ const RETRY_BACKOFF_MS = 500
 /**
  * Send a transactional email. Always returns a result — never throws.
  * The audit row is written regardless of success/failure.
+ *
+ * **Sandbox caveat — `replyTo` is NOT rewritten.** When
+ * `SANDBOX_FALLBACK_RECIPIENT` is set, the `to` field is redirected to
+ * the sandbox inbox but `replyTo` (e.g. a contact-form visitor's email)
+ * passes through untouched. Replies sent from the sandbox inbox will
+ * therefore land with the real external sender, which is useful for
+ * end-to-end sandbox testing but surprising if unexpected. Documented
+ * rather than rewritten because the test team relies on replying to
+ * real addresses during UAT. See FOLLOW-UPS for the rewrite-instead
+ * alternative if this ever becomes a problem.
  */
 export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
   // ── Preference check (marketing-category opt-out) ────────────────────────

@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import {
   buildEventShareUrl,
+  buildShareText,
   buildWhatsappShareUrl,
   nativeShareOrCopy,
 } from '../share'
@@ -25,6 +26,18 @@ describe('buildEventShareUrl', () => {
     expect(buildEventShareUrl('wine-wisdom')).toBe(
       'https://thesocialseen.com/events/wine-wisdom',
     )
+  })
+})
+
+describe('buildShareText', () => {
+  it('returns the canonical share copy for a title', () => {
+    expect(buildShareText('Wine & Wisdom')).toBe('Join me at Wine & Wisdom')
+  })
+
+  it('is used by buildWhatsappShareUrl so the two stay in sync', () => {
+    const url = buildWhatsappShareUrl('Tapas Night', 'https://example.com/t')
+    const decoded = decodeURIComponent(url.replace('https://wa.me/?text=', ''))
+    expect(decoded.startsWith(buildShareText('Tapas Night'))).toBe(true)
   })
 })
 

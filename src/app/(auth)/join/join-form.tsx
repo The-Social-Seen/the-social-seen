@@ -223,7 +223,8 @@ function StepAccount({
       {/* Phone Number */}
       <div className="space-y-1.5">
         <label htmlFor="phoneNumber" className="block text-sm font-medium text-text-secondary">
-          Phone Number
+          Phone Number{' '}
+          <span className="text-text-tertiary">(for event reminders &amp; venue details)</span>
         </label>
         <input
           id="phoneNumber"
@@ -233,13 +234,13 @@ function StepAccount({
           onChange={(e) => onPhoneNumberChange(e.target.value)}
           placeholder="07123 456789 or +44 7123 456789"
           autoComplete="tel"
+          maxLength={24}
           className={cn(
             'w-full rounded-xl border bg-bg-card px-4 py-3 text-sm text-text-primary outline-none transition-all',
             'placeholder:text-text-tertiary focus:border-border-focus focus:ring-2 focus:ring-gold/20',
             errors.phoneNumber ? 'border-danger ring-2 ring-danger/10' : 'border-border'
           )}
         />
-        <p className="text-xs text-text-tertiary">For event reminders and venue details</p>
         {errors.phoneNumber && <p className="text-xs text-danger">{errors.phoneNumber}</p>}
       </div>
 
@@ -301,9 +302,10 @@ function StepAccount({
           checked={emailConsent}
           onCheckedChange={(checked) => onEmailConsentChange(checked === true)}
           className={cn(
-            'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border bg-bg-card transition-all',
+            'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-border bg-bg-card transition-all',
+            'hover:border-gold/50',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold/40',
-            emailConsent ? 'border-gold bg-gold' : 'border-border hover:border-gold/50'
+            'data-[state=checked]:border-gold data-[state=checked]:bg-gold'
           )}
         >
           <Checkbox.Indicator>
@@ -324,9 +326,10 @@ function StepAccount({
           checked={smsConsent}
           onCheckedChange={(checked) => onSmsConsentChange(checked === true)}
           className={cn(
-            'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border bg-bg-card transition-all',
+            'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-border bg-bg-card transition-all',
+            'hover:border-gold/50',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold/40',
-            smsConsent ? 'border-gold bg-gold' : 'border-border hover:border-gold/50'
+            'data-[state=checked]:border-gold data-[state=checked]:bg-gold'
           )}
         >
           <Checkbox.Indicator>
