@@ -502,6 +502,7 @@ describe('sendVerificationOtp', () => {
     expect(result).toHaveProperty('error')
     if ('error' in result) {
       expect(result.error).toContain('signed in')
+      expect(result.code).toBe('unauthenticated')
     }
     expect(mockSignInWithOtp).not.toHaveBeenCalled()
   })
@@ -554,6 +555,7 @@ describe('sendVerificationOtp', () => {
     expect(result).toHaveProperty('error')
     if ('error' in result) {
       expect(result.error.toLowerCase()).toContain('wait')
+      expect(result.code).toBe('rate_limited')
       // Must NOT leak raw Supabase message
       expect(result.error).not.toContain('Email rate limit exceeded')
     }
@@ -574,6 +576,7 @@ describe('sendVerificationOtp', () => {
     expect(result).toHaveProperty('error')
     if ('error' in result) {
       expect(result.error).not.toContain('Some internal failure')
+      expect(result.code).toBe('send_failed')
     }
   })
 })
@@ -588,6 +591,7 @@ describe('verifyEmailOtp', () => {
     expect(result).toHaveProperty('error')
     if ('error' in result) {
       expect(result.error).toContain('6-digit')
+      expect(result.code).toBe('validation_error')
     }
     expect(mockVerifyOtp).not.toHaveBeenCalled()
   })
@@ -609,6 +613,7 @@ describe('verifyEmailOtp', () => {
     expect(result).toHaveProperty('error')
     if ('error' in result) {
       expect(result.error).toContain('signed in')
+      expect(result.code).toBe('unauthenticated')
     }
     expect(mockVerifyOtp).not.toHaveBeenCalled()
   })
@@ -660,6 +665,7 @@ describe('verifyEmailOtp', () => {
     expect(result).toHaveProperty('error')
     if ('error' in result) {
       expect(result.error).toContain('invalid or has expired')
+      expect(result.code).toBe('invalid_otp')
       // Must NOT leak the raw Supabase message
       expect(result.error).not.toContain('Token has expired or is invalid')
     }

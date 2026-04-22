@@ -788,8 +788,12 @@ async function sendWithLog(
   // populate both `sent_by` and `recipient_user_id` from it so the
   // GDPR scrub RPC (`sanitise_user_notifications`, P2-9) catches the
   // row by the FK path, not just the legacy sent_by-as-recipient
-  // convention. If a future maintainer ever changes `sent_by` to the
-  // cron's identity (e.g. a system user), the FK path remains correct.
+  // convention.
+  //
+  // ⚠️ DO NOT "fix" `sent_by` to a system uuid without reading
+  // docs/CONTRIBUTING.md → "sent_by = recipient_user_id" first.
+  // The older scrub path relies on sent_by holding the recipient's
+  // id, and dropping either column breaks GDPR deletion coverage.
   const { data: inserted, error: insertErr } = await supabase
     .from('notifications')
     .insert({

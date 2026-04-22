@@ -403,9 +403,22 @@ export async function completeOnboarding(): Promise<{ success: true } | { error:
  * Rate limits are enforced by Supabase (one email per 60s by default).
  * We surface the 429 as a friendly "Please wait before requesting another code".
  */
-export async function sendVerificationOtp(): Promise<
-  { success: true; alreadyVerified?: boolean } | { error: string }
-> {
+/**
+ * Machine-readable error codes on auth action results. The frontend
+ * branches on `code` rather than substring-matching `error.message`,
+ * so backend copy can be refined without silently misclassifying
+ * failures in the UI.
+ */
+export type SendVerificationOtpErrorCode =
+  | 'unauthenticated'
+  | 'rate_limited'
+  | 'send_failed'
+
+export type SendVerificationOtpResult =
+  | { success: true; alreadyVerified?: boolean }
+  | { error: string; code: SendVerificationOtpErrorCode }
+
+export async function sendVerificationOtp(): Promise<SendVerificationOtpResult> {
   const supabase = await createServerClient()
 
   const {
@@ -414,7 +427,7 @@ export async function sendVerificationOtp(): Promise<
   } = await supabase.auth.getUser()
 
   if (authError || !user || !user.email) {
-    return { error: 'You must be signed in' }
+    return { error: 'You must be signed in', code: 'unauthenticated' }
   }
 
   // Short-circuit if already verified — don't waste an email send. Caller
@@ -445,10 +458,16 @@ export async function sendVerificationOtp(): Promise<
     // handle both wording variants.
     const msg = error.message.toLowerCase()
     if (msg.includes('rate limit') || msg.includes('too many')) {
-      return { error: 'Please wait a moment before requesting another code.' }
+      return {
+        error: 'Please wait a moment before requesting another code.',
+        code: 'rate_limited',
+      }
     }
     // Generic fallback — don't leak the raw Supabase message.
-    return { error: 'Could not send verification email. Please try again.' }
+    return {
+      error: 'Could not send verification email. Please try again.',
+      code: 'send_failed',
+    }
   }
 
   return { success: true }
@@ -461,12 +480,21 @@ export async function sendVerificationOtp(): Promise<
  * Must be called by an authenticated session — the caller's email is
  * used as the OTP target (no way to verify someone else's email).
  */
+export type VerifyEmailOtpErrorCode =
+  | 'validation_error'
+  | 'unauthenticated'
+  | 'invalid_otp'
+
+export type VerifyEmailOtpResult =
+  | { success: true }
+  | { error: string; code: VerifyEmailOtpErrorCode }
+
 export async function verifyEmailOtp(input: {
   code: string
-}): Promise<{ success: true } | { error: string }> {
+}): Promise<VerifyEmailOtpResult> {
   const parsed = verifyEmailOtpSchema.safeParse(input)
   if (!parsed.success) {
-    return { error: parsed.error.issues[0].message }
+    return { error: parsed.error.issues[0].message, code: 'validation_error' }
   }
 
   const supabase = await createServerClient()
@@ -477,7 +505,7 @@ export async function verifyEmailOtp(input: {
   } = await supabase.auth.getUser()
 
   if (authError || !user || !user.email) {
-    return { error: 'You must be signed in' }
+    return { error: 'You must be signed in', code: 'unauthenticated' }
   }
 
   const { error: verifyError } = await supabase.auth.verifyOtp({
@@ -489,7 +517,10 @@ export async function verifyEmailOtp(input: {
   if (verifyError) {
     // Friendly message — don't leak raw Supabase errors (e.g. "Token has
     // expired or is invalid" is close but we keep wording consistent).
-    return { error: 'That code is invalid or has expired. Request a new one.' }
+    return {
+      error: 'That code is invalid or has expired. Request a new one.',
+      code: 'invalid_otp',
+    }
   }
 
   // Flip the app-level verification flag. Supabase's email_confirmed_at is

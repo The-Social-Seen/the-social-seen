@@ -98,6 +98,7 @@ describe('VerifyForm', () => {
   it('shows send-error state with Try Again when initial send fails', async () => {
     mockSendVerificationOtp.mockResolvedValue({
       error: 'Could not send verification email. Please try again.',
+      code: 'send_failed',
     })
     render(<VerifyForm />)
     await waitFor(() => {
@@ -111,6 +112,7 @@ describe('VerifyForm', () => {
   it('shows sign-in CTA when initial send returns "must be signed in"', async () => {
     mockSendVerificationOtp.mockResolvedValue({
       error: 'You must be signed in',
+      code: 'unauthenticated',
     })
     render(<VerifyForm />)
     await waitFor(() => {
@@ -193,6 +195,7 @@ describe('VerifyForm', () => {
     mockSendVerificationOtp.mockResolvedValue({ success: true })
     mockVerifyEmailOtp.mockResolvedValue({
       error: 'That code is invalid or has expired. Request a new one.',
+      code: 'invalid_otp',
     })
 
     render(<VerifyForm />)
@@ -210,6 +213,7 @@ describe('VerifyForm', () => {
     mockSendVerificationOtp.mockResolvedValue({ success: true })
     mockVerifyEmailOtp.mockResolvedValue({
       error: 'That code is invalid or has expired. Request a new one.',
+      code: 'invalid_otp',
     })
 
     render(<VerifyForm />)

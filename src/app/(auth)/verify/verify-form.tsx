@@ -9,7 +9,11 @@ import { cn } from '@/lib/utils/cn'
 import { sanitizeRedirectPath } from '@/lib/utils/redirect'
 import { track } from '@/lib/analytics/track'
 import { OtpDigits } from '@/components/auth/OtpDigits'
-import { sendVerificationOtp, verifyEmailOtp } from '../actions'
+import {
+  sendVerificationOtp,
+  verifyEmailOtp,
+  type SendVerificationOtpErrorCode,
+} from '../actions'
 
 const CODE_LENGTH = 6
 const RESEND_COOLDOWN_SECONDS = 60
@@ -32,6 +36,9 @@ export function VerifyForm() {
   const [digits, setDigits] = useState<string[]>(Array(CODE_LENGTH).fill(''))
   const [error, setError] = useState<string | null>(null)
   const [sendError, setSendError] = useState<string | null>(null)
+  const [sendErrorCode, setSendErrorCode] = useState<
+    SendVerificationOtpErrorCode | null
+  >(null)
   const [secondsLeft, setSecondsLeft] = useState(RESEND_COOLDOWN_SECONDS)
 
   // Guards against double auto-send in React StrictMode and against re-sending
@@ -56,34 +63,36 @@ export function VerifyForm() {
   const handleSend = useCallback(
     async (source: 'banner' | 'modal' | 'direct') => {
       setSendError(null)
+      setSendErrorCode(null)
       track('email_verification_requested', { source })
 
       const result = await sendVerificationOtp()
 
       if ('error' in result) {
-        // Session dropped — don't stay in "sending" state forever.
-        if (result.error.toLowerCase().includes('signed in')) {
+        // Branch on the machine-readable `code` so UI logic doesn't
+        // depend on backend copy. `error` is display-only.
+        if (result.code === 'unauthenticated') {
           setStatus('send_error')
           setSendError(result.error)
+          setSendErrorCode(result.code)
           return
         }
-        const reason =
-          result.error.toLowerCase().includes('wait') ||
-          result.error.toLowerCase().includes('rate')
-            ? 'rate_limit'
-            : 'send_failed'
-        track('email_verification_failed', { reason })
+        track('email_verification_failed', {
+          reason: result.code === 'rate_limited' ? 'rate_limit' : 'send_failed',
+        })
 
-        if (reason === 'rate_limit') {
+        if (result.code === 'rate_limited') {
           // Keep them on the input screen but show the error and extend the
           // cooldown so they can't immediately re-send.
           setStatus('ready')
           setSendError(result.error)
+          setSendErrorCode(result.code)
           setSecondsLeft(RESEND_COOLDOWN_SECONDS)
           return
         }
         setStatus('send_error')
         setSendError(result.error)
+        setSendErrorCode(result.code)
         return
       }
 
@@ -136,14 +145,11 @@ export function VerifyForm() {
       isSubmittingRef.current = false
 
       if ('error' in result) {
-        const msg = result.error.toLowerCase()
-        const reason: 'invalid_code' | 'rate_limit' | 'other' = msg.includes(
-          'invalid',
-        )
-          ? 'invalid_code'
-          : msg.includes('wait') || msg.includes('rate')
-            ? 'rate_limit'
-            : 'other'
+        // Keep the analytics taxonomy stable ('invalid_code' / 'rate_limit' /
+        // 'other') for historical continuity, but derive it from the
+        // machine-readable `code` instead of substring-matching the message.
+        const reason: 'invalid_code' | 'rate_limit' | 'other' =
+          result.code === 'invalid_otp' ? 'invalid_code' : 'other'
         track('email_verification_failed', { reason })
 
         setStatus('ready')
@@ -217,7 +223,7 @@ export function VerifyForm() {
                 Couldn&apos;t Send Code
               </h1>
               <p className="mt-3 text-sm text-danger">{sendError}</p>
-              {sendError?.toLowerCase().includes('signed in') ? (
+              {sendErrorCode === 'unauthenticated' ? (
                 <Link
                   href="/login"
                   className="mt-8 inline-flex w-full items-center justify-center rounded-full bg-gold px-8 py-3 text-sm font-semibold text-white transition-all hover:bg-gold-dark hover:shadow-lg hover:shadow-gold/25"
