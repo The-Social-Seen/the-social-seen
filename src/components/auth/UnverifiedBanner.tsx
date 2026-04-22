@@ -55,12 +55,16 @@ export function UnverifiedBanner({ verified }: UnverifiedBannerProps) {
 
   const verifyHref = `/verify?from=${encodeURIComponent(pathname ?? '/events')}`
 
+  // Top margin matches the fixed Header's height (h-16 mobile, sm:h-20 desktop
+  // in src/components/layout/Header.tsx). Without this the banner would render
+  // at flow position 0 and disappear behind the fixed header.
   return (
     <div
       role="status"
       className={cn(
         'relative w-full border-b border-gold/20 bg-gold/10',
         'text-text-primary',
+        'mt-16 sm:mt-20',
       )}
     >
       <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3 sm:px-6 lg:px-8">

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useTransition } from 'react'
 import { Send } from 'lucide-react'
 import { sendContactMessage } from './actions'
 import { CONTACT_SUBJECT_OPTIONS } from '@/lib/email/templates/contact-message'
+import { TurnstileWidget } from '@/components/forms/TurnstileWidget'
 
 const MAX_MESSAGE = 5000
 
@@ -175,6 +176,8 @@ export default function ContactForm() {
           {error}
         </p>
       )}
+
+      <TurnstileWidget />
 
       <button
         type="submit"

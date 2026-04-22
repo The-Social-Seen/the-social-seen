@@ -1,26 +1,29 @@
 'use server'
 
 /**
- * Public-form Server Actions for /contact and /collaborate (P2-12).
+ * Public-form Server Actions for /contact and /collaborate (P2-12, hardened
+ * in Phase 2.5 Batch 1).
  *
  * These actions accept anonymous input from the public web. They MUST:
  *   - Validate strictly with zod (no DB write — just an email send).
- *   - Reject obvious bot submissions via two cheap signals:
+ *   - Reject obvious bot submissions via three layers:
  *       1. Hidden honeypot field "company_website" that real users
  *          never see. Any non-empty value = bot.
  *       2. Form-render timestamp ("ts" hidden field): submissions that
  *          arrive < 2 seconds after the page rendered are almost
  *          certainly automated.
+ *       3. Cloudflare Turnstile challenge — invisible for ~99% of real
+ *          users; forces a puzzle for suspicious sessions. Verifier
+ *          fails open if the secret is unconfigured so local dev /
+ *          early-stage preview deploys don't break. See
+ *          src/lib/turnstile/verify.ts for the policy details.
  *   - Set Resend `replyTo` to the visitor's email so the team replies
  *     land in the visitor's inbox — info@the-social-seen.com is the
  *     default and would route replies back to ourselves.
- *
- * Rate limiting is NOT included in this batch — the failed-notifications
- * admin view (P2-9) gives operational visibility on abuse spikes.
- * Tracked in docs/FOLLOW-UPS.md as Phase-3 work.
  */
 
 import { z } from 'zod'
+import { headers } from 'next/headers'
 import { sendEmail } from '@/lib/email/send'
 import {
   contactMessageTemplate,
@@ -31,6 +34,10 @@ import {
   type CollaborationType,
 } from '@/lib/email/templates/collaboration-pitch'
 import { REPLY_TO_ADDRESS } from '@/lib/email/config'
+import {
+  extractTurnstileToken,
+  verifyTurnstileToken,
+} from '@/lib/turnstile/verify'
 
 // ── Bot defences ────────────────────────────────────────────────────────────
 
@@ -48,6 +55,27 @@ function isLikelyBot(formData: FormData): boolean {
     if (elapsed < MIN_SUBMIT_DELAY_MS) return true
   }
   return false
+}
+
+/**
+ * Read the caller's IP from common proxy headers (Vercel sets these).
+ * Used only to hand to Cloudflare's siteverify for better scoring —
+ * failure here just means we skip the hint.
+ */
+async function callerIp(): Promise<string | undefined> {
+  try {
+    const h = await headers()
+    const forwarded = h.get('x-forwarded-for')
+    if (forwarded) {
+      const first = forwarded.split(',')[0]?.trim()
+      if (first) return first
+    }
+    const real = h.get('x-real-ip')
+    if (real) return real.trim()
+  } catch {
+    // headers() can throw outside a request context — ignore.
+  }
+  return undefined
 }
 
 // ── Bot defences (continued) — header-injection guard ──────────────────────
@@ -95,6 +123,14 @@ export async function sendContactMessage(
   // Bot check first — return success silently so attackers can't
   // probe the validator behaviour.
   if (isLikelyBot(formData)) {
+    return { success: true }
+  }
+
+  // Turnstile — also returns silent success on failure so scrapers
+  // can't distinguish "token rejected" from "message sent".
+  const ip = await callerIp()
+  const ts = await verifyTurnstileToken(extractTurnstileToken(formData), ip)
+  if (!ts.ok) {
     return { success: true }
   }
 
@@ -185,6 +221,12 @@ export async function sendCollaborationPitch(
   formData: FormData,
 ): Promise<CollaborationFormResult> {
   if (isLikelyBot(formData)) {
+    return { success: true }
+  }
+
+  const ip = await callerIp()
+  const ts = await verifyTurnstileToken(extractTurnstileToken(formData), ip)
+  if (!ts.ok) {
     return { success: true }
   }
 

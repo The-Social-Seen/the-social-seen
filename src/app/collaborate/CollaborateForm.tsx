@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useTransition } from 'react'
 import { Send } from 'lucide-react'
 import { sendCollaborationPitch } from '../contact/actions'
 import { COLLABORATION_TYPE_OPTIONS } from '@/lib/email/templates/collaboration-pitch'
+import { TurnstileWidget } from '@/components/forms/TurnstileWidget'
 
 const MAX_MESSAGE = 5000
 
@@ -210,6 +211,8 @@ export default function CollaborateForm() {
           {error}
         </p>
       )}
+
+      <TurnstileWidget />
 
       <button
         type="submit"

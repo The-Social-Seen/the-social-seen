@@ -7,6 +7,7 @@ import { Pencil, Users, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { formatDateCard } from '@/lib/utils/dates'
 import { formatPrice } from '@/lib/utils/currency'
+import { resolveEventImage } from '@/lib/utils/images'
 import { categoryLabel } from '@/types'
 import { softDeleteEvent } from '@/app/(admin)/admin/actions'
 import type { EventWithStats } from '@/types'
@@ -67,7 +68,9 @@ export default function EventsTable({ events }: EventsTableProps) {
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
-          {events.map((event) => (
+          {events.map((event) => {
+            const thumbUrl = resolveEventImage(event.image_url)
+            return (
             <tr
               key={event.id}
               className={cn(
@@ -77,10 +80,10 @@ export default function EventsTable({ events }: EventsTableProps) {
             >
               <td className="py-3 pr-4">
                 <Link href={`/admin/events/${event.id}`} className="flex items-center gap-3 group">
-                  {event.image_url ? (
+                  {thumbUrl ? (
                     <div className="relative w-10 h-10 rounded-lg overflow-hidden shrink-0">
                       <Image
-                        src={event.image_url}
+                        src={thumbUrl}
                         alt={event.title}
                         fill
                         className="object-cover"
@@ -139,7 +142,8 @@ export default function EventsTable({ events }: EventsTableProps) {
                 </div>
               </td>
             </tr>
-          ))}
+            )
+          })}
         </tbody>
       </table>
     </div>

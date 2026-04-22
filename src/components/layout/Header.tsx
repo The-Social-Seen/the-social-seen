@@ -62,59 +62,61 @@ export function Header() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, [handleScroll]);
 
-  // Auth state — single source of truth.
+  // Auth state — two coordinated effects:
   //
-  // 1. On mount: read the current session (cookie-only, no network) so the
-  //    avatar appears immediately for logged-in users without waiting for a
-  //    route change.
-  // 2. Subscribe to onAuthStateChange so sign-in / sign-out fire UI updates
-  //    without requiring a page reload. The singleton browser client
-  //    (lib/supabase/client.ts) guarantees this listener sees events from
-  //    auth calls made anywhere in the app.
+  // 1. Mount-only effect: subscribes to onAuthStateChange for client-initiated
+  //    auth events (the subscription must be created exactly once; re-subscribing
+  //    on every pathname change would leak listeners).
+  //
+  // 2. Pathname-deps effect below: re-reads the cookie-backed session on every
+  //    route change. This catches auth changes made via Server Actions — e.g. the
+  //    login flow calls `supabase.auth.signInWithPassword` server-side, which
+  //    sets the session cookie in the response but does NOT fire the browser
+  //    client's onAuthStateChange. Without this re-read, the Header would keep
+  //    showing "Sign In" until a full page reload. See PR #12 context — the
+  //    pathname-based check from PR #5 was dropped when auth was consolidated;
+  //    this restores it without re-introducing multiple Supabase client instances.
+  const applyUser = useCallback(async (nextUser: User | null) => {
+    setUser(nextUser);
+
+    if (nextUser) {
+      try {
+        const { createClient } = await import("@/lib/supabase/client");
+        const supabase = createClient();
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", nextUser.id)
+          .single();
+        setIsAdmin(profile?.role === "admin");
+      } catch {
+        setIsAdmin(false);
+      }
+    } else {
+      setIsAdmin(false);
+    }
+
+    setIsAuthResolved(true);
+  }, []);
+
   useEffect(() => {
     let active = true;
     let subscription: { unsubscribe: () => void } | undefined;
-
-    async function applyUser(nextUser: User | null) {
-      if (!active) return;
-      setUser(nextUser);
-
-      if (nextUser) {
-        try {
-          const { createClient } = await import("@/lib/supabase/client");
-          const supabase = createClient();
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("role")
-            .eq("id", nextUser.id)
-            .single();
-          if (active) setIsAdmin(profile?.role === "admin");
-        } catch {
-          if (active) setIsAdmin(false);
-        }
-      } else if (active) {
-        setIsAdmin(false);
-      }
-
-      if (active) setIsAuthResolved(true);
-    }
 
     async function initAuth() {
       try {
         const { createClient } = await import("@/lib/supabase/client");
         const supabase = createClient();
 
-        // Initial session — cookie-only, no network round-trip.
         const {
           data: { session },
         } = await supabase.auth.getSession();
-        await applyUser(session?.user ?? null);
+        if (active) await applyUser(session?.user ?? null);
 
-        // React to future auth changes (sign-in from login form, sign-out, etc.).
         const {
           data: { subscription: sub },
         } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-          void applyUser(nextSession?.user ?? null);
+          if (active) void applyUser(nextSession?.user ?? null);
         });
         subscription = sub;
       } catch {
@@ -126,12 +128,38 @@ export function Header() {
       }
     }
 
-    initAuth();
+    void initAuth();
     return () => {
       active = false;
       subscription?.unsubscribe();
     };
-  }, []);
+  }, [applyUser]);
+
+  // Pathname-based re-check: catches Server-Action auth (e.g. login).
+  // router.refresh() after login invalidates the Server Component tree and
+  // navigates, re-running this effect with a fresh cookie-backed session.
+  useEffect(() => {
+    let active = true;
+
+    async function syncFromCookie() {
+      try {
+        const { createClient } = await import("@/lib/supabase/client");
+        const supabase = createClient();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const nextUser = session?.user ?? null;
+        if (active) void applyUser(nextUser);
+      } catch {
+        // Swallow — the mount effect also sets a safe default.
+      }
+    }
+
+    void syncFromCookie();
+    return () => {
+      active = false;
+    };
+  }, [pathname, applyUser]);
 
   // Lock body scroll when mobile menu is open
   useEffect(() => {
