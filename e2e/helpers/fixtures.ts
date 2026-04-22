@@ -138,6 +138,11 @@ export async function createTestEvent(
   const slug = `${E2E_SLUG_PREFIX}${tag}-${suffix}`
   const title = `E2E ${tag} ${suffix}`
   const dateTime = new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1000).toISOString()
+  // events.end_time is NOT NULL with a CHECK (end_time > date_time).
+  // Default to 3h after start — arbitrary but valid for every scenario.
+  const endTime = new Date(
+    Date.now() + daysFromNow * 24 * 60 * 60 * 1000 + 3 * 60 * 60 * 1000,
+  ).toISOString()
 
   const { data, error } = await admin
     .from('events')
@@ -147,6 +152,7 @@ export async function createTestEvent(
       description: 'Seeded by the E2E suite.',
       short_description: 'E2E seed',
       date_time: dateTime,
+      end_time: endTime,
       venue_name: 'E2E Venue',
       venue_address: '1 Test Road, London',
       venue_revealed: true,
