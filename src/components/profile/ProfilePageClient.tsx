@@ -7,6 +7,8 @@ import { ProfileCompletionBanner } from '@/components/profile/ProfileCompletionB
 import { EditProfileForm } from '@/components/profile/EditProfileForm'
 import { BookingsList } from '@/components/profile/BookingsList'
 import DataPrivacySection from '@/components/profile/DataPrivacySection'
+import { EmailPreferencesSection } from '@/components/profile/EmailPreferencesSection'
+import type { EmailPreferences } from '@/app/(member)/profile/preferences-actions'
 import type { Profile, BookingWithEvent } from '@/types'
 
 interface ProfilePageClientProps {
@@ -15,6 +17,7 @@ interface ProfilePageClientProps {
   past: BookingWithEvent[]
   waitlisted: BookingWithEvent[]
   reviewableEventIds: Set<string>
+  emailPreferences: EmailPreferences | null
 }
 
 export function ProfilePageClient({
@@ -23,6 +26,7 @@ export function ProfilePageClient({
   past,
   waitlisted,
   reviewableEventIds,
+  emailPreferences,
 }: ProfilePageClientProps) {
   const [editOpen, setEditOpen] = useState(false)
 
@@ -76,6 +80,8 @@ export function ProfilePageClient({
           userAvatar={profile.avatar_url}
         />
       </section>
+
+      {emailPreferences && <EmailPreferencesSection initial={emailPreferences} />}
 
       <DataPrivacySection />
 

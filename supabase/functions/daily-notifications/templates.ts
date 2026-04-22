@@ -7,6 +7,66 @@
 // Inline styles only. Brand hex is hardcoded (same documented exception
 // as the Node templates).
 
+// Deno supports node: compat on Deno Deploy (where Supabase Edge Functions
+// run). Using node:crypto here keeps the HMAC signing code identical to
+// the Node-side unsubscribe-token.ts so tokens issued in either runtime
+// verify against the same signature.
+// @ts-expect-error — Deno remote / node compat; ignored by the Next.js TS build.
+import { createHmac } from 'node:crypto'
+
+// deno-lint-ignore no-explicit-any
+const denoEnv: any =
+  (typeof (globalThis as unknown as { Deno?: { env?: { get: (k: string) => string | undefined } } }).Deno?.env?.get ===
+    'function')
+    ? (globalThis as unknown as { Deno: { env: { get: (k: string) => string | undefined } } }).Deno.env
+    : { get: (_k: string) => undefined }
+
+type UnsubscribeCategory =
+  | 'review_requests'
+  | 'profile_nudges'
+  | 'admin_announcements'
+
+function b64url(buf: Uint8Array | string): string {
+  const src = typeof buf === 'string' ? new TextEncoder().encode(buf) : buf
+  // Deno has globalThis.btoa; converting Uint8Array first.
+  let binary = ''
+  for (let i = 0; i < src.length; i++) binary += String.fromCharCode(src[i])
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
+
+function getUnsubscribeSecret(): string | null {
+  const explicit = denoEnv.get('UNSUBSCRIBE_TOKEN_SECRET')
+  if (explicit && explicit.length >= 16) return explicit
+  const fallback = denoEnv.get('SUPABASE_SERVICE_ROLE_KEY')
+  if (fallback) return fallback
+  return null
+}
+
+/**
+ * Build the absolute unsubscribe URL for use in an email.
+ * Returns `null` if UNSUBSCRIBE_TOKEN_SECRET (or fallback) isn't set —
+ * the renderShell caller falls through to "no link" in that case, which
+ * is preferable to throwing during the daily cron.
+ */
+export function buildUnsubscribeUrl(
+  userId: string,
+  category: UnsubscribeCategory,
+  siteUrl: string,
+): string | null {
+  const secret = getUnsubscribeSecret()
+  if (!secret) return null
+  const payload = JSON.stringify({
+    u: userId,
+    c: category,
+    i: Math.floor(Date.now() / 1000),
+  })
+  const encoded = b64url(payload)
+  const sig = b64url(createHmac('sha256', secret).update(encoded).digest())
+  const token = `${encoded}.${sig}`
+  const base = siteUrl.replace(/\/$/, '')
+  return `${base}/unsubscribe?t=${encodeURIComponent(token)}`
+}
+
 const COLORS = {
   charcoal: '#1C1C1E',
   cream: '#FAF7F2',
@@ -57,7 +117,14 @@ export function htmlToText(html: string): string {
     .trim()
 }
 
-function renderShell(previewText: string, bodyHtml: string): string {
+function renderShell(
+  previewText: string,
+  bodyHtml: string,
+  unsubscribeUrl?: string | null,
+): string {
+  const footerUnsubscribe = unsubscribeUrl
+    ? `<p style="margin:0;"><a href="${escapeAttr(unsubscribeUrl)}" style="color:${COLORS.textSecondary};text-decoration:underline;">Unsubscribe from these emails</a></p>`
+    : ''
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>The Social Seen</title></head>
 <body style="margin:0;padding:0;background-color:${COLORS.cream};font-family:${FONT_STACK};color:${COLORS.charcoal};">
@@ -74,7 +141,7 @@ function renderShell(previewText: string, bodyHtml: string): string {
       <tr><td style="padding:24px;background-color:${COLORS.cream};border-top:1px solid ${COLORS.border};font-size:12px;color:${COLORS.textSecondary};text-align:center;">
         <p style="margin:0 0 8px 0;">The Social Seen &middot; London</p>
         <p style="margin:0 0 8px 0;">Questions? <a href="mailto:info@the-social-seen.com" style="color:${COLORS.gold};text-decoration:none;">info@the-social-seen.com</a></p>
-        <p style="margin:0;"><a href="#" style="color:${COLORS.textSecondary};text-decoration:underline;">Unsubscribe</a></p>
+        ${footerUnsubscribe}
       </td></tr>
     </table>
   </td></tr>
@@ -205,6 +272,7 @@ ${renderButton(copy.ctaLabel, eventUrl)}
 // ── Review request ──────────────────────────────────────────────────────────
 
 export interface ReviewRequestInput {
+  userId: string
   fullName: string
   eventTitle: string
   eventSlug: string
@@ -222,13 +290,18 @@ export function reviewRequestTemplate(input: ReviewRequestInput): Rendered {
 ${renderButton('Leave a Review', reviewUrl)}
 <p style="margin:32px 0 0 0;font-size:14px;color:${COLORS.textSecondary};">See you at the next one.</p>
 <p style="margin:8px 0 0 0;color:${COLORS.textSecondary};font-size:14px;">&mdash; The Social Seen team</p>`
-  const html = renderShell('A quick review helps other members pick events.', body)
+  const html = renderShell(
+    'A quick review helps other members pick events.',
+    body,
+    buildUnsubscribeUrl(input.userId, 'review_requests', input.siteUrl),
+  )
   return { subject, html, text: htmlToText(html) }
 }
 
 // ── Profile completion nudge ────────────────────────────────────────────────
 
 export interface ProfileNudgeInput {
+  userId: string
   fullName: string
   /** 0–100 integer percentage. Always < 50 when this template fires. */
   completionScore: number
@@ -261,6 +334,7 @@ ${renderButton('Complete My Profile', profileUrl)}
   const html = renderShell(
     `Your profile is ${input.completionScore}% complete \u2014 a few quick wins below.`,
     body,
+    buildUnsubscribeUrl(input.userId, 'profile_nudges', input.siteUrl),
   )
   return { subject, html, text: htmlToText(html) }
 }

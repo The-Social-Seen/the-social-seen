@@ -4,6 +4,7 @@ import { getProfile, getMyBookings } from '@/lib/supabase/queries/profile'
 import { getReviewableEvents } from '@/lib/supabase/queries/reviews'
 import { splitBookings } from '@/lib/utils/bookings'
 import { ProfilePageClient } from '@/components/profile/ProfilePageClient'
+import { getMyEmailPreferences } from './preferences-actions'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -20,11 +21,13 @@ export default async function ProfilePage() {
 
   if (!user) redirect('/login')
 
-  const [profile, bookings, reviewableEvents] = await Promise.all([
-    getProfile(user.id),
-    getMyBookings(user.id),
-    getReviewableEvents(),
-  ])
+  const [profile, bookings, reviewableEvents, emailPreferences] =
+    await Promise.all([
+      getProfile(user.id),
+      getMyBookings(user.id),
+      getReviewableEvents(),
+      getMyEmailPreferences(),
+    ])
 
   if (!profile) redirect('/login')
 
@@ -41,6 +44,7 @@ export default async function ProfilePage() {
           past={past}
           waitlisted={waitlisted}
           reviewableEventIds={reviewableEventIds}
+          emailPreferences={emailPreferences}
         />
       </div>
     </div>

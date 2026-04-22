@@ -6,12 +6,15 @@ import {
   renderButton,
   renderShell,
 } from './_shared'
+import { buildUnsubscribeUrl } from '../unsubscribe-token'
 import type { RenderedTemplate } from './welcome'
 
 export interface ReviewRequestInput {
   fullName: string
   eventTitle: string
   eventSlug: string
+  /** Recipient's profile id — used to build the unsubscribe token. */
+  userId: string
 }
 
 /**
@@ -55,6 +58,7 @@ ${renderButton({ label: 'Leave a Review', href: reviewUrl })}
   const html = renderShell({
     previewText: `A quick review helps other members pick events.`,
     bodyHtml,
+    unsubscribeUrl: buildUnsubscribeUrl(input.userId, 'review_requests'),
   })
 
   return {

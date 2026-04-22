@@ -167,18 +167,28 @@ describe('deleteMyAccount', () => {
     mockFrom.mockImplementation(() => mockChain({ data: [], error: null }))
 
     // Admin client chain — tracks which tables were touched + in what
-    // order. Profile stripe_customer_id lookup returns null (free-event
-    // member — never booked a paid event).
+    // order. Three .from('profiles') calls now:
+    //   1. full_name lookup (for the body-scrub pass in sanitise_user_notifications)
+    //   2. stripe_customer_id lookup (Stripe Customer deletion branch)
+    //   3. profile anonymisation UPDATE
     const tablesTouched: string[] = []
+    let profilesCallIdx = 0
     mockAdminFrom.mockImplementation((table: string) => {
       tablesTouched.push(table)
       if (table === 'profiles') {
-        // Two .from('profiles') calls: first is the stripe_customer_id
-        // lookup (select), second is the anonymisation UPDATE. Both
-        // use the same chain template. For the select, .single()
-        // resolves to { stripe_customer_id: null } — no Stripe call
-        // triggered.
-        return mockChain({ data: { stripe_customer_id: null }, error: null })
+        profilesCallIdx++
+        if (profilesCallIdx === 1) {
+          return mockChain({
+            data: { full_name: 'Test User' },
+            error: null,
+          })
+        }
+        if (profilesCallIdx === 2) {
+          // Free-event member — no Stripe Customer triggered.
+          return mockChain({ data: { stripe_customer_id: null }, error: null })
+        }
+        // Anonymise UPDATE — no selected data needed.
+        return mockChain({ data: null, error: null })
       }
       return mockChain({ data: null, error: null })
     })
@@ -191,11 +201,12 @@ describe('deleteMyAccount', () => {
       expect((err as Error).message).toMatch(/REDIRECT:\/\?account_deleted=1/)
     }
 
-    // Sequence: bookings cancel → interests delete → profiles lookup →
-    // profiles anonymise. user-scoped bookings check precedes the admin
-    // calls but uses `mockFrom`, not `mockAdminFrom`.
+    // Sequence: bookings cancel → profiles (full_name lookup) →
+    // rpc (scrub) → user_interests → profiles (stripe lookup) →
+    // profiles (anonymise).
     expect(tablesTouched).toEqual([
       'bookings',
+      'profiles',
       'user_interests',
       'profiles',
       'profiles',
@@ -203,6 +214,7 @@ describe('deleteMyAccount', () => {
     expect(mockAdminRpc).toHaveBeenCalledWith('sanitise_user_notifications', {
       p_user_id: 'user-1',
       p_user_email: 'u@example.com',
+      p_user_full_name: 'Test User',
     })
     // Free-event member — no Stripe Customer to delete.
     expect(mockStripeCustomersDel).not.toHaveBeenCalled()

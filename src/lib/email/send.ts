@@ -22,6 +22,7 @@ import {
   SANDBOX_FALLBACK_RECIPIENT,
 } from './config'
 import { getResendClient } from './resend'
+import type { NotificationCategory } from './unsubscribe-token'
 
 export type EmailTag = { name: string; value: string }
 
@@ -78,11 +79,34 @@ export interface SendEmailInput {
    * pitch) rather than to the support inbox.
    */
   replyTo?: string
+  /**
+   * Marketing-category gate. When set, sendEmail looks up the recipient's
+   * row in `notification_preferences` and skips the send if the
+   * corresponding boolean is false. Only applicable to marketing-adjacent
+   * templates (review_requests, profile_nudges, admin_announcements) —
+   * transactional templates (booking confirmation, OTP, venue reveal,
+   * event reminder, cancellation, welcome) leave this undefined and
+   * always send.
+   *
+   * Requires `recipientUserId` to look up preferences. If
+   * `preferenceCategory` is set but `recipientUserId` is not, the check
+   * falls through to sending (no data to look up).
+   */
+  preferenceCategory?: NotificationCategory
 }
 
 export type SendEmailResult =
   | { success: true; messageId: string }
   | { success: false; error: string }
+
+/**
+ * Sentinel returned in `SendEmailResult.error` when the send was
+ * suppressed because the recipient opted out via `notification_preferences`.
+ * Callers can match on this string if they want to branch on opt-out vs
+ * other failure modes, but treating it as an ordinary failure is fine —
+ * no audit row is written for suppressed sends (see sendEmail).
+ */
+export const SUPPRESSED_OPTED_OUT = '__suppressed_opted_out__'
 
 const MAX_RETRIES = 1
 const RETRY_BACKOFF_MS = 500
@@ -92,6 +116,20 @@ const RETRY_BACKOFF_MS = 500
  * The audit row is written regardless of success/failure.
  */
 export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
+  // ── Preference check (marketing-category opt-out) ────────────────────────
+  if (input.preferenceCategory && input.recipientUserId) {
+    const optedOut = await isOptedOut(
+      input.recipientUserId,
+      input.preferenceCategory,
+    )
+    if (optedOut) {
+      // Silent skip — no send, no audit row. The user has explicitly
+      // opted out; writing an audit row would suggest we had intent to
+      // send, which risks looking like harassment under PECR.
+      return { success: false, error: SUPPRESSED_OPTED_OUT }
+    }
+  }
+
   // ── Apply sandbox redirect ───────────────────────────────────────────────
   const redirected = SANDBOX_FALLBACK_RECIPIENT !== undefined
   const actualRecipient = redirected
@@ -198,6 +236,30 @@ function isPermanentError(message: string): boolean {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Check notification_preferences for a marketing-category opt-out.
+ * Fails-open on error (better to accidentally send one email than block
+ * a legitimate marketing send due to a transient DB hiccup).
+ */
+async function isOptedOut(
+  userId: string,
+  category: NotificationCategory,
+): Promise<boolean> {
+  try {
+    const admin = createAdminClient()
+    const { data, error } = await admin
+      .from('notification_preferences')
+      .select('review_requests, profile_nudges, admin_announcements')
+      .eq('user_id', userId)
+      .maybeSingle()
+    if (error || !data) return false
+    const row = data as Record<NotificationCategory, boolean>
+    return row[category] === false
+  } catch {
+    return false
+  }
 }
 
 /**

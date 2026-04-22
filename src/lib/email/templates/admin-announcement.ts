@@ -6,6 +6,7 @@ import {
   renderButton,
   renderShell,
 } from './_shared'
+import { buildUnsubscribeUrl } from '../unsubscribe-token'
 import type { RenderedTemplate } from './welcome'
 
 export interface AdminAnnouncementInput {
@@ -19,6 +20,8 @@ export interface AdminAnnouncementInput {
    * blank lines. HTML is escaped — admins type plain text in the form.
    */
   bodyText: string
+  /** Recipient's profile id — used to build the unsubscribe token. */
+  userId: string
 }
 
 /**
@@ -61,6 +64,7 @@ ${renderButton({ label: 'View Event', href: eventUrl })}`
   const html = renderShell({
     previewText: input.subject,
     bodyHtml,
+    unsubscribeUrl: buildUnsubscribeUrl(input.userId, 'admin_announcements'),
   })
 
   return {

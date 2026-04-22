@@ -202,9 +202,18 @@ export async function deleteMyAccount(
   // catch rows where the deleted user was the recipient of an admin
   // announcement (P2-9 "Email All Attendees") that pre-dated the
   // recipient_user_id column, or where the FK somehow wasn't set.
+  // `p_user_full_name` (added in Phase 2.5 Batch 2) scrubs bodies of
+  // unrelated rows that mention the deleted user by name — e.g. an
+  // admin announcement sent to N attendees that referenced this user.
+  const { data: fullNameRow } = await admin
+    .from('profiles')
+    .select('full_name')
+    .eq('id', user.id)
+    .single()
   const { error: scrubErr } = await admin.rpc('sanitise_user_notifications', {
     p_user_id: user.id,
     p_user_email: user.email ?? null,
+    p_user_full_name: fullNameRow?.full_name ?? null,
   })
   if (scrubErr) {
     // Log but proceed — the soft-delete is the primary concern. Admin

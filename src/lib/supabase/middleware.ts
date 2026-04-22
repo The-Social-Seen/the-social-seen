@@ -92,7 +92,7 @@ export async function updateSession(request: NextRequest) {
   if (user && pathname !== '/account-suspended') {
     const { data: profile } = await supabase
       .from('profiles')
-      .select('status')
+      .select('status, deleted_at')
       .eq('id', user.id)
       .single()
 
@@ -101,6 +101,24 @@ export async function updateSession(request: NextRequest) {
       const redirectUrl = request.nextUrl.clone()
       redirectUrl.pathname = '/account-suspended'
       redirectUrl.search = ''
+      return NextResponse.redirect(redirectUrl)
+    }
+
+    // Defence-in-depth for deleted accounts (Phase 2.5 Batch 2):
+    // The GDPR delete flow calls `auth.signOut()` and redirects to
+    // `/?account_deleted=1`. If that sign-out call silently fails (rare
+    // but possible — network hiccup between app and auth.supabase.co),
+    // the session cookie survives and the user keeps navigating with
+    // an account that no longer exists server-side. This catch-all
+    // revokes the session on the next request.
+    //
+    // `profile.status` does NOT flip on delete, so the ban check above
+    // doesn't cover this path. Separate check, same outcome.
+    if (profile?.deleted_at) {
+      await supabase.auth.signOut()
+      const redirectUrl = request.nextUrl.clone()
+      redirectUrl.pathname = '/'
+      redirectUrl.search = 'account_deleted=1'
       return NextResponse.redirect(redirectUrl)
     }
   }
