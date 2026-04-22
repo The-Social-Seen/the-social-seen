@@ -109,6 +109,8 @@ import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
 import ContactForm from '@/app/contact/ContactForm'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { EmailPreferencesSection } from '@/components/profile/EmailPreferencesSection'
+import { SmsPreferencesSection } from '@/components/profile/SmsPreferencesSection'
 
 describe('a11y smoke — WCAG 2.1 A + AA', () => {
   it('Header renders without axe violations', async () => {
@@ -164,6 +166,40 @@ describe('a11y smoke — WCAG 2.1 A + AA', () => {
       />,
     )
     const results = await axe(baseElement)
+    expect(results).toHaveNoViolations()
+  })
+
+  it('EmailPreferencesSection renders without axe violations', async () => {
+    const { container } = render(
+      <EmailPreferencesSection
+        initial={{
+          review_requests: true,
+          profile_nudges: true,
+          admin_announcements: false,
+        }}
+      />,
+    )
+    const results = await axe(container)
+    expect(results).toHaveNoViolations()
+  })
+
+  it('SmsPreferencesSection (with phone_number) renders without axe violations', async () => {
+    const { container } = render(
+      <SmsPreferencesSection
+        initial={{ sms_consent: true, phone_number: '+447123456789' }}
+      />,
+    )
+    const results = await axe(container)
+    expect(results).toHaveNoViolations()
+  })
+
+  it('SmsPreferencesSection (no phone_number → disabled state) renders without axe violations', async () => {
+    const { container } = render(
+      <SmsPreferencesSection
+        initial={{ sms_consent: false, phone_number: null }}
+      />,
+    )
+    const results = await axe(container)
     expect(results).toHaveNoViolations()
   })
 })
