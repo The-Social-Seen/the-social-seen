@@ -599,7 +599,11 @@ export function JoinForm() {
       return
     }
 
-    track('sign_up', { method: 'email' })
+    track('sign_up', {
+      method: 'email',
+      email_consent: emailConsent,
+      sms_consent: smsConsent,
+    })
     goToStep(1)
   }
 

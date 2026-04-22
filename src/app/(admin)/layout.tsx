@@ -31,11 +31,21 @@ export default async function AdminLayout({
     redirect('/')
   }
 
+  // Failed-send count — surfaces as a badge on the "Notifications"
+  // sidebar entry so admins notice new failures without having to
+  // click through. `count` head-only query (no rows returned).
+  const { count: failedCount } = await supabase
+    .from('notifications')
+    .select('id', { count: 'exact', head: true })
+    .eq('channel', 'email')
+    .eq('status', 'failed')
+
   return (
     <div className="min-h-screen bg-bg-primary">
       <AdminSidebar
         adminName={profile.full_name ?? 'Admin'}
         adminAvatarUrl={profile.avatar_url ?? null}
+        failedNotificationsCount={failedCount ?? 0}
       />
 
       {/* Content area */}

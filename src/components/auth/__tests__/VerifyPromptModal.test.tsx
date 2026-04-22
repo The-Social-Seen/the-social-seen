@@ -45,11 +45,13 @@ describe('VerifyPromptModal', () => {
     expect(screen.getByText(/before you can book/i)).toBeTruthy()
   })
 
-  it('renders "Verify now" link with /verify?from=<currentPath>', () => {
+  it('renders "Verify now" link with /verify?from=<currentPath>&source=modal', () => {
     render(<VerifyPromptModal isOpen={true} onClose={() => {}} />)
     const cta = screen.getByRole('link', { name: /verify now/i })
     expect(cta.getAttribute('href')).toBe(
-      '/verify?from=' + encodeURIComponent('/events/wine-and-wisdom'),
+      '/verify?from=' +
+        encodeURIComponent('/events/wine-and-wisdom') +
+        '&source=modal',
     )
   })
 

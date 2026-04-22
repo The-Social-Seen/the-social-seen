@@ -21,6 +21,12 @@ export function VerifyForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const redirectTo = sanitizeRedirectPath(searchParams.get('from'))
+  // `source` query param — set by the UnverifiedBanner (`source=banner`)
+  // and VerifyPromptModal (`source=modal`) so PostHog can attribute the
+  // verification request to its trigger surface. Anything else → direct.
+  const sourceParam = searchParams.get('source')
+  const autoSendSource: 'banner' | 'modal' | 'direct' =
+    sourceParam === 'banner' || sourceParam === 'modal' ? sourceParam : 'direct'
 
   const [status, setStatus] = useState<Status>('sending')
   const [digits, setDigits] = useState<string[]>(Array(CODE_LENGTH).fill(''))
@@ -109,8 +115,8 @@ export function VerifyForm() {
     // server action. The lint rule conservatively flags the call chain,
     // but firing a one-shot OTP request on mount is exactly what we want.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    void handleSend('direct')
-  }, [handleSend])
+    void handleSend(autoSendSource)
+  }, [handleSend, autoSendSource])
 
   // ── Submit the code ──────────────────────────────────────────────────────
   const submit = useCallback(

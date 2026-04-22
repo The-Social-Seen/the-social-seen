@@ -6,6 +6,7 @@ import { after } from 'next/server'
 import { uniqueSlug } from '@/lib/utils/slugify'
 import { sendEmail } from '@/lib/email/send'
 import { adminAnnouncementTemplate } from '@/lib/email/templates/admin-announcement'
+import { isRedacted } from '@/lib/notifications/redaction'
 import { z } from 'zod'
 import type {
   BookingStatus,
@@ -1085,8 +1086,6 @@ export async function getNotificationHistory() {
 // P2-9 — Failed notifications (admin retry view)
 // ════════════════════════════════════════════════════════════════════════════
 
-const REDACTED_BODY_MARKER = '[redacted'
-
 export interface FailedNotification {
   id: string
   template_name: string | null
@@ -1155,10 +1154,7 @@ export async function retryNotification(
   if (!row.recipient_email) {
     return { error: 'No recipient email — cannot retry' }
   }
-  if (
-    row.body?.startsWith(REDACTED_BODY_MARKER) ||
-    row.subject?.startsWith('[redacted')
-  ) {
+  if (isRedacted(row.body) || isRedacted(row.subject)) {
     return { error: 'This notification has been redacted (account deleted)' }
   }
 
@@ -1287,14 +1283,19 @@ export async function emailEventAttendees(
     slug: event.slug,
   }
 
-  // FIXME(P3): Resend free tier caps at 10 req/sec. Sequential awaits
-  // naturally throttle for events under ~50 attendees but a 100+
-  // attendee blast will start hitting 429s after the first batch.
-  // Recoverable via the failed-notifications retry view, but worth
-  // adding a small per-iteration delay or `p-limit` cap when event
-  // sizes grow. Tracked in docs/FOLLOW-UPS.md.
+  // Resend free tier caps at 10 req/sec. We previously relied on sequential
+  // awaits + natural latency to stay under the cap, which worked for
+  // small events but started hitting 429s around 100 attendees. Phase
+  // 2.5 Batch 7 adds an explicit 120ms throttle between sends — yields
+  // ~8.3 req/sec, comfortably under the cap — plus a small grace period
+  // after every 50 sends to absorb any provider jitter. Failed sends
+  // still land in the admin retry view for recovery.
+  const THROTTLE_MS = 120
+  const BATCH_PAUSE_MS = 1000
+  const BATCH_SIZE = 50
   after(async () => {
-    for (const r of recipients) {
+    for (let i = 0; i < recipients.length; i++) {
+      const r = recipients[i]
       const rendered = adminAnnouncementTemplate({
         fullName: r.fullName,
         eventTitle: eventSnapshot.title,
@@ -1320,6 +1321,13 @@ export async function emailEventAttendees(
           { name: 'event_id', value: eventSnapshot.id },
         ],
       })
+      // Throttle: standard pause after every send, longer pause every 50.
+      const isLast = i === recipients.length - 1
+      if (!isLast) {
+        const pause =
+          (i + 1) % BATCH_SIZE === 0 ? BATCH_PAUSE_MS : THROTTLE_MS
+        await new Promise((resolve) => setTimeout(resolve, pause))
+      }
     }
   })
 

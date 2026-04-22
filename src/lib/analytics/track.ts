@@ -8,7 +8,12 @@
 import posthog from "posthog-js";
 
 export interface AnalyticsEvents {
-  sign_up: { method: "email" };
+  sign_up: {
+    method: "email";
+    /** Per-channel marketing consent captured at signup (UK PECR). */
+    email_consent: boolean;
+    sms_consent: boolean;
+  };
   sign_up_completed: { interests_count: number };
   login: { method: "email" };
   logout: Record<string, never>;

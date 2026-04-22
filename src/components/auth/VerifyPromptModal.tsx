@@ -42,7 +42,9 @@ export function VerifyPromptModal({ isOpen, onClose }: VerifyPromptModalProps) {
     }
   }, [isOpen])
 
-  const verifyHref = `/verify?from=${encodeURIComponent(pathname ?? '/events')}`
+  // `source=modal` propagates to the verify-form auto-send so PostHog
+  // can attribute which surface drove the verification request.
+  const verifyHref = `/verify?from=${encodeURIComponent(pathname ?? '/events')}&source=modal`
 
   return (
     <AnimatePresence>
