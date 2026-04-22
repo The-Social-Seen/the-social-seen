@@ -99,7 +99,13 @@ describe('JoinForm — Step 1 (Account)', () => {
   it('renders phone number field with helper text', () => {
     render(<JoinForm />)
     expect(screen.getByLabelText(/phone number/i)).toBeTruthy()
-    expect(screen.getByText(/for event reminders and venue details/i)).toBeTruthy()
+    expect(screen.getByText(/for event reminders & venue details/i)).toBeTruthy()
+  })
+
+  it('caps phone input at maxLength=24 (paste-attack defence)', () => {
+    render(<JoinForm />)
+    const phone = screen.getByLabelText(/phone number/i) as HTMLInputElement
+    expect(phone.getAttribute('maxLength')).toBe('24')
   })
 
   it('renders email consent checkbox unchecked by default (GDPR)', () => {

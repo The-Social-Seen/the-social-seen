@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import type { Metadata } from 'next'
 import { canonicalUrl } from '@/lib/utils/site'
+import { LEGAL_LAST_UPDATED } from '@/lib/legal/constants'
 
 export const metadata: Metadata = {
   title: 'Privacy Policy — The Social Seen',
@@ -30,7 +31,7 @@ export default function PrivacyPolicyPage() {
         Privacy Policy
       </h1>
       <p className="mt-2 text-sm text-text-primary/60">
-        Last updated: 21 April 2026
+        Last updated: {LEGAL_LAST_UPDATED}
       </p>
 
       <div className="prose prose-sm mt-8 max-w-none space-y-6 text-text-primary/80">

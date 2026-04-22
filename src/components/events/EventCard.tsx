@@ -121,10 +121,15 @@ export function EventCard({ event, showRating }: EventCardProps) {
             {event.title}
           </h3>
 
-          {/* Venue */}
+          {/* Venue — hidden until the 1-week reveal window to protect
+              partnered venues from uninvited arrivals. */}
           <div className="mb-4 flex items-center gap-1.5 text-text-tertiary">
-            <MapPin className="h-3.5 w-3.5 flex-shrink-0" />
-            <p className="truncate font-sans text-sm">{event.venue_name}</p>
+            <MapPin aria-hidden="true" className="h-3.5 w-3.5 flex-shrink-0" />
+            <p className="truncate font-sans text-sm">
+              {event.venue_revealed
+                ? event.venue_name
+                : 'Venue revealed 1 week before'}
+            </p>
           </div>
 
           {/* Price + Spots */}

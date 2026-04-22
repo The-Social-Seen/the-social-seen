@@ -33,72 +33,15 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 **Action:** Move `status` + `deleted_at` into a Supabase Auth JWT custom claim via an auth hook. Ban-taking-effect time becomes "until next token refresh" (≤1 hour) rather than "immediate" — acceptable for the threat model.
 **Priority:** Low.
 
-### Sandbox `replyTo` is not rewritten — replies escape the sandbox
-**Source:** P2-12 pre-push code review.
-**Rationale:** `sendEmail` rewrites `to` to the sandbox recipient when `SANDBOX_FALLBACK_RECIPIENT` is set, but `replyTo` passes through. For contact-form sandbox testing, the team replies from the sandbox inbox and the reply lands with the real visitor — confusing, cross-environment.
-**Action:** Either (a) also rewrite `replyTo` to the sandbox recipient when sandbox is active, or (b) document in `src/lib/email/send.ts` JSDoc.
-**Priority:** Low.
-
 ---
 
 ## 🟡 UX / polish
-
-### Phone input `maxLength` attribute
-**Source:** P2-2 code review.
-**Rationale:** Defensive nicety — paste-attack mitigation. Not a real risk (zod + DB CHECK reject).
-**Action:** `maxLength={24}` on the phone input in `src/app/(auth)/join/join-form.tsx`. Fits `+44 7123 456 789` formatted.
-**Priority:** Very low.
-
-### Phone helper text position consistency
-**Source:** P2-2 code review.
-**Rationale:** "For event reminders and venue details" appears below the input; other fields' `(optional)` helpers are inline with the label. Visual inconsistency.
-**Priority:** Very low.
-
-### Email consent checkbox class duplication
-**Source:** P2-2 code review.
-**Rationale:** Small class churn in `join-form.tsx:295-307`.
-**Priority:** Very low.
-
-### `.env.example` grouping
-**Source:** P2-2 code review.
-**Rationale:** `SUPABASE_ACCESS_TOKEN` lives in its own "Supabase CLI" section. Would scan better grouped with the main `# ─── Supabase ───` block.
-**Priority:** Very low.
-
-### `<InstagramFollowSection>` link doesn't announce "opens in new tab"
-**Source:** P2-12 pre-push code review.
-**Rationale:** Screen-reader hint for new-tab behaviour is missing on `target="_blank"` links.
-**Action:** Add `aria-label="Follow @the_social_seen on Instagram (opens in a new tab)"` + `aria-hidden="true"` on the lucide icon.
-**Priority:** Low.
-
-### Honeypot field name `company_website` sits next to a real `website` field on /collaborate
-**Source:** P2-12 pre-push code review.
-**Rationale:** A sophisticated bot could clock the proximity and skip only `company_website`. The 2-second timing + Turnstile are the real defence; this is pure defence-in-depth.
-**Action:** Rename `HONEYPOT_FIELD` constant in `src/app/contact/actions.ts` + the matching `<input>` in both forms. Three-file find-and-replace.
-**Priority:** Very low.
-
-### `/?account_deleted=1` lands silently on the homepage
-**Source:** P2-8b code review.
-**Rationale:** After account deletion the user is redirected to `/?account_deleted=1` but there's no UI handler — normal landing page with no visible confirmation. Redirect is signal, but an explicit "Your account has been closed" toast would be nicer.
-**Action:** Client Component in the root layout that reads `?account_deleted=1`, shows a toast, strips the param. Mirror `BookingCancelledHandler`.
-**Priority:** Low.
-
-### Legal-page "Last updated" dates are hardcoded
-**Source:** P2-8b code review.
-**Rationale:** `/privacy` + `/terms` both hardcode "Last updated: 21 April 2026" at the top. Two places to remember when re-publishing after a policy change.
-**Action:** Extract to a shared constant in `src/app/(legal)/_constants.ts`, or pull from git log at build time.
-**Priority:** Very low.
 
 ### Square `/logo.png` asset for Organization JSON-LD
 **Source:** Phase 2.5 Batch 6.
 **Rationale:** `organizationJsonLd()` now emits `logo` as a proper `ImageObject` but still references `/og-image.jpg` (1200×630, wide). Google's Knowledge Panel reserves a near-square area and crops the wide asset awkwardly.
 **Action:** Upload a 600×600 square logo to `public/logo.png`, update three fields in `src/lib/seo/organization.ts:20-24` (url + width + height).
 **Priority:** Low — operator asset dependency.
-
-### Hide venue on public event listing cards
-**Source:** P2-5 frontend.
-**Rationale:** `EventCard.tsx` still shows `venue_name` on listing cards even when `venue_revealed = false`. The reveal gate scopes to the detail page; cards are arguably part of the teaser.
-**Action:** Replace the `venue_name` label with "Venue revealed 1 week before" when `venue_revealed = false`. UX call.
-**Priority:** Low.
 
 ---
 
@@ -108,64 +51,12 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 
 ---
 
-## 🧹 ShareActions / sharing polish (P2-6)
-
-### Refactor ShareActions feature-detect to `useSyncExternalStore`
-**Source:** P2-6 code review.
-**Rationale:** `src/components/shared/ShareActions.tsx:40-55` uses `useState(false) + useEffect(() => setState(...))` with an `eslint-disable-next-line` to suppress the rule. `useSyncExternalStore` is the canonical pattern for reading post-hydration browser capabilities.
-**Action:** Replace with `useSyncExternalStore(() => () => {}, () => navigator.share != null, () => false)`.
-**Priority:** Very low.
-
-### Timer-overlap flicker in "Copied" state
-**Source:** P2-6 code review.
-**Rationale:** `handleCopy` and `handleNativeShare` both write `copied` with independent `setTimeout`s. Rapid clicks can flicker the label for one tick.
-**Action:** Track the timer with `useRef`, clear previous before starting new.
-**Priority:** Very low.
-
-### Share copy string duplicated across files
-**Source:** P2-6 code review.
-**Rationale:** `Join me at ${eventTitle}` appears inline in both `ShareActions.tsx:88` (native share text) and `share.ts:29` (WhatsApp message).
-**Action:** Export `buildShareText(title)` from `src/lib/utils/share.ts`, use both places.
-**Priority:** Very low.
-
-### `BookingModal` "Link copied" toast fires on native-share too
-**Source:** P2-6 code review.
-**Rationale:** Previous behaviour was clipboard-only. After the refactor, the `linkCopied` state is set for both `'copied'` AND `'shared'` outcomes.
-**Action:** Rename state + copy to outcome-agnostic ("Shared!") OR branch on outcome.
-**Priority:** Very low.
-
-### `buildEventShareUrl` SSR fallback returns relative URL
-**Source:** P2-6 code review.
-**Rationale:** `src/lib/utils/share.ts:16-20` returns `/events/${slug}` when `window` is undefined. Today only called from click handlers; a future Server Component prebuilding a share href would quietly break.
-**Action:** Either throw in dev as a tripwire, or take the origin as an explicit parameter for Server usage.
-**Priority:** Very low.
-
----
-
 ## 🧹 P2-5 / cron code-review follow-ups
 
-### `sendWithLog` silently drops sends on non-dedupe insert failure
-**Source:** P2-5 code review.
-**Rationale:** If the `notifications` INSERT fails with anything other than 23505 (transient connection, CHECK violation), we `console.error` and return false. Retry loop can't see the row because it was never written.
-**Action:** Attempt the send before writing the audit row (log both outcomes), or emit a distinct `Sentry.captureException` with `tags: { surface: 'edge-function-audit-insert' }`.
-**Priority:** Low.
-
-### Retry loop doesn't filter by event state
-**Source:** P2-5 code review.
-**Rationale:** `processRetries` re-sends any failed `notifications.email` row < 3 days old without checking whether the underlying event was cancelled.
-**Action:** Re-parse `template_name` / `dedupe_key` to recover the event id, skip if `is_cancelled = true` or `deleted_at IS NOT NULL`. Or store `recipient_event_id` on reminder rows and filter.
-**Priority:** Low.
-
-### Retry path has a theoretical double-send race under concurrent invocation
-**Source:** P2-5 code review.
-**Rationale:** Two concurrent invocations could both pick up the same failed row. 12-hour cooldown makes this unlikely.
-**Action:** Optimistic guard: `.eq('retried_at', row.retried_at ?? null)`. Or `SELECT ... FOR UPDATE SKIP LOCKED` via an RPC.
-**Priority:** Very low.
-
-### `type: 'reminder'` hardcoded for all new system-email rows
-**Source:** P2-5 code review.
-**Rationale:** `sendWithLog` inserts every new row with `type = 'reminder'` regardless of whether it's `venue_reveal` / `review_request` / `reminder_2day`. Column is informational only — no code branches on it.
-**Action:** Extend `notification_type` enum with `venue_reveal` + `review_request`, or map to closest existing value. Enum change needs a migration.
+### Map edge-function `type` column to the new enum values
+**Source:** CL-3 (follows migration `20260501000001_widen_notification_type_enum`).
+**Rationale:** The migration extended `notification_type` with `venue_reveal`, `review_request`, `profile_nudge`. The edge function's `sendWithLog` still hardcodes `type = 'reminder'` — deferred to avoid chicken-and-egg with the migration rollout (code would reject the new values until the migration lands in every environment).
+**Action:** Once the migration is applied everywhere, thread a `notificationType` through `sendWithLog` and remove the hardcode.
 **Priority:** Very low.
 
 ---

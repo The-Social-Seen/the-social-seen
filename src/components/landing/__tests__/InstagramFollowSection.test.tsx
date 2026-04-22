@@ -38,4 +38,11 @@ describe('<InstagramFollowSection>', () => {
     const link = screen.getByRole('link', { name: /follow/i })
     expect(link.getAttribute('rel')).toMatch(/noopener.*noreferrer/)
   })
+
+  it('announces the new-tab behaviour via aria-label (a11y)', () => {
+    render(<InstagramFollowSection />)
+    const link = screen.getByRole('link', { name: /follow/i })
+    expect(link.getAttribute('aria-label')).toMatch(/opens in a new tab/i)
+    expect(link.getAttribute('aria-label')).toContain('@the_social_seen')
+  })
 })

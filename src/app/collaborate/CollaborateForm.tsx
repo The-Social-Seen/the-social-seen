@@ -68,10 +68,10 @@ export default function CollaborateForm() {
   return (
     <form ref={formRef} onSubmit={handleSubmit} className="space-y-5">
       <div aria-hidden="true" style={{ position: 'absolute', left: '-9999px' }}>
-        <label htmlFor="company_website">Leave this field blank</label>
+        <label htmlFor="fax_number">Leave this field blank</label>
         <input
-          id="company_website"
-          name="company_website"
+          id="fax_number"
+          name="fax_number"
           type="text"
           tabIndex={-1}
           autoComplete="off"

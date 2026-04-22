@@ -17,7 +17,7 @@ import {
 import { formatDateModal, formatTime } from "@/lib/utils/dates";
 import { formatPrice } from "@/lib/utils/currency";
 import { downloadIcsFile } from "@/lib/utils/calendar";
-import { buildEventShareUrl, nativeShareOrCopy } from "@/lib/utils/share";
+import { buildEventShareUrl, buildShareText, nativeShareOrCopy } from "@/lib/utils/share";
 import { createBooking, createPaidCheckout } from "@/app/events/[slug]/actions";
 import type { EventDetail, BookingStatus } from "@/types";
 
@@ -363,7 +363,7 @@ function TicketCard({
   onClose: () => void;
 }) {
   const [calendarAdded, setCalendarAdded] = useState(false);
-  const [linkCopied, setLinkCopied] = useState(false);
+  const [shareOutcome, setShareOutcome] = useState<'copied' | 'shared' | null>(null);
   const isWaitlisted = result.status === "waitlisted";
 
   function handleCalendar() {
@@ -384,12 +384,12 @@ function TicketCard({
     const shareUrl = buildEventShareUrl(event.slug);
     const outcome = await nativeShareOrCopy({
       title: event.title,
-      text: `Join me at ${event.title}!`,
+      text: buildShareText(event.title),
       url: shareUrl,
     });
     if (outcome === 'copied' || outcome === 'shared') {
-      setLinkCopied(true);
-      setTimeout(() => setLinkCopied(false), 2000);
+      setShareOutcome(outcome);
+      setTimeout(() => setShareOutcome(null), 2000);
     }
   }
 
@@ -535,7 +535,11 @@ function TicketCard({
                 className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-blush/60 py-3.5 text-sm font-semibold text-text-primary transition-all hover:bg-bg-primary"
               >
                 <Share2 className="h-4 w-4" />
-                {linkCopied ? "Link Copied \u2713" : "Share"}
+                {shareOutcome === 'shared'
+                  ? "Shared \u2713"
+                  : shareOutcome === 'copied'
+                  ? "Link Copied \u2713"
+                  : "Share"}
               </button>
             </div>
 

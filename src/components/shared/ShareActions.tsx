@@ -1,12 +1,22 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useRef, useState, useSyncExternalStore } from 'react'
 import { Check, Copy, Share2 } from 'lucide-react'
 import {
   buildEventShareUrl,
+  buildShareText,
   buildWhatsappShareUrl,
   nativeShareOrCopy,
 } from '@/lib/utils/share'
+
+// Feature-detect `navigator.share` via useSyncExternalStore so SSR sees
+// `false` and the first client render flips once — the canonical pattern
+// for post-hydration capability detection without the setState-in-effect
+// cascade the lint rule guards against.
+const subscribeNoop = () => () => {}
+const getNativeShareSnapshot = () =>
+  typeof navigator !== 'undefined' && typeof navigator.share === 'function'
+const getNativeShareServerSnapshot = () => false
 
 interface ShareActionsProps {
   eventTitle: string
@@ -37,22 +47,24 @@ export default function ShareActions({
   variant = 'inline',
 }: ShareActionsProps) {
   const [copied, setCopied] = useState(false)
-  const [hasNativeShare, setHasNativeShare] = useState(false)
+  const hasNativeShare = useSyncExternalStore(
+    subscribeNoop,
+    getNativeShareSnapshot,
+    getNativeShareServerSnapshot,
+  )
+  // Share a single reset-timer across handleCopy + handleNativeShare so
+  // rapid clicks don't let a stale timeout flip the label early.
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  useEffect(() => {
-    // Feature-detect on mount rather than during render so SSR markup
-    // matches the first client render (server has no `navigator`, so
-    // reading it during render would cause hydration mismatches).
-    // The lint rule warns about cascading renders from setState-in-effect,
-    // but this is the canonical pattern for post-hydration capability
-    // detection — it runs once, reads a stable browser capability, and
-    // the second render is the intended behaviour.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setHasNativeShare(
-      typeof navigator !== 'undefined' &&
-        typeof navigator.share === 'function',
-    )
-  }, [])
+  function scheduleReset() {
+    if (resetTimerRef.current !== null) {
+      clearTimeout(resetTimerRef.current)
+    }
+    resetTimerRef.current = setTimeout(() => {
+      setCopied(false)
+      resetTimerRef.current = null
+    }, 2000)
+  }
 
   const isCompact = variant === 'compact'
   const btnClasses = isCompact
@@ -76,7 +88,7 @@ export default function ShareActions({
     try {
       await navigator.clipboard.writeText(buildEventShareUrl(eventSlug))
       setCopied(true)
-      window.setTimeout(() => setCopied(false), 2000)
+      scheduleReset()
     } catch {
       // Permission denied — silent. The WhatsApp button is an alternative.
     }
@@ -85,12 +97,12 @@ export default function ShareActions({
   async function handleNativeShare() {
     const outcome = await nativeShareOrCopy({
       title: eventTitle,
-      text: `Join me at ${eventTitle}!`,
+      text: buildShareText(eventTitle),
       url: buildEventShareUrl(eventSlug),
     })
     if (outcome === 'copied') {
       setCopied(true)
-      window.setTimeout(() => setCopied(false), 2000)
+      scheduleReset()
     }
   }
 

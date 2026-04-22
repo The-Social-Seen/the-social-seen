@@ -68,7 +68,7 @@ describe('sendContactMessage', () => {
   })
 
   it('honeypot trip silently returns success without sending', async () => {
-    const fd = makeContactForm({ company_website: 'https://spammer.example' })
+    const fd = makeContactForm({ fax_number: 'https://spammer.example' })
     const result = await sendContactMessage(fd)
     expect(result).toEqual({ success: true })
     expect(mockSendEmail).not.toHaveBeenCalled()
@@ -161,7 +161,7 @@ describe('sendCollaborationPitch', () => {
   })
 
   it('honeypot trip returns success silently', async () => {
-    const fd = makeCollabForm({ company_website: 'spam' })
+    const fd = makeCollabForm({ fax_number: 'spam' })
     const result = await sendCollaborationPitch(fd)
     expect(result).toEqual({ success: true })
     expect(mockSendEmail).not.toHaveBeenCalled()

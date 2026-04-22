@@ -237,6 +237,7 @@ async function processVenueReveals(
         rendered,
         templateName: 'venue_reveal',
         relatedProfileId: a.user_id,
+        recipientEventId: event.id,
         dedupeKey: `venue_reveal:${event.id}:${a.user_id}`,
       })
       if (ok) sent++
@@ -332,6 +333,7 @@ async function processReminders(
         rendered,
         templateName: variant === 'today' ? 'reminder_today' : 'reminder_2day',
         relatedProfileId: a.user_id,
+        recipientEventId: event.id,
         dedupeKey: `${variant === 'today' ? 'reminder_today' : 'reminder_2day'}:${event.id}:${a.user_id}:${londonDateYmd.replace(/-/g, '')}`,
       })
       if (ok) sent++
@@ -409,6 +411,7 @@ async function processReviewRequests(
         rendered,
         templateName: 'review_request',
         relatedProfileId: a.user_id,
+        recipientEventId: event.id,
         preferenceCategory: 'review_requests',
         // Review request: only ever one per (event, user), regardless of day.
         dedupeKey: `review_request:${event.id}:${a.user_id}`,
@@ -582,7 +585,7 @@ async function processRetries(supabase: ReturnType<typeof createClient>): Promis
 
   const { data: failed, error } = await supabase
     .from('notifications')
-    .select('id, subject, body, recipient_email, template_name, retried_at')
+    .select('id, subject, body, recipient_email, template_name, retried_at, recipient_event_id')
     .eq('channel', 'email')
     .eq('status', 'failed')
     .gte('created_at', threeDaysAgo)
@@ -593,30 +596,99 @@ async function processRetries(supabase: ReturnType<typeof createClient>): Promis
     return 0
   }
 
-  let retriedCount = 0
-  for (const row of failed ?? []) {
-    const r = row as {
-      id: string
-      subject: string
-      body: string
-      recipient_email: string | null
-      template_name: string | null
+  // Pre-fetch the event state for every event referenced by a failed
+  // row so we can skip retries whose event has since been cancelled or
+  // soft-deleted. A single IN-list lookup beats N sequential SELECTs.
+  const rows = (failed ?? []) as Array<{
+    id: string
+    subject: string
+    body: string
+    recipient_email: string | null
+    template_name: string | null
+    retried_at: string | null
+    recipient_event_id: string | null
+  }>
+  const eventIds = Array.from(
+    new Set(
+      rows
+        .map((r) => r.recipient_event_id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    ),
+  )
+  const skipEventIds = new Set<string>()
+  if (eventIds.length > 0) {
+    const { data: eventsData, error: eventsErr } = await supabase
+      .from('events')
+      .select('id, is_cancelled, deleted_at')
+      .in('id', eventIds)
+    if (eventsErr) {
+      console.error('processRetries: event state lookup failed', eventsErr)
+    } else {
+      for (const e of (eventsData ?? []) as Array<{
+        id: string
+        is_cancelled: boolean
+        deleted_at: string | null
+      }>) {
+        if (e.is_cancelled || e.deleted_at !== null) skipEventIds.add(e.id)
+      }
     }
+  }
+
+  let retriedCount = 0
+  for (const r of rows) {
     if (!r.recipient_email) continue
+    if (r.recipient_event_id && skipEventIds.has(r.recipient_event_id)) {
+      // Event was cancelled or deleted since the original send — don't
+      // retry; stamp the row so it doesn't keep coming back.
+      await supabase
+        .from('notifications')
+        .update({
+          retried_at: new Date().toISOString(),
+          error_message: 'skipped: event cancelled or deleted',
+        })
+        .eq('id', r.id)
+        .eq('retried_at', r.retried_at ?? null)
+      continue
+    }
+
+    // Claim-then-send: optimistically stamp `retried_at` FIRST, gated on
+    // the original value we read. If a concurrent invocation already
+    // claimed the row, our UPDATE matches zero rows and we skip the
+    // send entirely — genuinely preventing a double-send, not just
+    // double-accounting. Provider_message_id / final status get
+    // patched in after the send resolves.
+    const claimedAt = new Date().toISOString()
+    const { data: claimed, error: claimErr } = await supabase
+      .from('notifications')
+      .update({ retried_at: claimedAt })
+      .eq('id', r.id)
+      .eq('retried_at', r.retried_at ?? null)
+      .select('id')
+    if (claimErr) {
+      console.error('processRetries: claim failed', claimErr)
+      continue
+    }
+    if ((claimed ?? []).length === 0) {
+      // Lost the race — another invocation claimed this row.
+      continue
+    }
+
     const result = await resendSend({
       to: r.recipient_email,
       subject: r.subject,
       html: r.body,
     })
-    await supabase
+    const { error: patchErr } = await supabase
       .from('notifications')
       .update({
-        retried_at: new Date().toISOString(),
         status: result.success ? 'sent' : 'failed',
         provider_message_id: result.success ? result.messageId : null,
         error_message: result.success ? null : result.error,
       })
       .eq('id', r.id)
+    if (patchErr) {
+      console.error('processRetries: outcome patch failed', patchErr)
+    }
     retriedCount++
   }
   return retriedCount
@@ -657,6 +729,12 @@ interface SendWithLogArgs {
   templateName: string
   relatedProfileId: string
   dedupeKey: string
+  /**
+   * Event id this notification is scoped to. Stored on the audit row
+   * so the retry loop (processRetries) can skip sends whose event was
+   * cancelled or deleted between the original attempt and the retry.
+   */
+  recipientEventId?: string
   /**
    * Marketing-category gate. When set, we look up
    * `notification_preferences.<category>` for `relatedProfileId` and
@@ -717,6 +795,7 @@ async function sendWithLog(
     .insert({
       sent_by: args.relatedProfileId,
       recipient_user_id: args.relatedProfileId,
+      recipient_event_id: args.recipientEventId ?? null,
       recipient_type: 'custom',
       type: 'reminder',
       subject: subjectWithPrefix,
@@ -735,7 +814,21 @@ async function sendWithLog(
     if ((insertErr as { code?: string }).code === '23505') {
       return false
     }
-    console.error('sendWithLog: insert failed', insertErr)
+    // Structured tagged log for any *other* insert failure (transient
+    // connection, CHECK violation, …). These silently drop a send
+    // because no audit row gets written — the retry loop can't see
+    // what never existed. Keep a stable tag so a future Sentry /
+    // log-drain integration can alert on it without code changes.
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        surface: 'edge-function-audit-insert',
+        template: args.templateName,
+        dedupeKey: args.dedupeKey,
+        code: (insertErr as { code?: string }).code ?? null,
+        message: (insertErr as { message?: string }).message ?? String(insertErr),
+      }),
+    )
     return false
   }
 
