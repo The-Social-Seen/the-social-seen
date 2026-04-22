@@ -46,26 +46,14 @@ export const SOCIAL_LINKS = {
 Then re-add the icon entries to the footer's `socialLinks` array. The Organization JSON-LD `sameAs` already iterates `Object.values(SOCIAL_LINKS)` so it picks up automatically.
 **Priority:** Low — depends on launch comms decision.
 
-### Public contact + collaborate forms have no rate limiting (HIGH — before public launch)
-**Source:** P2-12 pre-push code review (S2)
-**Rationale:** `sendContactMessage` and `sendCollaborationPitch` accept anonymous POST submissions and dispatch via Resend (free tier: 3,000 emails / month). Defences shipped in P2-12 are honeypot + 2-second timing — sufficient for v1 demo traffic, trivially bypassable by a determined attacker scripting a 3-second wait. A modest 100 req/hour for 30 hours empties the entire month's Resend budget, taking down the P2-9 attendee-messaging + P2-5 cron-email pipelines as collateral.
-**Action:** Add rate limiting BEFORE the contact + collaborate forms go in front of the public web. Three options ranked by effort:
-1. **Cloudflare Turnstile** (recommended) — free, invisible, ~5-min wire-up. Add a token input + verify server-side in the Server Actions.
-2. **Vercel Edge Middleware + KV/Upstash** — IP-bucketed rate limit. Heavier but auth-system-agnostic.
-3. **Auth-gate the forms** — defeats the purpose; prospects can't reach us.
-**Priority:** **HIGH — must ship before the contact + collaborate routes are publicly linked beyond the demo.** Inline comment in `src/app/contact/actions.ts` already flags Phase-3 deferral; this entry escalates the timing.
+<!-- Resolved in Phase 2.5 Batch 1:
+     - Cloudflare Turnstile wired into /contact + /collaborate actions.
+     - Migration 20260427000001_tighten_profiles_anon_grant.sql narrows the
+       anon GRANT to id, full_name, avatar_url, job_title, company, industry,
+       bio, linkedin_url, role, status, created_at.
+     - CLAUDE.md + social-seen-safety-SKILL.md document the "new profiles
+       column = explicit anon decision" rule. -->
 
-### Tighten `profiles` anon GRANT list further
-**Source:** P2-2 code review (re-review)
-**Rationale:** Current anon-safe list includes `email`, `onboarding_complete`, `referral_source`, `updated_at`, `deleted_at`. None of these are actively leaking PII, but they're over-permissive under the "secure by default" principle. Email in particular is arguably PII (spammer fodder).
-**Action:** New migration that removes `email`, `onboarding_complete`, `referral_source`, `updated_at`, `deleted_at` from the anon GRANT list, leaving only columns genuinely needed by public event rendering. Verify via curl against the REST endpoint that each removed column returns 401 for anon.
-**Priority:** Medium. Not a current leak, but worth doing before any real signups hit production.
-
-### Migration checklist — document "new profile column = explicit anon decision"
-**Source:** P2-2 code review (re-review)
-**Rationale:** Security model shifted to "secure by default" on `profiles` — every future migration adding a column needs a conscious decision about anon visibility. Not written down anywhere, so future work could regress.
-**Action:** Add a line to `CLAUDE.md` and/or `social-seen-safety-SKILL.md` under the migration checklist: *"If adding a column to `public.profiles`, decide anon visibility. Omit from the anon GRANT list unless the column is safe to expose publicly."*
-**Priority:** Medium. Prevents regression. 5-minute fix.
 
 ### `email_verified` reconciliation path
 **Source:** P2-3 backend handover
@@ -131,11 +119,11 @@ Then re-add the icon entries to the footer's `socialLinks` array. The Organizati
 
 ## 🧹 Image-host fix (PR #19) follow-ups
 
-### Allowlist drift between `images.ts` and `next.config.ts`
-**Source:** PR #19 code review (I1)
-**Rationale:** `ALLOWED_IMAGE_HOSTS` in `src/lib/utils/images.ts:33-36` must stay in sync with `images.remotePatterns` in `next.config.ts:7-14`. Today they match, but if someone adds a new host to the Next config and forgets the runtime list, valid images silently fall back to the placeholder (or vice versa, allowing a URL we then can't render).
-**Action:** A test that imports both and asserts they match. Or a lint rule. Or — at minimum — a one-line reminder in CLAUDE.md's image section. The Next config is transformed at build time so can't be imported directly at runtime; a test file can `require()` it in Node and compare.
-**Priority:** Low. No drift today.
+<!-- Resolved in Phase 2.5 Batch 1:
+     src/lib/utils/__tests__/images-drift.test.ts parses next.config.ts
+     and compares against ALLOWED_IMAGE_HOSTS in images.ts. Fails if they
+     drift. -->
+
 
 ### Protocol check is implicit in `isAllowedImageHost`
 **Source:** PR #19 code review (I2)
@@ -223,11 +211,12 @@ Then re-add the icon entries to the footer's `socialLinks` array. The Organizati
 **Action:** Server-fetch a `count(*)` of email/failed rows in `/admin/notifications/page.tsx` and render a small pill if > 0. `src/components/admin/AdminSidebar.tsx` should also surface it on the mobile tab bar.
 **Priority:** Low.
 
-### `EventsPageClient` (upcoming events list) doesn't filter event images via `resolveEventImage`
-**Source:** P2-10 preview verification
-**Rationale:** The new `/events/past` page wraps `event.image_url` in `resolveEventImage()` so disallowed hosts fall through to a placeholder rather than crashing the page (the bug PR #19 originally fixed). The pre-existing `/events` listing client passes `event.image_url` straight to `next/image`, which still crashes for the seed data containing `ca-times.brightspotcdn.com`. The brightspot URL only doesn't currently take down `/events` because the affected event happens to be past — but as soon as a seeded upcoming event is added on a disallowed host, the listing dies.
-**Action:** Switch `EventsPageClient` (and any other components that take `event.image_url` directly) to use `resolveEventImage()`. Also audit `EventCard`, `RelatedEvents`, etc. Likely a 30-min PR; bundle with the allowlist-drift test follow-up above.
-**Priority:** Medium. Live foot-gun the moment seed data lands on a non-allowed host.
+<!-- Resolved in Phase 2.5 Batch 1:
+     EventsPageClient already renders via <EventCard>, which already
+     passes image_url through resolveEventImage(). Audit in B1 found one
+     remaining direct consumer (src/components/admin/EventsTable.tsx),
+     now hardened. Drift test added (images-drift.test.ts). -->
+
 
 ### Profile completion weights duplicated between Node and Deno
 **Source:** P2-10 self-review

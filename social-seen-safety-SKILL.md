@@ -30,6 +30,13 @@ These rules apply to every Claude Code session working on The Social Seen. Read 
 - Every new table has: `id uuid DEFAULT gen_random_uuid() PRIMARY KEY`, `created_at timestamptz DEFAULT now()`, and RLS enabled
 - Every table that stores user-created content has `deleted_at timestamptz` for soft deletes
 - RLS policies defined in migration files, not toggled in the Supabase dashboard
+- **New column on `public.profiles`**: make an explicit anon-visibility decision
+  in the migration. Default is **not** to add it to the anon GRANT — the
+  secure-by-default posture (20260420000003 → 20260427000001) means anon only
+  reads from a narrow allow-list. Adding a new column without an explicit GRANT
+  makes it invisible to anonymous REST callers, which is the desired default.
+  Only expose to anon when the column is genuinely required for public event
+  rendering and is safe to show publicly.
 - Test with `supabase start` locally before declaring done
 - Commit to feature branches: `feat/<batch-name>`
 - Run `pnpm tsc --noEmit && pnpm lint && pnpm build` before declaring any batch done

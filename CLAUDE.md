@@ -120,6 +120,12 @@ Body:      DM Sans (sans-serif)
 - Every table has `created_at` (timestamptz, default now())
 - Soft deletes via `deleted_at` timestamp — never hard delete user data
 - All timestamps stored as UTC (`timestamptz`), displayed in Europe/London
+- **New column on `public.profiles`?** Make an explicit anon-visibility decision.
+  The secure-by-default posture (established in migration 20260420000003) is
+  that anon only reads columns on the allow-list; any new column is invisible
+  to anon unless the migration explicitly adds it to the GRANT. Omit from the
+  anon GRANT unless the column is genuinely needed for public event rendering
+  and safe to expose publicly. Document the decision in the migration header.
 
 ### Supabase Schema
 

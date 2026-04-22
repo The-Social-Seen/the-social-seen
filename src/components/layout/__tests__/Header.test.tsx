@@ -26,10 +26,11 @@ function filterDomProps(props: Record<string, unknown>) {
   return filtered
 }
 
-// Mock next/navigation
+// Mock next/navigation with a mutable pathname so tests can simulate navigation
+let mockPathname = '/events'
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
-  usePathname: () => '/events',
+  usePathname: () => mockPathname,
 }))
 
 // Mock next/image
@@ -61,19 +62,22 @@ vi.mock('@/components/layout/AvatarDropdown', () => ({
 
 // Mock supabase client — dynamic import, so we mock the module.
 // Returns the same instance each call to mirror the real singleton.
+const mockGetSession = vi.fn().mockResolvedValue({ data: { session: null } })
+const mockOnAuthStateChange = vi.fn().mockReturnValue({
+  data: { subscription: { unsubscribe: vi.fn() } },
+})
+const mockProfileSingle = vi.fn().mockResolvedValue({ data: null })
 vi.mock('@/lib/supabase/client', () => {
   const mockClient = {
     auth: {
-      getSession: vi.fn().mockResolvedValue({ data: { session: null } }),
+      getSession: mockGetSession,
       getUser: vi.fn().mockResolvedValue({ data: { user: null } }),
-      onAuthStateChange: vi.fn().mockReturnValue({
-        data: { subscription: { unsubscribe: vi.fn() } },
-      }),
+      onAuthStateChange: mockOnAuthStateChange,
     },
     from: vi.fn().mockReturnValue({
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
-      single: vi.fn().mockResolvedValue({ data: null }),
+      single: mockProfileSingle,
     }),
   }
   return { createClient: () => mockClient }
@@ -84,6 +88,9 @@ import { Header } from '../Header'
 describe('Header (unauthenticated)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockPathname = '/events'
+    mockGetSession.mockResolvedValue({ data: { session: null } })
+    mockProfileSingle.mockResolvedValue({ data: null })
   })
 
   it('renders without crashing', () => {
@@ -155,5 +162,48 @@ describe('Header (unauthenticated)', () => {
     render(<Header />)
     const hamburger = screen.getByRole('button', { name: /open menu/i })
     expect(hamburger).toBeTruthy()
+  })
+})
+
+describe('Header (Server-Action login — pathname re-check)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockPathname = '/login'
+    mockGetSession.mockResolvedValue({ data: { session: null } })
+    mockProfileSingle.mockResolvedValue({ data: null })
+  })
+
+  it('swaps Sign In for the avatar when pathname changes after Server-Action login', async () => {
+    // Initial render on /login with no session → Sign In visible.
+    const { rerender } = render(<Header />)
+    await waitFor(() => {
+      const links = screen.getAllByRole('link', { name: /sign in/i })
+      expect(links.some((l) => l.getAttribute('href') === '/login')).toBe(true)
+    })
+
+    // Simulate what a Server-Action login does:
+    //   1. Server sets the session cookie in the response
+    //   2. Client does router.push('/events') + router.refresh()
+    //   3. Supabase browser client sees the new cookie on next getSession()
+    //
+    // onAuthStateChange is NOT fired (the session was established server-side),
+    // so the Header has to re-read the cookie when the pathname changes.
+    const fakeSession = {
+      user: { id: 'user-1', user_metadata: { full_name: 'Test User' } },
+    }
+    mockGetSession.mockResolvedValue({ data: { session: fakeSession } })
+    mockProfileSingle.mockResolvedValue({ data: { role: 'member' } })
+    mockPathname = '/events'
+    rerender(<Header />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('avatar-dropdown')).toBeTruthy()
+    })
+
+    // And Sign In should be gone.
+    const remainingSignIns = screen
+      .queryAllByRole('link', { name: /sign in/i })
+      .filter((l) => l.getAttribute('href') === '/login')
+    expect(remainingSignIns.length).toBe(0)
   })
 })
