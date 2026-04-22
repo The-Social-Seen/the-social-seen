@@ -82,6 +82,7 @@ export async function getPastEvents(): Promise<PastEventWithSnippet[]> {
       .in('event_id', eventIds)
       .eq('is_visible', true)
       .not('review_text', 'is', null)
+      .neq('review_text', '')
       .order('rating', { ascending: false })
       .order('created_at', { ascending: false }),
     supabase

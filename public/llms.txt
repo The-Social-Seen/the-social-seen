@@ -1,17 +1,23 @@
 # The Social Seen
 
-> A curated social events platform for London professionals. We connect people through handpicked experiences — supper clubs, gallery openings, wine tastings, cultural soirées, and more.
+> A curated social events platform for London professionals in their 30s–40s. We connect people through handpicked experiences — supper clubs, gallery openings, wine tastings, cultural soirées, networking, and more.
 
 ## About
 
-The Social Seen is London's premier social community for professionals in their 30s–40s who believe the best moments are experienced together. We curate intimate events designed to spark genuine connections.
+The Social Seen is London's premier social community for professionals who believe the best moments are experienced together. We curate intimate events designed to spark genuine connections — quality over scale, curation over open-door.
+
+Membership is invite-driven. Every member is here because someone vouched for them. The community grew from a WhatsApp group of friends to 1,000+ professionals over the last few years.
 
 ## Pages
 
-- [Home](https://thesocialseen.com): Landing page with featured events and community overview
-- [Events](https://thesocialseen.com/events): Full listing of upcoming and past events with category and price filters
-- [Gallery](https://thesocialseen.com/gallery): Photo gallery from past events
-- [Join](https://thesocialseen.com/join): Membership registration
+- [Home](https://thesocialseen.com): Landing page with featured upcoming events, member testimonials, and community overview.
+- [Events](https://thesocialseen.com/events): Full listing of upcoming, published events with category filters.
+- [Past Events](https://thesocialseen.com/events/past): Archive of recent gatherings with member reviews and photos — useful for prospective members getting a feel for the community.
+- [Gallery](https://thesocialseen.com/gallery): Photo gallery from past events.
+- [About](https://thesocialseen.com/about): Story behind The Social Seen and the values that shape how we run events.
+- [Join](https://thesocialseen.com/join): Membership registration.
+- [Privacy Policy](https://thesocialseen.com/privacy): How we collect, use, and protect personal data under UK GDPR.
+- [Terms of Service](https://thesocialseen.com/terms): Membership terms and platform use.
 
 ## Event Categories
 
@@ -19,4 +25,8 @@ drinks, dining, cultural, wellness, sport, workshops, music, networking
 
 ## Contact
 
-For enquiries, visit [thesocialseen.com](https://thesocialseen.com).
+For enquiries: info@the-social-seen.com or visit [thesocialseen.com](https://thesocialseen.com).
+
+## Crawling Notes
+
+Public surfaces (pages above) are open to indexing. Member-only routes (/profile, /bookings), admin tooling (/admin/*), API endpoints (/api/*), and authentication flows (/verify, /forgot-password, /reset-password, /account-suspended) are excluded via robots.txt.

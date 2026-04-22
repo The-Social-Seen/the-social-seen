@@ -430,6 +430,13 @@ async function processProfileNudges(
     .lte('created_at', threeDaysAgo)
     .is('deleted_at', null)
     .is('profile_nudge_email_sent_at', null)
+    // Verified-only — unverified members are still being prompted by
+    // the welcome flow's verification reminder. Stacking a profile
+    // nudge on top creates two pieces of mail competing for attention
+    // in week one. Trade-off: a member who never verifies during the
+    // [Y-4d, Y-3d] window misses the nudge entirely (acceptable —
+    // they're not engaging anyway; no point pestering further).
+    .eq('email_verified', true)
     .eq('email_consent', true)
     .neq('status', 'banned')
   if (error) {
@@ -581,10 +588,19 @@ async function sendWithLog(
       : args.rendered.subject
 
   // Reserve the row. If the dedupe_key collides we skip.
+  //
+  // For cron-driven sends, `relatedProfileId` IS the recipient (every
+  // caller in this file passes `attendee.user_id` or `row.id`). We
+  // populate both `sent_by` and `recipient_user_id` from it so the
+  // GDPR scrub RPC (`sanitise_user_notifications`, P2-9) catches the
+  // row by the FK path, not just the legacy sent_by-as-recipient
+  // convention. If a future maintainer ever changes `sent_by` to the
+  // cron's identity (e.g. a system user), the FK path remains correct.
   const { data: inserted, error: insertErr } = await supabase
     .from('notifications')
     .insert({
       sent_by: args.relatedProfileId,
+      recipient_user_id: args.relatedProfileId,
       recipient_type: 'custom',
       type: 'reminder',
       subject: subjectWithPrefix,

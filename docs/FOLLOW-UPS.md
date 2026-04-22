@@ -205,6 +205,51 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 **Action:** Extract to a shared TS constant (or expose via the schema) and update the migration's UPDATE values to reference the same prose in a comment.
 **Priority:** Very low.
 
+### `/events/past` omits cancelled events silently (no transparency)
+**Source:** P2-10 post-merge code review (nit)
+**Rationale:** `getPastEvents` filters `eq('is_cancelled', false)`. An attendee searching the archive for an event they remember booking won't find it if it was cancelled. Defensible (we'd rather not surface failures), but reduces transparency.
+**Action:** Either show cancelled past events with a "Cancelled" badge variant, or accept the current omission and document it on the empty state. Product call. `src/lib/supabase/queries/events.ts:getPastEvents`.
+**Priority:** Low.
+
+### `/events/past` has no pagination beyond the first 60
+**Source:** P2-10 post-merge code review (nit)
+**Rationale:** `getPastEvents` caps at `.limit(60)` with no "Load more" affordance. As the archive grows past 60 events the oldest get dropped silently from the public archive. At today's cadence this is years away.
+**Action:** Add cursor-based pagination via `created_at` (or a "Load more" Server Action that appends the next 60). `src/app/events/past/page.tsx` + `src/lib/supabase/queries/events.ts`.
+**Priority:** Low. Not urgent at current event volume.
+
+### Sitemap static-route `lastModified` always shifts to "now" on regeneration
+**Source:** P2-11 pre-push code review (nit)
+**Rationale:** `src/app/sitemap.ts` sets `lastModified: now` (a single `new Date()` captured at request time) for all 8 static routes. Every sitemap fetch shifts every static route's timestamp, signalling to crawlers that all 8 pages changed since the last visit — wasteful re-crawl for /privacy, /terms, /about etc. that update yearly at most.
+**Action:** Bake a build-time constant per route, or read the page source's mtime. Dynamic event entries already use `event.updated_at` correctly.
+**Priority:** Low. Crawlers' politeness throttles damp the impact.
+
+### Organization JSON-LD `logo` points at the OG image (wide), not a square logo
+**Source:** P2-11 pre-push code review (nit)
+**Rationale:** `src/lib/seo/organization.ts:logo` references `/og-image.jpg` — that's the social-share image (1200x630, horizontal). Schema.org `Organization.logo` should be a near-square ImageObject for Knowledge Panel use. Current value works (Google accepts URL strings) but the wide aspect ratio gets cropped awkwardly in the panel.
+**Action:** Add a `/logo.png` (square, ~600x600, transparent or brand background) and switch the JSON-LD to an ImageObject:
+```ts
+logo: { '@type': 'ImageObject', url: canonicalUrl('/logo.png'), width: 600, height: 600 }
+```
+**Priority:** Low. Worth doing alongside any brand-asset audit.
+
+### Event JSON-LD Performer entries lack `image` / `url` (richer markup)
+**Source:** P2-11 pre-push code review (nit)
+**Rationale:** `src/lib/seo/event.ts:eventJsonLd` performers carry name + jobTitle + worksFor only. Schema.org Person also accepts `image` (avatar URL — already on `host.profile.avatar_url`) and `url` (host profile page — doesn't exist yet). Adding the avatar would enrich the rich-result preview.
+**Action:** Route `host.profile.avatar_url` through `resolveAvatarUrl` (to filter disallowed hosts) and add as `image` on each performer Person. Defer `url` until per-host profile pages exist.
+**Priority:** Low.
+
+### `<JsonLd>` escape only handles `<` (defence-in-depth: also escape `>` and `&`)
+**Source:** P2-11 pre-push code review (nit)
+**Rationale:** `src/components/seo/JsonLd.tsx` escapes `<` to prevent script-tag breakout. Sufficient against the `</script>` attack, but some style guides also escape `>` and `&` as `\u003e` / `\u0026` for HTML-context defence-in-depth and consistency with `serialize-javascript`'s well-known behaviour. Not a known vulnerability vector for JSON-LD specifically; just hardening.
+**Action:** Extend to `.replace(/[<>&\u2028\u2029]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))`. Mention in the JSON-LD security audit when one happens.
+**Priority:** Very low.
+
+### Document the `sent_by` = recipient convention for cron-driven sends
+**Source:** P2-10 post-merge code review (nit, partially actioned)
+**Rationale:** The Deno edge function's `sendWithLog` writes `sent_by = relatedProfileId` where `relatedProfileId` is the recipient's profile id (not the cron's identity). This is critical for the GDPR scrub via path 1 (`sent_by = p_user_id`). The follow-up commit on the P2-11 branch added `recipient_user_id` population so the FK path also covers it, but the `sent_by` convention remains the legacy guard.
+**Action:** Add a CONTRIBUTING/architecture note (or extend the comment in `sendWithLog`) explicitly warning future maintainers not to "fix" `sent_by` to a system uuid without keeping `recipient_user_id` populated.
+**Priority:** Low. The inline comment now exists; documentation expansion is just-in-case.
+
 ---
 
 ## 🧪 Testing gaps

@@ -1,9 +1,11 @@
 import type { Metadata } from 'next'
+import { canonicalUrl } from '@/lib/utils/site'
 
 export const metadata: Metadata = {
   title: 'Terms of Service — The Social Seen',
   description:
     'The terms governing membership of The Social Seen community and use of our events platform.',
+  alternates: { canonical: canonicalUrl('/terms') },
 }
 
 /**

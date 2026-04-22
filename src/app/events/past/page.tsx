@@ -5,12 +5,14 @@ import type { Metadata } from 'next'
 import { getPastEvents } from '@/lib/supabase/queries/events'
 import { formatDateCard } from '@/lib/utils/dates'
 import { resolveEventImage } from '@/lib/utils/images'
+import { canonicalUrl } from '@/lib/utils/site'
 import { categoryLabel } from '@/types'
 
 export const metadata: Metadata = {
   title: 'Past Events — The Social Seen',
   description:
     'A look back at recent events — what we ran, what people said. Browse the archive to get a feel for The Social Seen before booking your first.',
+  alternates: { canonical: canonicalUrl('/events/past') },
 }
 
 function StarRow({ rating }: { rating: number }) {

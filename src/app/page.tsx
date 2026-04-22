@@ -1,3 +1,5 @@
+import type { Metadata } from "next";
+import { canonicalUrl } from "@/lib/utils/site";
 import { HeroSection } from "@/components/landing/HeroSection";
 import { AboutSection } from "@/components/landing/AboutSection";
 import { UpcomingEventsSection } from "@/components/landing/UpcomingEventsSection";
@@ -8,6 +10,10 @@ import { CTASection } from "@/components/landing/CTASection";
 import { getPublishedEvents } from "@/lib/supabase/queries/events";
 import { getTopHomepageReviews } from "@/lib/supabase/queries/reviews";
 import { isPastEvent } from "@/lib/utils/dates";
+
+export const metadata: Metadata = {
+  alternates: { canonical: canonicalUrl("/") },
+};
 
 export default async function Home() {
   const [allEvents, topReviews] = await Promise.all([

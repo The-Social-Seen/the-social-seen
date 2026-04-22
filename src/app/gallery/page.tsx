@@ -1,11 +1,13 @@
 import { Camera } from 'lucide-react'
 import { getAllGalleryPhotos, getGalleryEvents } from '@/lib/supabase/queries/gallery'
+import { canonicalUrl } from '@/lib/utils/site'
 import GalleryClient from '@/components/gallery/GalleryClient'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
   title: 'Gallery — The Social Seen',
   description: 'Moments captured at our events. Every photo tells a story of connection, culture, and unforgettable experiences.',
+  alternates: { canonical: canonicalUrl('/gallery') },
 }
 
 interface PageProps {

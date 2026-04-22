@@ -9,6 +9,9 @@ interface MockQueryBuilder {
   eq: ReturnType<typeof vi.fn>
   neq: ReturnType<typeof vi.fn>
   is: ReturnType<typeof vi.fn>
+  not: ReturnType<typeof vi.fn>
+  in: ReturnType<typeof vi.fn>
+  lt: ReturnType<typeof vi.fn>
   order: ReturnType<typeof vi.fn>
   limit: ReturnType<typeof vi.fn>
   single: ReturnType<typeof vi.fn>
@@ -27,7 +30,7 @@ function createQueryBuilder(): MockQueryBuilder {
 
   const builder = {} as MockQueryBuilder
   const chainMethods: (keyof MockQueryBuilder)[] = [
-    'select', 'eq', 'neq', 'is', 'order', 'limit', 'single', 'maybeSingle',
+    'select', 'eq', 'neq', 'is', 'not', 'in', 'lt', 'order', 'limit', 'single', 'maybeSingle',
   ]
 
   for (const method of chainMethods) {
@@ -74,6 +77,7 @@ vi.mock('@/lib/supabase/server', () => ({
 // ── Import after mocks ──────────────────────────────────────────────────────
 
 import {
+  getPastEvents,
   getPublishedEvents,
   getEventBySlug,
   getEventReviews,
@@ -545,5 +549,192 @@ describe('getUserBookingForEvent', () => {
       '[getUserBookingForEvent]',
       'permission denied'
     )
+  })
+})
+
+// ── getPastEvents ────────────────────────────────────────────────────────────
+//
+// Note: this query orchestrates 3 calls — events, reviews (in), photos (in)
+// — and assembles the result via JS Maps. Tests cover the dedup logic
+// (top-rated review per event), photo cap (3), and the null-author fallback.
+
+describe('getPastEvents', () => {
+  it('returns empty array on events query error', async () => {
+    const builder = createQueryBuilder()
+    builder.mockReject('connection refused')
+    fromBuilders['event_with_stats'] = builder
+
+    const result = await getPastEvents()
+
+    expect(result).toEqual([])
+    expect(console.error).toHaveBeenCalledWith(
+      '[getPastEvents]',
+      'connection refused',
+    )
+  })
+
+  it('returns empty array when no past events exist (and skips review/photo queries)', async () => {
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve([])
+    fromBuilders['event_with_stats'] = eventsBuilder
+
+    const result = await getPastEvents()
+
+    expect(result).toEqual([])
+    // The reviews/photos queries should not have been issued.
+    expect(fromBuilders['event_reviews']).toBeUndefined()
+    expect(fromBuilders['event_photos']).toBeUndefined()
+  })
+
+  it('filters to is_published + non-cancelled + past + ordered desc with limit 60', async () => {
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve([])
+    fromBuilders['event_with_stats'] = eventsBuilder
+
+    await getPastEvents()
+
+    expect(eventsBuilder.eq).toHaveBeenCalledWith('is_published', true)
+    expect(eventsBuilder.eq).toHaveBeenCalledWith('is_cancelled', false)
+    expect(eventsBuilder.lt).toHaveBeenCalledWith(
+      'date_time',
+      expect.any(String),
+    )
+    expect(eventsBuilder.order).toHaveBeenCalledWith('date_time', {
+      ascending: false,
+    })
+    expect(eventsBuilder.limit).toHaveBeenCalledWith(60)
+  })
+
+  it('attaches the highest-rated review per event (first match wins) and caps photos at 3', async () => {
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve([
+      { ...mockEventWithStats, id: 'evt-1' },
+      { ...mockEventWithStats, id: 'evt-2' },
+    ])
+    fromBuilders['event_with_stats'] = eventsBuilder
+
+    // Reviews come pre-sorted by rating desc (mirrors the .order chain).
+    // For evt-1 we provide two reviews — only the first should attach.
+    // evt-2 gets none.
+    const reviewsBuilder = createQueryBuilder()
+    reviewsBuilder.mockResolve([
+      {
+        event_id: 'evt-1',
+        rating: 5,
+        review_text: 'Top tier.',
+        author: { full_name: 'Anna Lee' },
+      },
+      {
+        event_id: 'evt-1',
+        rating: 4,
+        review_text: 'Was OK.',
+        author: { full_name: 'Ben Park' },
+      },
+    ])
+    fromBuilders['event_reviews'] = reviewsBuilder
+
+    // Photos: evt-1 gets 5 — should cap at 3. evt-2 gets none.
+    const photosBuilder = createQueryBuilder()
+    photosBuilder.mockResolve(
+      Array.from({ length: 5 }, (_, i) => ({
+        event_id: 'evt-1',
+        image_url: `/p${i}.jpg`,
+      })),
+    )
+    fromBuilders['event_photos'] = photosBuilder
+
+    const result = await getPastEvents()
+
+    expect(result).toHaveLength(2)
+    const e1 = result.find((e) => e.id === 'evt-1')!
+    const e2 = result.find((e) => e.id === 'evt-2')!
+
+    expect(e1.top_review).toEqual({
+      rating: 5,
+      review_text: 'Top tier.',
+      author_name: 'Anna Lee',
+    })
+    expect(e1.photos).toHaveLength(3)
+    expect(e1.photos.map((p) => p.image_url)).toEqual([
+      '/p0.jpg',
+      '/p1.jpg',
+      '/p2.jpg',
+    ])
+
+    expect(e2.top_review).toBeNull()
+    expect(e2.photos).toEqual([])
+  })
+
+  it('falls back to "A member" when the author join is null or missing', async () => {
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve([{ ...mockEventWithStats, id: 'evt-1' }])
+    fromBuilders['event_with_stats'] = eventsBuilder
+
+    const reviewsBuilder = createQueryBuilder()
+    reviewsBuilder.mockResolve([
+      {
+        event_id: 'evt-1',
+        rating: 5,
+        review_text: 'Great.',
+        // author missing entirely (Supabase returns null when no FK row)
+        author: null,
+      },
+    ])
+    fromBuilders['event_reviews'] = reviewsBuilder
+
+    const photosBuilder = createQueryBuilder()
+    photosBuilder.mockResolve([])
+    fromBuilders['event_photos'] = photosBuilder
+
+    const result = await getPastEvents()
+
+    expect(result[0].top_review?.author_name).toBe('A member')
+  })
+
+  it('normalises Supabase array-shape author joins to single object', async () => {
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve([{ ...mockEventWithStats, id: 'evt-1' }])
+    fromBuilders['event_with_stats'] = eventsBuilder
+
+    const reviewsBuilder = createQueryBuilder()
+    reviewsBuilder.mockResolve([
+      {
+        event_id: 'evt-1',
+        rating: 5,
+        review_text: 'Great.',
+        // Author returned as an array (the FK join shape Supabase
+        // sometimes returns even for single FKs).
+        author: [{ full_name: 'Charlotte Davis' }],
+      },
+    ])
+    fromBuilders['event_reviews'] = reviewsBuilder
+
+    const photosBuilder = createQueryBuilder()
+    photosBuilder.mockResolve([])
+    fromBuilders['event_photos'] = photosBuilder
+
+    const result = await getPastEvents()
+
+    expect(result[0].top_review?.author_name).toBe('Charlotte Davis')
+  })
+
+  it('filters reviews to is_visible + non-null/non-empty review_text', async () => {
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve([{ ...mockEventWithStats, id: 'evt-1' }])
+    fromBuilders['event_with_stats'] = eventsBuilder
+
+    const reviewsBuilder = createQueryBuilder()
+    reviewsBuilder.mockResolve([])
+    fromBuilders['event_reviews'] = reviewsBuilder
+
+    const photosBuilder = createQueryBuilder()
+    photosBuilder.mockResolve([])
+    fromBuilders['event_photos'] = photosBuilder
+
+    await getPastEvents()
+
+    expect(reviewsBuilder.eq).toHaveBeenCalledWith('is_visible', true)
+    expect(reviewsBuilder.not).toHaveBeenCalledWith('review_text', 'is', null)
+    expect(reviewsBuilder.neq).toHaveBeenCalledWith('review_text', '')
   })
 })

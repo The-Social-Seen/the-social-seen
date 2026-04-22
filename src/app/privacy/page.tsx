@@ -1,10 +1,12 @@
 import Link from 'next/link'
 import type { Metadata } from 'next'
+import { canonicalUrl } from '@/lib/utils/site'
 
 export const metadata: Metadata = {
   title: 'Privacy Policy — The Social Seen',
   description:
     'How The Social Seen collects, uses, and protects your personal data under UK GDPR.',
+  alternates: { canonical: canonicalUrl('/privacy') },
 }
 
 /**

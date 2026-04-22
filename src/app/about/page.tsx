@@ -2,12 +2,14 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import { Users, Sparkles, Heart } from "lucide-react";
 import { CTASection } from "@/components/landing/CTASection";
+import { canonicalUrl } from "@/lib/utils/site";
 import { cn } from "@/lib/utils/cn";
 
 export const metadata: Metadata = {
   title: "About | The Social Seen",
   description:
     "The story behind London's most sought-after social community. Learn how a WhatsApp group of friends became 1,000+ professionals gathering over unforgettable evenings.",
+  alternates: { canonical: canonicalUrl("/about") },
 };
 
 const values = [
