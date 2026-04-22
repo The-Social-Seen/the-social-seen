@@ -22,6 +22,9 @@ vi.mock('framer-motion', () => ({
     div: ({ children, ...props }: React.PropsWithChildren<Record<string, unknown>>) => (
       <div {...filterDomProps(props)}>{children}</div>
     ),
+    h1: ({ children, ...props }: React.PropsWithChildren<Record<string, unknown>>) => (
+      <h1 {...filterDomProps(props)}>{children}</h1>
+    ),
     h2: ({ children, ...props }: React.PropsWithChildren<Record<string, unknown>>) => (
       <h2 {...filterDomProps(props)}>{children}</h2>
     ),

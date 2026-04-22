@@ -39,7 +39,7 @@ const stats = [
 
 export default function AboutPage() {
   return (
-    <>
+    <main>
       {/* Section 1: Hero */}
       <section className="bg-charcoal px-6 pt-32 pb-16 md:pt-40 md:pb-24">
         <div className="mx-auto max-w-3xl text-center">
@@ -174,6 +174,6 @@ export default function AboutPage() {
 
       {/* Section 6: CTA */}
       <CTASection />
-    </>
+    </main>
   );
 }

@@ -132,9 +132,11 @@ function StepAccount({
   return (
     <div className="space-y-5">
       <div className="mb-2">
-        <h2 className="font-serif text-3xl font-bold text-text-primary md:text-4xl">
+        {/* Step screens are rendered one at a time — each step's heading
+             is the route's h1 for that point in the flow. */}
+        <h1 className="font-serif text-3xl font-bold text-text-primary md:text-4xl">
           Create Your Account
-        </h2>
+        </h1>
         <p className="mt-2 text-sm text-text-secondary">
           Join London&apos;s most exciting social community.
         </p>
@@ -346,9 +348,9 @@ function StepInterests({ selected, onToggle, error, loading, onSubmit, onBack }:
   return (
     <div className="space-y-6">
       <div className="mb-2">
-        <h2 className="font-serif text-3xl font-bold text-text-primary md:text-4xl">
+        <h1 className="font-serif text-3xl font-bold text-text-primary md:text-4xl">
           What interests you?
-        </h2>
+        </h1>
         <p className="mt-2 text-sm text-text-secondary">
           Select the interests that resonate with you. We&apos;ll use these to curate your experience.
         </p>
@@ -434,14 +436,14 @@ function StepWelcome({ name }: StepWelcomeProps) {
         </span>
       </motion.div>
 
-      <motion.h2
+      <motion.h1
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.4 }}
         className="mb-3 font-serif text-4xl font-bold text-text-primary md:text-5xl"
       >
         You&apos;re In
-      </motion.h2>
+      </motion.h1>
 
       <motion.p
         initial={{ opacity: 0, y: 20 }}

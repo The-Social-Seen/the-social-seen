@@ -335,13 +335,17 @@ function FormField({
   hint?: string
   children: React.ReactNode
 }) {
+  // Input lives INSIDE <label> so browsers + screen readers associate
+  // them implicitly (no id/htmlFor juggling per field). The label text +
+  // hint are wrapped in a block span so they render above the input as
+  // before, preserving the visual layout.
   return (
-    <div>
-      <label className="block text-sm font-medium text-text-primary mb-1">
+    <label className="block">
+      <span className="mb-1 block text-sm font-medium text-text-primary">
         {label}
-        {hint && <span className="font-normal text-text-tertiary ml-1">({hint})</span>}
-      </label>
+        {hint && <span className="ml-1 font-normal text-text-tertiary">({hint})</span>}
+      </span>
       {children}
-    </div>
+    </label>
   )
 }
