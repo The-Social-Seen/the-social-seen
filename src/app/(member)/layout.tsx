@@ -32,9 +32,9 @@ export default async function MemberLayout({
   }
 
   return (
-    <>
+    <main>
       <UnverifiedBanner verified={profile?.email_verified ?? false} />
       {children}
-    </>
+    </main>
   )
 }

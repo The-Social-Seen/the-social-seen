@@ -55,11 +55,13 @@ export default function InclusionsList({ items, onChange }: InclusionsListProps)
             value={item.label}
             onChange={(e) => updateItem(i, 'label', e.target.value)}
             placeholder="e.g. Welcome drink"
+            aria-label={`Inclusion ${i + 1} label`}
             className="flex-1 px-3 py-2 rounded-lg border border-border bg-bg-card text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold/50"
           />
           <select
             value={item.icon}
             onChange={(e) => updateItem(i, 'icon', e.target.value)}
+            aria-label={`Inclusion ${i + 1} icon`}
             className="w-32 px-2 py-2 rounded-lg border border-border bg-bg-card text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold/50"
           >
             {ICON_OPTIONS.map((opt) => (

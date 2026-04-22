@@ -100,6 +100,7 @@ export default function MembersTable({ members }: MembersTableProps) {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by name or email..."
+            aria-label="Search members by name or email"
             className="w-full pl-9 pr-3 py-2 rounded-lg border border-border bg-bg-card text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold/50"
           />
         </div>

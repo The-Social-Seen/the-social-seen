@@ -110,7 +110,16 @@ export default async function RootLayout({
         <PostHogProvider>
           <ThemeProvider>
             {!isAdmin && <Header />}
-            <main>{children}</main>
+            {/*
+              No root `<main>` here — each route group owns its landmark:
+              - (auth)/layout.tsx, (member)/layout.tsx, (admin)/layout.tsx
+                all render a `<main>` of their own.
+              - Public pages (/events, /gallery, /contact, etc.) render
+                `<main>` directly.
+              Rendering a root `<main>` AND a page `<main>` nests two
+              landmarks, which fails WCAG 1.3.1 (one `<main>` per document).
+            */}
+            {children}
             {!isAdmin && <Footer />}
             {/* P2-8b: consent banner. Shown only until the user
                 decides; respects admin-layout chromeless preference. */}
