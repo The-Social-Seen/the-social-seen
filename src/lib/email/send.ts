@@ -15,6 +15,7 @@
  * (welcome email failing must not break signup, etc.).
  */
 import 'server-only'
+import * as Sentry from '@sentry/nextjs'
 import { createAdminClient } from '@/lib/supabase/admin'
 import {
   FROM_ADDRESS,
@@ -294,10 +295,23 @@ async function logSendAttempt(
       template_name: input.templateName,
     })
   } catch (err) {
-    // Logging is best-effort. Don't propagate.
+    // Logging is best-effort. Don't propagate to the caller — we never
+    // want a logging failure to break the triggering action.
+    //
+    // Two signals for observability:
+    //   - console.error surfaces in Vercel logs + Sentry's auto-capture
+    //   - explicit Sentry.captureException adds a filterable tag so
+    //     email-audit soft-fails can be triaged separately from other
+    //     email issues.
     console.error(
       '[email/send] Failed to write notifications audit row:',
       err instanceof Error ? err.message : err,
     )
+    Sentry.captureException(err, {
+      tags: {
+        surface: 'email-audit-log',
+        template: input.templateName,
+      },
+    })
   }
 }

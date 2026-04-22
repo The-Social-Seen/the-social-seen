@@ -193,12 +193,30 @@ export function escapeAttr(s: string): string {
 /**
  * Best-effort base URL for absolute links inside emails.
  * Resend recipients may open the email anywhere — relative URLs don't work.
+ *
+ * Hierarchy:
+ *   1. NEXT_PUBLIC_SITE_URL — canonical, should be set in all envs.
+ *   2. NEXT_PUBLIC_VERCEL_URL — auto-populated on Vercel preview deploys;
+ *      rewritten with the `https://` prefix.
+ *   3. Hardcoded preview fallback — last-resort so email links don't
+ *      404 during an env-var mishap. In production this is a MISCONFIG
+ *      and emits a one-off console.warn so the operator notices in
+ *      Sentry / Vercel logs.
  */
+let hasWarnedForMissingSiteUrl = false
 export function getSiteUrl(): string {
-  return (
-    process.env.NEXT_PUBLIC_SITE_URL ??
-    (process.env.NEXT_PUBLIC_VERCEL_URL
-      ? `https://${process.env.NEXT_PUBLIC_VERCEL_URL}`
-      : 'https://the-social-seen.vercel.app')
-  )
+  if (process.env.NEXT_PUBLIC_SITE_URL) return process.env.NEXT_PUBLIC_SITE_URL
+  if (process.env.NEXT_PUBLIC_VERCEL_URL) {
+    return `https://${process.env.NEXT_PUBLIC_VERCEL_URL}`
+  }
+  if (
+    process.env.NODE_ENV === 'production' &&
+    !hasWarnedForMissingSiteUrl
+  ) {
+    hasWarnedForMissingSiteUrl = true
+    console.warn(
+      '[email/templates] NEXT_PUBLIC_SITE_URL is not set in production — emails will link to the preview fallback URL. Set NEXT_PUBLIC_SITE_URL on Vercel.',
+    )
+  }
+  return 'https://the-social-seen.vercel.app'
 }

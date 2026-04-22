@@ -172,6 +172,18 @@ describe('isAllowedImageHost', () => {
     expect(isAllowedImageHost('not a url')).toBe(false)
     expect(isAllowedImageHost('')).toBe(false)
   })
+
+  it('rejects http:// even on an allowlisted host (https-only per next.config)', () => {
+    // Phase 2.5 Batch 8: explicitly disallow insecure protocols. A
+    // seeded http://images.unsplash.com URL used to slip through the
+    // hostname match only to be rejected later by next/image itself.
+    expect(
+      isAllowedImageHost('http://images.unsplash.com/photo-x'),
+    ).toBe(false)
+    expect(
+      isAllowedImageHost('http://project.supabase.co/x.jpg'),
+    ).toBe(false)
+  })
 })
 
 // ── getInitials ───────────────────────────────────────────────────────────────

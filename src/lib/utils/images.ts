@@ -38,7 +38,14 @@ const ALLOWED_IMAGE_HOSTS: ReadonlyArray<string> = [
 
 export function isAllowedImageHost(url: string): boolean {
   try {
-    const { hostname } = new URL(url)
+    const parsed = new URL(url)
+    // next/image remotePatterns defaults to https-only. Any http:// URL
+    // would pass this hostname check but be rejected by next/image at
+    // render time — a different failure mode than this module addresses
+    // but still broken. Reject at the allowlist layer so callers fall
+    // through to the placeholder consistently.
+    if (parsed.protocol !== 'https:') return false
+    const { hostname } = parsed
     return ALLOWED_IMAGE_HOSTS.some((pattern) => {
       if (pattern.startsWith('*.')) {
         // "*.supabase.co" matches "foo.supabase.co" but NOT "supabase.co"
