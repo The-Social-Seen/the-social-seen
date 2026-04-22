@@ -14,7 +14,7 @@
  */
 import type { EventDetail } from '@/types'
 import { canonicalUrl, getCanonicalSiteUrl } from '@/lib/utils/site'
-import { resolveEventImage } from '@/lib/utils/images'
+import { resolveAvatarUrl, resolveEventImage } from '@/lib/utils/images'
 
 export function eventJsonLd(event: EventDetail): Record<string, unknown> {
   const ogImage = resolveEventImage(event.image_url)
@@ -59,24 +59,30 @@ export function eventJsonLd(event: EventDetail): Record<string, unknown> {
       : {}
 
   // Performers — derived from event_hosts. We map each host to a
-  // Person with name + jobTitle + (optional) URL pointing at the
-  // organisation if no individual profile page exists yet.
+  // Person with name + jobTitle + (optional) worksFor + (optional)
+  // image (avatar). Image is routed through resolveAvatarUrl so
+  // disallowed hosts fall through to `null` rather than emitting a
+  // broken URL to Google.
   const performer =
     event.hosts.length > 0
       ? {
-          performer: event.hosts.map((h) => ({
-            '@type': 'Person',
-            name: h.profile.full_name,
-            ...(h.profile.job_title ? { jobTitle: h.profile.job_title } : {}),
-            ...(h.profile.company
-              ? {
-                  worksFor: {
-                    '@type': 'Organization',
-                    name: h.profile.company,
-                  },
-                }
-              : {}),
-          })),
+          performer: event.hosts.map((h) => {
+            const avatarUrl = resolveAvatarUrl(h.profile.avatar_url)
+            return {
+              '@type': 'Person',
+              name: h.profile.full_name,
+              ...(h.profile.job_title ? { jobTitle: h.profile.job_title } : {}),
+              ...(h.profile.company
+                ? {
+                    worksFor: {
+                      '@type': 'Organization',
+                      name: h.profile.company,
+                    },
+                  }
+                : {}),
+              ...(avatarUrl ? { image: avatarUrl } : {}),
+            }
+          }),
         }
       : {}
 

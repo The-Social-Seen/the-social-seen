@@ -12,11 +12,17 @@ interface JsonLdProps {
 }
 
 export function JsonLd({ data }: JsonLdProps) {
-  // JSON.stringify can produce `</` sequences inside string values
-  // (e.g. someone's bio mentions an HTML tag). Escape the closing slash
-  // to avoid breaking out of the script tag — a standard JSON-LD
-  // injection guard.
-  const json = JSON.stringify(data).replace(/</g, '\\u003c')
+  // Escape characters that can break out of the <script> context or be
+  // interpreted specially by HTML/JS parsers. Covers:
+  //   <  — primary script-tag-break vector (the original guard)
+  //   >  — defence-in-depth for HTML-context parsers
+  //   &  — prevents &amp; entity-ambiguity inside string values
+  //   U+2028 / U+2029 — JSON-valid but break JS string literals in
+  //                     older parsers. Mirrors serialize-javascript.
+  const json = JSON.stringify(data).replace(
+    /[<>&\u2028\u2029]/g,
+    (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'),
+  )
 
   return (
     <script

@@ -28,16 +28,19 @@ export const LONDON_TZ = 'Europe/London'
 // ── Navigation ────────────────────────────────────────────────────────────────
 
 export const NAV_LINKS_PUBLIC = [
-  { label: 'Events',   href: '/events' },
-  { label: 'Gallery',  href: '/gallery' },
-  { label: 'Join',     href: '/join' },
-  { label: 'Sign In',  href: '/login' },
+  { label: 'Events',      href: '/events' },
+  { label: 'Gallery',     href: '/gallery' },
+  { label: 'Contact',     href: '/contact' },
+  { label: 'Collaborate', href: '/collaborate' },
+  { label: 'Join',        href: '/join' },
+  { label: 'Sign In',     href: '/login' },
 ] as const
 
 export const NAV_LINKS_MEMBER = [
   { label: 'Events',      href: '/events' },
   { label: 'Gallery',     href: '/gallery' },
   { label: 'My Bookings', href: '/bookings' },
+  { label: 'Contact',     href: '/contact' },
 ] as const
 
 // ── Event categories ──────────────────────────────────────────────────────────
