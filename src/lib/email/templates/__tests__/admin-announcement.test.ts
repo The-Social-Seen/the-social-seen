@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { adminAnnouncementTemplate } from '../admin-announcement'
 
+// Ensures the unsubscribe-token lib has a signing secret during test runs.
+process.env.UNSUBSCRIBE_TOKEN_SECRET ||=
+  'deterministic-test-secret-for-admin-announcement-template'
+
 const baseInput = {
+  userId: '11111111-2222-3333-4444-555555555555',
   fullName: 'Charlotte Moreau',
   eventTitle: 'Wine & Wisdom',
   eventSlug: 'wine-and-wisdom',

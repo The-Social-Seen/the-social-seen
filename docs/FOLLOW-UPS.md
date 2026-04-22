@@ -13,14 +13,59 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 
 ## 🔴 Security / compliance
 
+### Dedicated `UNSUBSCRIBE_TOKEN_SECRET` — rotate off the service-role fallback
+**Source:** Phase 2.5 Batch 2 code review.
+**Rationale:** Unsubscribe HMAC tokens fall back to `SUPABASE_SERVICE_ROLE_KEY` as the signing secret when `UNSUBSCRIBE_TOKEN_SECRET` is unset — fine for v1, but rotating the service role key (ever) silently invalidates every outstanding unsub token in flight.
+**Action:** Mint a dedicated 32+ byte random secret, set `UNSUBSCRIBE_TOKEN_SECRET` in Vercel (Preview + Production) and Supabase Edge Function secrets. One-line change; already supported by the code.
+**Priority:** Medium — do before any pipeline that rotates the service role key.
+
+### Admin-announcement preference lookup is 1 DB round-trip per recipient
+**Source:** Phase 2.5 Batch 2 code review.
+**Rationale:** `sendEmail` now does an extra `SELECT` on `notification_preferences` before every admin announcement send. Combined with the already-flagged 100+ attendee rate-limit concern, this compounds per-send latency.
+**Action:** When tackling the attendee-batching follow-up (already logged), batch-fetch preferences upfront via a single `IN` query keyed by `recipient_user_id` list, then consult the in-memory map per recipient.
+**Priority:** Low — matters at 100+ attendees; current scale is fine.
+
+
+
+### Newsletter / marketing-email integration was never built (footer form is a no-op stub)
+**Source:** docs/PHASE-2-PLAN-v2.md Platform Decisions table (line 25 — Brevo) — sweep during Phase 2 wrap.
+**Rationale:** Platform decisions picked Brevo (free tier 9,000/month) for newsletters "beyond transactional". The footer renders a polished signup form (`src/components/layout/Footer.tsx:93-133`) — but the `onSubmit` is `(e) => e.preventDefault()` and nothing else. No Server Action, no provider, no validation, no feedback. A visitor types their email, clicks the arrow, gets silent nothing. Worse than no form at all — implies a working pipeline that doesn't exist. Adjacent state: `profiles.email_consent` is collected at signup but only consumed by `processProfileNudges` (P2-10); no marketing pipeline exists to gate. The transactional `Unsubscribe` link in `src/lib/email/templates/_shared.ts:77` is also `href="#"` (already logged separately).
+**Action (two phases):**
+1. **Immediate (5-min, HIGH for visual polish before any prospect demo)** — make the footer form fail honestly. Either remove the form, or wire it to a stub Server Action that writes to a `newsletter_signups` table and shows "Thanks — we'll be in touch when our newsletter launches." A do-nothing form on a public site is a credibility hit and silently loses real signups.
+2. **Phase 3 build** — Brevo client + opt-in via existing `email_consent` (or new `newsletter_consent` if expanding scope). Sync member signups to a Brevo list. Tie the transactional unsubscribe link to a real suppression list (covers the `_shared.ts:77` follow-up). Build a draft+send admin surface or hand off to Brevo's UI.
+**Priority:** Step 1 is HIGH; Step 2 is Medium for Phase 3.
+
 ### SMS / Twilio transactional notifications were never built (Phase-2 plan slipped silently)
 **Source:** docs/PHASE-2-PLAN-v2.md §P2-5 + Platform Decisions table — sweep during Phase 2 wrap.
-**Rationale:** The original P2-5 plan promised venue reveals + 2-day reminders + day-of reminders via "email + SMS" using Twilio (~$15 trial credit, ~$20/month thereafter). The DB schema reflects this — `notifications.channel` CHECK constraint accepts `'in_app' | 'email' | 'sms'` (migration `20260421000001`). But every send path actually built (Node `sendEmail`, Deno `sendWithLog`, all 7 templates, the daily edge function) is email-only. No Twilio client, no SMS templates, no SMS dispatch in the edge function. The phone-number column on profiles (P2-2) is collected but unused for transactional sends. Not logged as a slip in Sprint 1 / 2 handovers.
-**Action:** Phase 3. Build in this order:
-1. Decide whether SMS is still worth it given the Resend email pipeline already covers reliable delivery + the WhatsApp community channel covers casual nudges. The original plan rationale was "venue reveals are time-critical and email gets buried" — re-test that assumption.
-2. If yes: add Twilio client (`src/lib/sms/twilio.ts`), an `sendSms` wrapper analogous to `sendEmail` with the same audit-row logging into `notifications` (channel='sms'), an opt-in column on profiles (`sms_consent boolean`, NOT `email_consent` — separate consent for separate channel under UK GDPR), and Deno-side equivalents in `daily-notifications`.
-3. Wire venue reveals + day-of reminders only — skip 2-day SMS to avoid spam. Provide a profile toggle.
-**Priority:** Medium for Phase 3 — currently not blocking anything; email covers all communications and the WhatsApp group covers community chat.
+**Rationale:** The original P2-5 plan promised venue reveals + 2-day reminders + day-of reminders via "email + SMS" using Twilio. The DB plumbing was put in place: `notifications.channel` CHECK constraint accepts `'in_app' | 'email' | 'sms'` (migration `20260421000001`); `profiles.phone_number` is collected at signup with UK-format validation (P2-2). But every send path actually built (Node `sendEmail`, Deno `sendWithLog`, all 7 templates, the 6-section daily edge function) is email-only. No Twilio client, no SMS templates, no dispatch. The slip wasn't logged in Sprint 1 / 2 handovers; the Twilio account is already set up per operator confirmation, so the only remaining cost is engineering time + ongoing per-message spend.
+**Action (build in this order):**
+1. Add `profiles.sms_consent boolean DEFAULT false NOT NULL` migration. Separate from `email_consent` — UK GDPR requires per-channel consent. REVOKE from anon; allow authenticated to read their own + admin to read all.
+2. Surface the SMS-consent checkbox on the registration Step 1 form alongside the existing email-consent checkbox. Update `signUp` to forward to the trigger.
+3. Add `src/lib/sms/twilio.ts` (lazy client) + `src/lib/sms/send.ts` wrapper analogous to `sendEmail`: same audit-row logging into `notifications` with `channel='sms'`, same retry-on-transient + permanent-error short-circuit, sandbox-fallback recipient pattern.
+4. Add SMS template equivalents for venue-reveal / 2-day-reminder / day-of-reminder / review-request (text-only, ~160 chars each, link-shortened where useful).
+5. Mirror in the Deno edge function — `sendWithLog` switches on channel, with a parallel Twilio-fetch path under `sendSms`.
+6. Add admin retry support on the failed-notifications view (currently email-only filter — extend to channel-agnostic).
+**Priority:** Medium. Operator decides cost-vs-value (Twilio per-SMS spend); engineering effort is bounded.
+
+### P2-11 Performance verification was never run
+**Source:** P2-12 wrap — sweep against kickoff scope.
+**Rationale:** The kickoff P2-11 task list explicitly included: "Performance: verify `next/image` usage, lazy loading, no layout shift". The previous session confirmed every new public surface uses `next/image` correctly + routes through `resolveEventImage`. But never ran an actual perf pass — no Lighthouse audit, no Chrome DevTools Performance trace, no Web Vitals (LCP / CLS / INP) measurement. Code-level review caught issues, measured perf was skipped.
+**Action:** Run a baseline Lighthouse pass against the deployed Vercel preview for: `/`, `/events`, `/events/[a real slug]`, `/events/past`, `/gallery`. Capture LCP / CLS / INP / TBT. Fix anything red. Re-run after fixes. Specifically check the testimonials carousel + the /events/past photo grid for CLS (image dimensions present? aspect-ratio set?). The homepage hero animations (framer-motion) are a likely INP risk on mid-tier mobile.
+**Priority:** Medium. Demo will look fine on a fast connection; worth catching before public launch.
+
+### P2-11 Semantic HTML audit was light-touch only
+**Source:** P2-12 wrap — sweep against kickoff scope.
+**Rationale:** The kickoff P2-11 task list said "heading hierarchy, **landmarks, alt text**". What actually shipped: a `grep -c "<h1"` confirming exactly one `<h1>` per public page. No systematic landmark audit (`<main>` / `<nav>` / `<header>` / `<footer>` / `<aside>` / `<section>` use), no alt-text audit (every `<img>` and decorative icon).
+**Action:** Two passes:
+1. **Landmarks**: enable axe DevTools or `pa11y` against each public route. Confirm one `<main>` per page, `<nav>` wraps the main + footer + admin sidebar, decorative `<section>`s have either `aria-labelledby` or no role inflation.
+2. **Alt text**: every `<Image>` in `src/app` and `src/components`. Decorative images get `alt=""` (currently most lucide icons don't have `aria-hidden` either). Event photo thumbnails should describe the event, not just say "image". Avatar fallbacks should describe the person.
+**Priority:** Medium. Bundle with the WCAG AA audit follow-up that's already logged.
+
+### Contact + Collaborate not in the main Header nav (footer-only)
+**Source:** P2-12 wrap — UX call made without surfacing.
+**Rationale:** The kickoff said "Add Contact + Collaborate to footer nav" — interpreted literally. But visitors looking to contact a brand almost always check the main header first; footer-only sends them on a hunt. Defensible call (keeps the main nav uncluttered: Events / Gallery / Join / Sign In is a 4-item nav, adding Contact + Collaborate would be 6) but made without flagging the trade-off.
+**Action:** Either (a) add Contact (and maybe Collaborate) to `NAV_LINKS_PUBLIC` in `src/lib/constants.ts` — the Header reads it directly, or (b) accept footer-only and document. If adding to the Header, the mobile nav drawer gives more room than the desktop top-bar — could split.
+**Priority:** Low. Product call.
 
 ### Instagram live oEmbed feed on /gallery (P2-12 deferred from Option B)
 **Source:** docs/PHASE-2-PLAN-v2.md §P2-12 + P2-12 product call.

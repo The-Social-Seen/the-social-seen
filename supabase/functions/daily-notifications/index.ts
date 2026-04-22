@@ -320,6 +320,7 @@ async function processReviewRequests(
       const recipient = a.profiles?.email
       if (!recipient) continue
       const rendered = reviewRequestTemplate({
+        userId: a.user_id,
         fullName: a.profiles?.full_name ?? 'there',
         eventTitle: event.title,
         eventSlug: event.slug,
@@ -330,6 +331,7 @@ async function processReviewRequests(
         rendered,
         templateName: 'review_request',
         relatedProfileId: a.user_id,
+        preferenceCategory: 'review_requests',
         // Review request: only ever one per (event, user), regardless of day.
         dedupeKey: `review_request:${event.id}:${a.user_id}`,
       })
@@ -451,6 +453,7 @@ async function processProfileNudges(
     if (score >= 50) continue
 
     const rendered = profileNudgeTemplate({
+      userId: row.id,
       fullName: row.full_name ?? 'there',
       completionScore: score,
       topMissingLabels: missingLabels.slice(0, 3),
@@ -462,6 +465,7 @@ async function processProfileNudges(
       rendered,
       templateName: 'profile_nudge',
       relatedProfileId: row.id,
+      preferenceCategory: 'profile_nudges',
       // One-shot per profile — but the column is the real gate; the
       // dedupe_key is belt-and-braces in case the column update fails.
       dedupeKey: `profile_nudge:${row.id}`,
@@ -564,6 +568,16 @@ interface SendWithLogArgs {
   templateName: string
   relatedProfileId: string
   dedupeKey: string
+  /**
+   * Marketing-category gate. When set, we look up
+   * `notification_preferences.<category>` for `relatedProfileId` and
+   * skip the send if false. Transactional templates (venue reveal,
+   * event reminder) leave this undefined.
+   */
+  preferenceCategory?:
+    | 'review_requests'
+    | 'profile_nudges'
+    | 'admin_announcements'
 }
 
 /**
@@ -578,6 +592,19 @@ async function sendWithLog(
   supabase: ReturnType<typeof createClient>,
   args: SendWithLogArgs,
 ): Promise<boolean> {
+  // Preference check — skip sends to users who opted out of this
+  // marketing category. No audit row written for suppressed sends.
+  if (args.preferenceCategory) {
+    const { data: pref } = await supabase
+      .from('notification_preferences')
+      .select('review_requests, profile_nudges, admin_announcements')
+      .eq('user_id', args.relatedProfileId)
+      .maybeSingle()
+    if (pref && (pref as Record<string, boolean>)[args.preferenceCategory] === false) {
+      return false
+    }
+  }
+
   const actualRecipient =
     SANDBOX_FALLBACK_RECIPIENT && SANDBOX_FALLBACK_RECIPIENT.length > 0
       ? SANDBOX_FALLBACK_RECIPIENT

@@ -20,3 +20,13 @@
 import { vi } from 'vitest'
 
 vi.mock('server-only', () => ({}))
+
+// Global fallback for the HMAC-signed unsubscribe-token lib. Tests
+// that exercise email templates (which build the unsubscribe URL) need
+// a signing secret present. Individual tests can override this by
+// setting `process.env.UNSUBSCRIBE_TOKEN_SECRET` in a `beforeEach`.
+// The real module requires >=16 chars; keep that constraint in sync.
+if (!process.env.UNSUBSCRIBE_TOKEN_SECRET) {
+  process.env.UNSUBSCRIBE_TOKEN_SECRET =
+    'vitest-global-unsubscribe-token-secret-not-for-production'
+}

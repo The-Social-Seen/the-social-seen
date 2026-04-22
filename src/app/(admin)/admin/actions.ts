@@ -1301,6 +1301,7 @@ export async function emailEventAttendees(
         eventSlug: eventSnapshot.slug,
         subject,
         bodyText: body,
+        userId: r.userId,
       })
       await sendEmail({
         to: r.email,
@@ -1313,6 +1314,7 @@ export async function emailEventAttendees(
         recipientEventId: eventSnapshot.id,
         recipientType: 'event_attendees',
         notificationType: 'announcement',
+        preferenceCategory: 'admin_announcements',
         tags: [
           { name: 'template', value: 'admin_announcement' },
           { name: 'event_id', value: eventSnapshot.id },

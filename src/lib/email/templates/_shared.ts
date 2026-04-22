@@ -28,13 +28,26 @@ const SERIF_STACK =
  *
  * `previewText` is the snippet most email clients show next to the
  * subject in the inbox list — keep it short and useful.
+ *
+ * `unsubscribeUrl` — if provided, renders a working one-click unsubscribe
+ * link. Transactional emails (booking confirmation, OTP, venue reveal,
+ * event reminder, cancellation, refund, welcome) pass no URL and the
+ * footer shows no unsubscribe — those emails are either direct responses
+ * to user actions or required to deliver the service the user booked.
+ *
+ * Per UK PECR, marketing-adjacent templates (review_requests,
+ * profile_nudges, admin_announcements) MUST pass an unsubscribe URL;
+ * the Node `sendEmail` wrapper + Deno edge function refuse to send if
+ * preferences say opt-out.
  */
 export function renderShell({
   previewText,
   bodyHtml,
+  unsubscribeUrl,
 }: {
   previewText: string
   bodyHtml: string
+  unsubscribeUrl?: string
 }): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -73,9 +86,13 @@ ${bodyHtml}
             <p style="margin:0 0 8px 0;">
               Questions? <a href="mailto:info@the-social-seen.com" style="color:${COLORS.gold};text-decoration:none;">info@the-social-seen.com</a>
             </p>
-            <p style="margin:0;">
-              <a href="#" style="color:${COLORS.textSecondary};text-decoration:underline;">Unsubscribe</a>
-            </p>
+            ${
+              unsubscribeUrl
+                ? `<p style="margin:0;">
+              <a href="${escapeAttr(unsubscribeUrl)}" style="color:${COLORS.textSecondary};text-decoration:underline;">Unsubscribe from these emails</a>
+            </p>`
+                : ''
+            }
           </td>
         </tr>
       </table>
