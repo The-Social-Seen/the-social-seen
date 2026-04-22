@@ -40,3 +40,56 @@ jobs:
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+
+  e2e:
+    name: Playwright E2E (booking RPCs)
+    runs-on: ubuntu-latest
+    # Kept as a separate job so the slow Supabase-in-Docker boot never
+    # blocks fast unit-test feedback in the `ci` job above. Failures
+    # here still fail the overall CI run.
+    needs: ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Start local Supabase stack
+        run: supabase start --exclude studio,inbucket,realtime,imgproxy,edge-runtime
+
+      - name: Run E2E suite
+        run: pnpm e2e
+        env:
+          # `supabase start` prints the local URL + keys; the E2E
+          # helpers fall back to the well-known local-dev defaults so
+          # we don't have to capture them here.
+          SUPABASE_E2E_URL: http://127.0.0.1:54321
+
+      - name: Stop Supabase (best-effort)
+        if: always()
+        run: supabase stop --no-backup || true
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
