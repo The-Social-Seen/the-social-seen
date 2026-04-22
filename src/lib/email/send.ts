@@ -71,6 +71,13 @@ export interface SendEmailInput {
    * 'waitlist' where appropriate for richer audit filtering.
    */
   notificationType?: 'reminder' | 'announcement' | 'waitlist' | 'event_update'
+  /**
+   * Optional override for the Resend `replyTo` header. Defaults to the
+   * configured REPLY_TO_ADDRESS. Use for inbound-style flows where the
+   * team should reply to the originating sender (contact form, collab
+   * pitch) rather than to the support inbox.
+   */
+  replyTo?: string
 }
 
 export type SendEmailResult =
@@ -104,6 +111,7 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
       html: input.html,
       text: input.text,
       tags: input.tags,
+      replyTo: input.replyTo,
     })
 
     attemptResult = result
@@ -138,13 +146,14 @@ async function attemptSend(args: {
   html: string
   text?: string
   tags?: EmailTag[]
+  replyTo?: string
 }): Promise<SendEmailResult> {
   try {
     const resend = getResendClient()
     const { data, error } = await resend.emails.send({
       from: FROM_ADDRESS,
       to: [args.to],
-      replyTo: REPLY_TO_ADDRESS,
+      replyTo: args.replyTo ?? REPLY_TO_ADDRESS,
       subject: args.subject,
       html: args.html,
       text: args.text,

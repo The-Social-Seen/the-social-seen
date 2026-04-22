@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase/server'
 import { getEventBySlug } from '@/lib/supabase/queries/events'
 import { formatDateFull, formatTime } from '@/lib/utils/dates'
 import { CheckCircle2, Calendar, Clock, MapPin } from 'lucide-react'
+import { InstagramFollowSection } from '@/components/landing/InstagramFollowSection'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -170,6 +171,13 @@ export default async function BookingSuccessPage({
             Back to event
           </Link>
         </div>
+      </div>
+
+      <div className="mt-10">
+        <InstagramFollowSection
+          variant="card"
+          headline="See you at the event — and on Instagram"
+        />
       </div>
     </main>
   )

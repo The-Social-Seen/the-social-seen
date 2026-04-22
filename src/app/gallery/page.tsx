@@ -2,6 +2,7 @@ import { Camera } from 'lucide-react'
 import { getAllGalleryPhotos, getGalleryEvents } from '@/lib/supabase/queries/gallery'
 import { canonicalUrl } from '@/lib/utils/site'
 import GalleryClient from '@/components/gallery/GalleryClient'
+import { InstagramFollowSection } from '@/components/landing/InstagramFollowSection'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -47,6 +48,8 @@ export default async function GalleryPage({ searchParams }: PageProps) {
         events={events}
         initialEventSlug={eventSlug}
       />
+
+      <InstagramFollowSection variant="banner" />
     </main>
   )
 }

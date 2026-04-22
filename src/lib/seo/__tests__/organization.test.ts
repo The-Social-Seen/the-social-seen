@@ -20,12 +20,18 @@ describe('organizationJsonLd', () => {
     expect(loc.address.addressCountry).toBe('GB')
   })
 
-  it('omits sameAs until real social handles are confirmed (P2-12)', () => {
+  it('exposes social profiles via sameAs (sourced from SOCIAL_LINKS)', () => {
     const ld = organizationJsonLd()
-    // Deliberately absent — the footer still has placeholder href="#"
-    // for Instagram / Twitter / LinkedIn. Putting guessed slugs in
-    // sameAs would 404 and pollute the Knowledge Graph entry.
-    expect('sameAs' in ld).toBe(false)
+    const sameAs = ld.sameAs as string[]
+    expect(Array.isArray(sameAs)).toBe(true)
+    expect(sameAs.length).toBeGreaterThan(0)
+    // Today: just Instagram. The exact slug is asserted to catch
+    // accidental drift from SOCIAL_LINKS.instagram.
+    expect(sameAs).toContain('https://www.instagram.com/the_social_seen')
+    // Twitter / LinkedIn deliberately not in the list — those accounts
+    // don't exist yet. Add them when they do.
+    expect(sameAs.some((u) => u.includes('twitter.com'))).toBe(false)
+    expect(sameAs.some((u) => u.includes('linkedin.com'))).toBe(false)
   })
 
   it('exposes a customer-support contactPoint', () => {
