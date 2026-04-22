@@ -5,11 +5,16 @@ import { Instagram, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { SOCIAL_LINKS } from "@/lib/constants";
 
-const quickLinks = [
+// Split into two thematic groups so a single scanning pass is obvious
+// on mobile and doesn't leave one column at 8 vertical entries.
+const discoverLinks = [
   { label: "Events", href: "/events" },
   { label: "Past Events", href: "/events/past" },
   { label: "Gallery", href: "/gallery" },
   { label: "About", href: "/about" },
+];
+
+const connectLinks = [
   { label: "Contact", href: "/contact" },
   { label: "Collaborate", href: "/collaborate" },
   { label: "Join", href: "/join" },
@@ -34,7 +39,7 @@ export function Footer() {
   return (
     <footer className="border-t border-border bg-bg-secondary">
       <div className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
-        <div className="grid gap-12 md:grid-cols-3">
+        <div className="grid gap-12 md:grid-cols-4">
           {/* Brand Column */}
           <div className="space-y-4">
             <Link href="/" className="inline-block">
@@ -69,13 +74,40 @@ export function Footer() {
             </div>
           </div>
 
-          {/* Quick Links Column */}
+          {/* Discover Column */}
           <div>
             <h4 className="font-serif text-sm font-semibold uppercase tracking-widest text-text-primary">
-              Quick Links
+              Discover
             </h4>
-            <nav className="mt-4 flex flex-col gap-3">
-              {quickLinks.map((link) => (
+            <nav
+              aria-label="Discover"
+              className="mt-4 flex flex-col gap-3"
+            >
+              {discoverLinks.map((link) => (
+                <Link
+                  key={link.label}
+                  href={link.href}
+                  className={cn(
+                    "text-sm text-text-secondary transition-colors duration-200",
+                    "hover:text-gold"
+                  )}
+                >
+                  {link.label}
+                </Link>
+              ))}
+            </nav>
+          </div>
+
+          {/* Connect Column */}
+          <div>
+            <h4 className="font-serif text-sm font-semibold uppercase tracking-widest text-text-primary">
+              Connect
+            </h4>
+            <nav
+              aria-label="Connect"
+              className="mt-4 flex flex-col gap-3"
+            >
+              {connectLinks.map((link) => (
                 <Link
                   key={link.label}
                   href={link.href}

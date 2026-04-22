@@ -39,15 +39,18 @@ describe('Footer', () => {
     expect(link.getAttribute('href')).toBe('/login')
   })
 
-  it('has no hash anchor hrefs in quick links navigation', () => {
+  it('has no hash anchor hrefs in any footer navigation', () => {
     render(<Footer />)
-    // Check only the quick links nav section, not social icon placeholders (which use # intentionally)
-    const navSection = screen.getByRole('navigation')
-    const navLinks = navSection.querySelectorAll('a')
-    const hashLinks = Array.from(navLinks).filter((l) => {
-      const href = l.getAttribute('href') ?? ''
-      return href.startsWith('#')
-    })
+    // Phase 2.5 Batch 6 split the footer into Discover + Connect nav
+    // groups, so `getByRole('navigation')` would find multiple. Iterate
+    // all nav landmarks together.
+    const navSections = screen.getAllByRole('navigation')
+    const hashLinks = navSections.flatMap((nav) =>
+      Array.from(nav.querySelectorAll('a')).filter((l) => {
+        const href = l.getAttribute('href') ?? ''
+        return href.startsWith('#')
+      }),
+    )
     expect(hashLinks.length).toBe(0)
   })
 

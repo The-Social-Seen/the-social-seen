@@ -16,7 +16,22 @@ export function organizationJsonLd(): Record<string, unknown> {
     name: SITE_CONFIG.name,
     description: SITE_CONFIG.description,
     url: getCanonicalSiteUrl(),
-    logo: canonicalUrl('/og-image.jpg'),
+    // Schema.org `Organization.logo` is used by Google's Knowledge Panel.
+    // The spec accepts a URL string but strongly recommends an ImageObject
+    // with explicit dimensions — the panel's layout reserves a near-square
+    // area, and a 1200×630 OG image gets cropped badly. If / when a
+    // dedicated square asset ships at /logo.png (600×600, brand
+    // background), Google Search Console will pick up the richer shape
+    // automatically; no code change needed.
+    //
+    // For now we point at /og-image.jpg but still emit as an ImageObject
+    // so the schema is future-proof.
+    logo: {
+      '@type': 'ImageObject',
+      url: canonicalUrl('/og-image.jpg'),
+      width: 1200,
+      height: 630,
+    },
     foundingLocation: {
       '@type': 'Place',
       address: {
