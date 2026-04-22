@@ -111,12 +111,14 @@ interface StepAccountProps {
   password: string
   phoneNumber: string
   emailConsent: boolean
+  smsConsent: boolean
   hearAbout: string
   onNameChange: (v: string) => void
   onEmailChange: (v: string) => void
   onPasswordChange: (v: string) => void
   onPhoneNumberChange: (v: string) => void
   onEmailConsentChange: (v: boolean) => void
+  onSmsConsentChange: (v: boolean) => void
   onHearAboutChange: (v: string) => void
   errors: Record<string, string>
   loading: boolean
@@ -124,9 +126,10 @@ interface StepAccountProps {
 }
 
 function StepAccount({
-  name, email, password, phoneNumber, emailConsent, hearAbout,
+  name, email, password, phoneNumber, emailConsent, smsConsent, hearAbout,
   onNameChange, onEmailChange, onPasswordChange,
-  onPhoneNumberChange, onEmailConsentChange, onHearAboutChange,
+  onPhoneNumberChange, onEmailConsentChange, onSmsConsentChange,
+  onHearAboutChange,
   errors, loading, onSubmit,
 }: StepAccountProps) {
   return (
@@ -287,7 +290,8 @@ function StepAccount({
         </div>
       </div>
 
-      {/* Email marketing consent (GDPR: unchecked by default) */}
+      {/* Per-channel consent checkboxes. UK PECR requires explicit
+           opt-in per channel — both default off. */}
       <label
         htmlFor="emailConsent"
         className="flex cursor-pointer items-start gap-3 text-sm text-text-secondary"
@@ -307,7 +311,30 @@ function StepAccount({
           </Checkbox.Indicator>
         </Checkbox.Root>
         <span className="leading-snug">
-          Keep me updated with new events and community news
+          Keep me updated with new events and community news by email
+        </span>
+      </label>
+
+      <label
+        htmlFor="smsConsent"
+        className="flex cursor-pointer items-start gap-3 text-sm text-text-secondary"
+      >
+        <Checkbox.Root
+          id="smsConsent"
+          checked={smsConsent}
+          onCheckedChange={(checked) => onSmsConsentChange(checked === true)}
+          className={cn(
+            'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border bg-bg-card transition-all',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold/40',
+            smsConsent ? 'border-gold bg-gold' : 'border-border hover:border-gold/50'
+          )}
+        >
+          <Checkbox.Indicator>
+            <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />
+          </Checkbox.Indicator>
+        </Checkbox.Root>
+        <span className="leading-snug">
+          Text me venue reveals &amp; event reminders by SMS
         </span>
       </label>
 
@@ -495,8 +522,9 @@ export function JoinForm() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [phoneNumber, setPhoneNumber] = useState('')
-  // GDPR: marketing consent defaults to false (opt-in only).
+  // UK PECR: per-channel consent, both default false (opt-in only).
   const [emailConsent, setEmailConsent] = useState(false)
+  const [smsConsent, setSmsConsent] = useState(false)
   const [hearAbout, setHearAbout] = useState('')
   const [accountErrors, setAccountErrors] = useState<Record<string, string>>({})
   const [accountLoading, setAccountLoading] = useState(false)
@@ -556,6 +584,7 @@ export function JoinForm() {
       password,
       phoneNumber: phoneStripped,
       emailConsent,
+      smsConsent,
       referralSource: hearAbout || undefined,
     })
 
@@ -650,12 +679,14 @@ export function JoinForm() {
                     password={password}
                     phoneNumber={phoneNumber}
                     emailConsent={emailConsent}
+                    smsConsent={smsConsent}
                     hearAbout={hearAbout}
                     onNameChange={setName}
                     onEmailChange={setEmail}
                     onPasswordChange={setPassword}
                     onPhoneNumberChange={setPhoneNumber}
                     onEmailConsentChange={setEmailConsent}
+                    onSmsConsentChange={setSmsConsent}
                     onHearAboutChange={setHearAbout}
                     errors={accountErrors}
                     loading={accountLoading}

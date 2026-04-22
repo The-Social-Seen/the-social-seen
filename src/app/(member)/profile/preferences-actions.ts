@@ -21,6 +21,20 @@ export interface EmailPreferences {
   admin_announcements: boolean
 }
 
+/**
+ * SMS preference is a single master toggle stored on profiles
+ * (`sms_consent`) — narrower than the per-category email preferences
+ * because we only send two SMS categories today (venue reveal, day-of
+ * reminder) and both are transactional. If we ever add a marketing
+ * SMS (Phase 3), promote this to a notification_preferences column.
+ */
+export interface SmsPreferences {
+  /** True if the user has consented to receive any SMS at all. */
+  sms_consent: boolean
+  /** Denormalised for UI — the toggle is disabled if this is null. */
+  phone_number: string | null
+}
+
 export async function getMyEmailPreferences(): Promise<EmailPreferences | null> {
   const supabase = await createServerClient()
   const {
@@ -76,6 +90,53 @@ export async function updateEmailPreference(
       error.message,
     )
     return { success: false, error: 'Could not save your preference.' }
+  }
+
+  revalidatePath('/profile')
+  return { success: true }
+}
+
+// ── SMS preferences ─────────────────────────────────────────────────────────
+
+export async function getMySmsPreferences(): Promise<SmsPreferences | null> {
+  const supabase = await createServerClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return null
+
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('sms_consent, phone_number')
+    .eq('id', user.id)
+    .maybeSingle()
+
+  if (error || !data) {
+    return { sms_consent: false, phone_number: null }
+  }
+  return {
+    sms_consent: (data as { sms_consent: boolean }).sms_consent ?? false,
+    phone_number: (data as { phone_number: string | null }).phone_number ?? null,
+  }
+}
+
+export async function updateSmsConsent(
+  value: boolean,
+): Promise<UpdatePreferenceResult> {
+  const supabase = await createServerClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not signed in' }
+
+  const { error } = await supabase
+    .from('profiles')
+    .update({ sms_consent: value })
+    .eq('id', user.id)
+
+  if (error) {
+    console.error('[preferences] sms consent update failed:', error.message)
+    return { success: false, error: 'Could not save your SMS preference.' }
   }
 
   revalidatePath('/profile')

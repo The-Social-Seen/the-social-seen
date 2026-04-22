@@ -81,6 +81,7 @@ describe('signUp', () => {
     password: 'password123',
     phoneNumber: '+447123456789',
     emailConsent: false,
+    smsConsent: false,
   }
 
   it('returns error when full name is empty', async () => {
@@ -148,6 +149,7 @@ describe('signUp', () => {
           full_name: 'Charlotte Moreau',
           phone_number: '+447123456789',
           email_consent: false,
+          sms_consent: false,
         },
       },
     })

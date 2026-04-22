@@ -35,7 +35,19 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 2. **Phase 3 build** — Brevo client + opt-in via existing `email_consent` (or new `newsletter_consent` if expanding scope). Sync member signups to a Brevo list. Tie the transactional unsubscribe link to a real suppression list (covers the `_shared.ts:77` follow-up). Build a draft+send admin surface or hand off to Brevo's UI.
 **Priority:** Step 1 is HIGH; Step 2 is Medium for Phase 3.
 
-### SMS / Twilio transactional notifications were never built (Phase-2 plan slipped silently)
+<!-- Resolved in Phase 2.5 Batch 5: alphanumeric-sender-ID ("SocialSeen")
+     Twilio integration. Migration 20260429000001 adds profiles.sms_consent
+     with per-channel opt-in at signup. Node send wrapper in
+     src/lib/sms/send.ts, Deno equivalent wired inline in
+     daily-notifications/index.ts. Venue reveal + day-of reminder sends
+     SMS alongside email when sms_consent + phone_number + Twilio are all
+     configured. /profile has an SMS preferences section. Operator still
+     needs to set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_SENDER_ID
+     on Vercel + in supabase secrets. -->
+
+<!-- keeping the original rationale for history -->
+
+### (legacy) SMS / Twilio transactional notifications were never built (Phase-2 plan slipped silently)
 **Source:** docs/PHASE-2-PLAN-v2.md §P2-5 + Platform Decisions table — sweep during Phase 2 wrap.
 **Rationale:** The original P2-5 plan promised venue reveals + 2-day reminders + day-of reminders via "email + SMS" using Twilio. The DB plumbing was put in place: `notifications.channel` CHECK constraint accepts `'in_app' | 'email' | 'sms'` (migration `20260421000001`); `profiles.phone_number` is collected at signup with UK-format validation (P2-2). But every send path actually built (Node `sendEmail`, Deno `sendWithLog`, all 7 templates, the 6-section daily edge function) is email-only. No Twilio client, no SMS templates, no dispatch. The slip wasn't logged in Sprint 1 / 2 handovers; the Twilio account is already set up per operator confirmation, so the only remaining cost is engineering time + ongoing per-message spend.
 **Action (build in this order):**
