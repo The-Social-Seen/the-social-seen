@@ -142,17 +142,23 @@ export function Header() {
     let active = true;
 
     async function syncFromCookie() {
+      /* eslint-disable no-console */
+      console.log("[Header debug] syncFromCookie fired, pathname =", pathname);
+      console.log("[Header debug] cookie keys =", document.cookie.split(";").map(c => c.trim().split("=")[0]));
       try {
         const { createClient } = await import("@/lib/supabase/client");
         const supabase = createClient();
+        console.log("[Header debug] calling getSession()...");
         const {
           data: { session },
         } = await supabase.auth.getSession();
+        console.log("[Header debug] getSession() →", session ? `user=${session.user?.email}` : "null");
         const nextUser = session?.user ?? null;
         if (active) void applyUser(nextUser);
-      } catch {
-        // Swallow — the mount effect also sets a safe default.
+      } catch (err) {
+        console.error("[Header debug] syncFromCookie error:", err);
       }
+      /* eslint-enable no-console */
     }
 
     void syncFromCookie();
