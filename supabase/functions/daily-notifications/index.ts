@@ -77,6 +77,24 @@ const SANDBOX_FALLBACK_RECIPIENT =
 const SITE_URL =
   Deno.env.get('NEXT_PUBLIC_SITE_URL') ?? 'https://the-social-seen.vercel.app'
 
+// SMS (Phase 2.5 Batch 5) — transactional venue-reveal + day-of reminder
+// only. All three must be set for SMS to fire; otherwise SMS dispatch
+// is skipped silently (email still sends). Mirrors the Node-side
+// config in src/lib/sms/config.ts.
+const TWILIO_ACCOUNT_SID = Deno.env.get('TWILIO_ACCOUNT_SID') ?? ''
+const TWILIO_AUTH_TOKEN = Deno.env.get('TWILIO_AUTH_TOKEN') ?? ''
+const TWILIO_SENDER_ID = Deno.env.get('TWILIO_SENDER_ID') ?? 'SocialSeen'
+const SMS_SANDBOX_FALLBACK_RECIPIENT =
+  Deno.env.get('SMS_SANDBOX_FALLBACK_RECIPIENT') ?? ''
+
+function isSmsConfigured(): boolean {
+  return (
+    TWILIO_ACCOUNT_SID.startsWith('AC') &&
+    TWILIO_AUTH_TOKEN.length >= 16 &&
+    TWILIO_SENDER_ID.length > 0
+  )
+}
+
 // ── Types ───────────────────────────────────────────────────────────────────
 
 interface EventRow {
@@ -93,7 +111,12 @@ interface EventRow {
 
 interface AttendeeRow {
   user_id: string
-  profiles: { full_name: string | null; email: string | null } | null
+  profiles: {
+    full_name: string | null
+    email: string | null
+    phone_number: string | null
+    sms_consent: boolean | null
+  } | null
 }
 
 interface Counts {
@@ -103,6 +126,8 @@ interface Counts {
   review_requests: number
   profile_nudges: number
   retries: number
+  sms_venue_reveals: number
+  sms_reminders_today: number
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────────
@@ -138,12 +163,23 @@ Deno.serve(async (req: Request) => {
     review_requests: 0,
     profile_nudges: 0,
     retries: 0,
+    sms_venue_reveals: 0,
+    sms_reminders_today: 0,
   }
 
   try {
-    counts.venue_reveals = await processVenueReveals(supabase)
-    counts.reminders_2day = await processReminders(supabase, twoDaysOut, '2day')
-    counts.reminders_today = await processReminders(supabase, today, 'today')
+    const venueResult = await processVenueReveals(supabase)
+    counts.venue_reveals = venueResult.emails
+    counts.sms_venue_reveals = venueResult.sms
+
+    const remind2 = await processReminders(supabase, twoDaysOut, '2day')
+    counts.reminders_2day = remind2.emails
+    // (SMS not fired for 2-day variant; remind2.sms is always 0.)
+
+    const remindToday = await processReminders(supabase, today, 'today')
+    counts.reminders_today = remindToday.emails
+    counts.sms_reminders_today = remindToday.sms
+
     counts.review_requests = await processReviewRequests(supabase, yesterday)
     counts.profile_nudges = await processProfileNudges(supabase)
     counts.retries = await processRetries(supabase)
@@ -157,7 +193,9 @@ Deno.serve(async (req: Request) => {
 
 // ── Section A — Venue reveals ───────────────────────────────────────────────
 
-async function processVenueReveals(supabase: ReturnType<typeof createClient>): Promise<number> {
+async function processVenueReveals(
+  supabase: ReturnType<typeof createClient>,
+): Promise<{ emails: number; sms: number }> {
   // Events with a hidden venue whose date_time falls within the next 7 days.
   const nowIso = new Date().toISOString()
   const sevenDaysFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
@@ -173,10 +211,11 @@ async function processVenueReveals(supabase: ReturnType<typeof createClient>): P
     .lte('date_time', sevenDaysFromNow)
   if (error) {
     console.error('processVenueReveals: query failed', error)
-    return 0
+    return { emails: 0, sms: 0 }
   }
 
   let sent = 0
+  let smsSent = 0
   for (const event of (events ?? []) as EventRow[]) {
     const attendees = await getConfirmedAttendees(supabase, event.id)
     for (const a of attendees) {
@@ -201,6 +240,22 @@ async function processVenueReveals(supabase: ReturnType<typeof createClient>): P
         dedupeKey: `venue_reveal:${event.id}:${a.user_id}`,
       })
       if (ok) sent++
+
+      // SMS companion — same content, terser. Only fires if recipient
+      // has sms_consent=true + a phone_number + Twilio is configured.
+      if (isSmsConfigured() && a.profiles?.sms_consent && a.profiles?.phone_number) {
+        const smsOk = await sendSmsWithLog(supabase, {
+          to: a.profiles.phone_number,
+          body:
+            `The Social Seen: ${event.title} venue — ${event.venue_name} on ${formatLondonDate(event.date_time)} ${formatLondonTime(event.date_time)}. ` +
+            `Manage SMS: ${SITE_URL.replace(/\/$/, '')}/profile`,
+          templateName: 'venue_reveal_sms',
+          relatedProfileId: a.user_id,
+          recipientEventId: event.id,
+          dedupeKey: `venue_reveal_sms:${event.id}:${a.user_id}`,
+        })
+        if (smsOk) smsSent++
+      }
     }
 
     // Flip the flag whether or not individual emails succeeded. Failed sends
@@ -214,7 +269,7 @@ async function processVenueReveals(supabase: ReturnType<typeof createClient>): P
     if (updErr) console.error('venue_revealed update failed for', event.id, updErr)
   }
 
-  return sent
+  return { emails: sent, sms: smsSent }
 }
 
 // ── Sections B & C — Reminders ──────────────────────────────────────────────
@@ -223,7 +278,7 @@ async function processReminders(
   supabase: ReturnType<typeof createClient>,
   londonDateYmd: string,
   variant: '2day' | 'today',
-): Promise<number> {
+): Promise<{ emails: number; sms: number }> {
   // Filter on the raw timestamptz range corresponding to London-local date.
   // We accept some timezone edge-cases by widening to ±1 day in UTC and
   // filtering in JS using formatLondonDate — simpler and correct.
@@ -242,7 +297,7 @@ async function processReminders(
     .lt('date_time', to)
   if (error) {
     console.error('processReminders: query failed', error)
-    return 0
+    return { emails: 0, sms: 0 }
   }
 
   // Filter to events whose London-local date matches exactly.
@@ -252,6 +307,7 @@ async function processReminders(
   ) as EventRow[]
 
   let sent = 0
+  let smsSent = 0
   for (const event of matching) {
     const attendees = await getConfirmedAttendees(supabase, event.id)
     for (const a of attendees) {
@@ -279,10 +335,32 @@ async function processReminders(
         dedupeKey: `${variant === 'today' ? 'reminder_today' : 'reminder_2day'}:${event.id}:${a.user_id}:${londonDateYmd.replace(/-/g, '')}`,
       })
       if (ok) sent++
+
+      // SMS companion — only for the day-of variant. We deliberately
+      // don't text the 2-day reminder to keep per-user SMS volume low.
+      if (
+        variant === 'today' &&
+        isSmsConfigured() &&
+        a.profiles?.sms_consent &&
+        a.profiles?.phone_number
+      ) {
+        const venueForSms = event.venue_revealed ? event.venue_name : 'Venue TBA'
+        const smsOk = await sendSmsWithLog(supabase, {
+          to: a.profiles.phone_number,
+          body:
+            `Tonight: ${event.title} at ${formatLondonTime(event.date_time)}, ${venueForSms}. See you there! ` +
+            `Manage SMS: ${SITE_URL.replace(/\/$/, '')}/profile`,
+          templateName: 'reminder_today_sms',
+          relatedProfileId: a.user_id,
+          recipientEventId: event.id,
+          dedupeKey: `reminder_today_sms:${event.id}:${a.user_id}:${londonDateYmd.replace(/-/g, '')}`,
+        })
+        if (smsOk) smsSent++
+      }
     }
   }
 
-  return sent
+  return { emails: sent, sms: smsSent }
 }
 
 // ── Section D — Review requests ─────────────────────────────────────────────
@@ -543,7 +621,9 @@ async function getConfirmedAttendees(
 ): Promise<AttendeeRow[]> {
   const { data, error } = await supabase
     .from('bookings')
-    .select('user_id, profiles:profiles!inner(full_name, email)')
+    .select(
+      'user_id, profiles:profiles!inner(full_name, email, phone_number, sms_consent)',
+    )
     .eq('event_id', eventId)
     .eq('status', 'confirmed')
     .is('deleted_at', null)
@@ -732,4 +812,111 @@ function json(body: unknown, status: number): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   })
+}
+
+// ── SMS helper (Phase 2.5 Batch 5) ──────────────────────────────────────────
+//
+// Twilio's REST API is simple enough that we avoid pulling in the Twilio
+// Deno SDK (extra remote import + cold-start cost). Direct fetch with
+// Basic auth → Messages endpoint. Mirrors the error handling of the
+// Node wrapper (src/lib/sms/send.ts).
+
+interface SendSmsArgs {
+  to: string // E.164
+  body: string
+  templateName: string
+  relatedProfileId: string
+  recipientEventId?: string
+  dedupeKey: string
+}
+
+async function sendSmsWithLog(
+  supabase: ReturnType<typeof createClient>,
+  args: SendSmsArgs,
+): Promise<boolean> {
+  // Normalise to E.164 — UK members often enter 07... format; Twilio
+  // rejects non-E.164 with a permanent 400. Mirrors the Node wrapper.
+  const normalisedPhone = args.to.startsWith('0')
+    ? '+44' + args.to.slice(1)
+    : args.to
+  const actualRecipient =
+    SMS_SANDBOX_FALLBACK_RECIPIENT && SMS_SANDBOX_FALLBACK_RECIPIENT.length > 0
+      ? SMS_SANDBOX_FALLBACK_RECIPIENT
+      : normalisedPhone
+  const bodyWithPrefix =
+    actualRecipient !== normalisedPhone
+      ? `[\u2192 ${normalisedPhone}]\n${args.body}`
+      : args.body
+
+  // Reserve the audit row. Duplicate dedupe_key = already sent; skip.
+  const { data: inserted, error: insertErr } = await supabase
+    .from('notifications')
+    .insert({
+      sent_by: args.relatedProfileId,
+      recipient_user_id: args.relatedProfileId,
+      recipient_event_id: args.recipientEventId ?? null,
+      recipient_type: 'custom',
+      type: 'reminder',
+      subject: null,
+      body: args.body,
+      channel: 'sms',
+      recipient_email: actualRecipient, // phone number stored here; schema shared
+      status: 'pending',
+      template_name: args.templateName,
+      dedupe_key: args.dedupeKey,
+    })
+    .select('id')
+    .single()
+
+  if (insertErr) {
+    // 23505 = dedupe collision → already sent, skip silently.
+    if ((insertErr as { code?: string }).code === '23505') return false
+    console.error('sms audit insert failed', insertErr)
+    return false
+  }
+
+  // Dispatch to Twilio.
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`
+  const form = new URLSearchParams()
+  form.set('To', actualRecipient)
+  form.set('From', TWILIO_SENDER_ID)
+  form.set('Body', bodyWithPrefix)
+
+  const authHeader =
+    'Basic ' + btoa(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`)
+
+  let messageSid: string | null = null
+  let errMsg: string | null = null
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      body: form,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: authHeader,
+      },
+    })
+    if (res.ok) {
+      const payload = (await res.json()) as { sid?: string }
+      messageSid = payload.sid ?? null
+    } else {
+      errMsg = `HTTP ${res.status}: ${await res.text()}`
+    }
+  } catch (err) {
+    errMsg = err instanceof Error ? err.message : String(err)
+  }
+
+  const { error: updErr } = await supabase
+    .from('notifications')
+    .update({
+      status: messageSid ? 'sent' : 'failed',
+      provider_message_id: messageSid,
+      error_message: errMsg,
+      sent_at: new Date().toISOString(),
+    })
+    .eq('id', inserted.id)
+  if (updErr) console.error('sms audit update failed', updErr)
+
+  return !!messageSid
 }

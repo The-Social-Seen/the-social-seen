@@ -19,9 +19,10 @@ const signUpSchema = z.object({
   phoneNumber: z
     .string()
     .regex(/^\+?[0-9]{10,15}$/, 'Enter a valid phone number'),
-  // Email marketing consent — must be an explicit boolean (no undefined).
-  // Defaults to false at the DB level if somehow missing (GDPR: opt-in only).
+  // Per-channel marketing consent — must be explicit booleans (no undefined).
+  // Defaults to false at the DB level if somehow missing (UK PECR: opt-in only).
   emailConsent: z.boolean(),
+  smsConsent: z.boolean(),
   referralSource: z.string().optional(),
 })
 
@@ -80,6 +81,7 @@ export async function signUp(input: {
   password: string
   phoneNumber: string
   emailConsent: boolean
+  smsConsent: boolean
   referralSource?: string
 }): Promise<{ success: true } | { error: string }> {
   const parsed = signUpSchema.safeParse(input)
@@ -87,12 +89,20 @@ export async function signUp(input: {
     return { error: parsed.error.issues[0].message }
   }
 
-  const { fullName, email, password, phoneNumber, emailConsent, referralSource } =
-    parsed.data
+  const {
+    fullName,
+    email,
+    password,
+    phoneNumber,
+    emailConsent,
+    smsConsent,
+    referralSource,
+  } = parsed.data
   const supabase = await createServerClient()
 
-  // phone_number and email_consent are read by the handle_new_user() trigger
-  // and inserted into the profile row when Supabase creates the auth user.
+  // phone_number, email_consent, and sms_consent are read by the
+  // handle_new_user() trigger and inserted into the profile row when
+  // Supabase creates the auth user.
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
@@ -101,6 +111,7 @@ export async function signUp(input: {
         full_name: fullName,
         phone_number: phoneNumber,
         email_consent: emailConsent,
+        sms_consent: smsConsent,
       },
     },
   })

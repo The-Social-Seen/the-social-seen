@@ -8,7 +8,11 @@ import { EditProfileForm } from '@/components/profile/EditProfileForm'
 import { BookingsList } from '@/components/profile/BookingsList'
 import DataPrivacySection from '@/components/profile/DataPrivacySection'
 import { EmailPreferencesSection } from '@/components/profile/EmailPreferencesSection'
-import type { EmailPreferences } from '@/app/(member)/profile/preferences-actions'
+import { SmsPreferencesSection } from '@/components/profile/SmsPreferencesSection'
+import type {
+  EmailPreferences,
+  SmsPreferences,
+} from '@/app/(member)/profile/preferences-actions'
 import type { Profile, BookingWithEvent } from '@/types'
 
 interface ProfilePageClientProps {
@@ -18,6 +22,7 @@ interface ProfilePageClientProps {
   waitlisted: BookingWithEvent[]
   reviewableEventIds: Set<string>
   emailPreferences: EmailPreferences | null
+  smsPreferences: SmsPreferences | null
 }
 
 export function ProfilePageClient({
@@ -27,6 +32,7 @@ export function ProfilePageClient({
   waitlisted,
   reviewableEventIds,
   emailPreferences,
+  smsPreferences,
 }: ProfilePageClientProps) {
   const [editOpen, setEditOpen] = useState(false)
 
@@ -82,6 +88,7 @@ export function ProfilePageClient({
       </section>
 
       {emailPreferences && <EmailPreferencesSection initial={emailPreferences} />}
+      {smsPreferences && <SmsPreferencesSection initial={smsPreferences} />}
 
       <DataPrivacySection />
 
