@@ -179,8 +179,10 @@ describe('emailEventAttendees', () => {
 
     expect(result).toEqual({ success: true, recipientCount: 2 })
 
-    // Drain microtasks so the after() callback's awaits resolve.
-    await new Promise((r) => setTimeout(r, 0))
+    // Drain microtasks + wait past the inter-send throttle (120ms
+    // since Phase 2.5 Batch 7). Use 200ms to give Vitest's fake/real
+    // timers some slack without unnecessarily lengthening the suite.
+    await new Promise((r) => setTimeout(r, 200))
 
     expect(mockSendEmail).toHaveBeenCalledTimes(2)
     const [firstCall, secondCall] = mockSendEmail.mock.calls

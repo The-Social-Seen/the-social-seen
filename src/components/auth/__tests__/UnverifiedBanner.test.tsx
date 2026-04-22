@@ -23,11 +23,11 @@ describe('UnverifiedBanner', () => {
     expect(screen.getByText(/verify your email/i)).toBeTruthy()
   })
 
-  it('renders "Verify now" link with /verify?from=<pathname>', () => {
+  it('renders "Verify now" link with /verify?from=<pathname>&source=banner', () => {
     render(<UnverifiedBanner verified={false} />)
     const cta = screen.getByRole('link', { name: /verify now/i })
     expect(cta.getAttribute('href')).toBe(
-      '/verify?from=' + encodeURIComponent('/profile'),
+      '/verify?from=' + encodeURIComponent('/profile') + '&source=banner',
     )
   })
 

@@ -30,6 +30,12 @@ const NAV_ITEMS: NavItem[] = [
 interface AdminSidebarProps {
   adminName: string
   adminAvatarUrl: string | null
+  /**
+   * Count of `notifications` rows with channel='email' status='failed'.
+   * Rendered as a small pill on the Notifications nav item when > 0
+   * so admins notice new failures without clicking through.
+   */
+  failedNotificationsCount?: number
 }
 
 function isActive(pathname: string, href: string) {
@@ -37,7 +43,24 @@ function isActive(pathname: string, href: string) {
   return pathname.startsWith(href)
 }
 
-export default function AdminSidebar({ adminName, adminAvatarUrl }: AdminSidebarProps) {
+function FailedBadge({ count }: { count: number }) {
+  if (count <= 0) return null
+  const display = count > 99 ? '99+' : String(count)
+  return (
+    <span
+      aria-label={`${count} failed notification${count === 1 ? '' : 's'}`}
+      className="ml-auto inline-flex min-w-[20px] items-center justify-center rounded-full bg-danger px-1.5 text-[10px] font-semibold leading-5 text-white"
+    >
+      {display}
+    </span>
+  )
+}
+
+export default function AdminSidebar({
+  adminName,
+  adminAvatarUrl,
+  failedNotificationsCount = 0,
+}: AdminSidebarProps) {
   const pathname = usePathname()
 
   return (
@@ -55,6 +78,7 @@ export default function AdminSidebar({ adminName, adminAvatarUrl }: AdminSidebar
         <nav className="flex-1 px-3 py-4 space-y-1" aria-label="Admin navigation">
           {NAV_ITEMS.map((item) => {
             const active = isActive(pathname, item.href)
+            const isNotifications = item.href === '/admin/notifications'
             return (
               <Link
                 key={item.href}
@@ -69,6 +93,9 @@ export default function AdminSidebar({ adminName, adminAvatarUrl }: AdminSidebar
               >
                 <item.icon className="w-5 h-5 shrink-0" />
                 {item.label}
+                {isNotifications && (
+                  <FailedBadge count={failedNotificationsCount} />
+                )}
               </Link>
             )
           })}
@@ -108,19 +135,36 @@ export default function AdminSidebar({ adminName, adminAvatarUrl }: AdminSidebar
         <div className="flex items-center justify-around h-16">
           {NAV_ITEMS.map((item) => {
             const active = isActive(pathname, item.href)
+            const isNotifications = item.href === '/admin/notifications'
+            const showBadge =
+              isNotifications && failedNotificationsCount > 0
             return (
               <Link
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  'flex flex-col items-center justify-center gap-1 px-3 py-2 rounded-lg transition-colors min-w-[44px] min-h-[44px]',
+                  'relative flex flex-col items-center justify-center gap-1 px-3 py-2 rounded-lg transition-colors min-w-[44px] min-h-[44px]',
                   active ? 'text-gold' : 'text-[var(--color-text-tertiary)]'
                 )}
                 aria-current={active ? 'page' : undefined}
-                aria-label={item.label}
+                aria-label={
+                  showBadge
+                    ? `${item.label} — ${failedNotificationsCount} failed`
+                    : item.label
+                }
               >
                 <item.icon className="w-5 h-5" />
                 <span className="text-[10px] font-medium">{item.label}</span>
+                {showBadge && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute right-1 top-1 min-w-[16px] rounded-full bg-danger px-1 text-[9px] font-semibold leading-4 text-white"
+                  >
+                    {failedNotificationsCount > 99
+                      ? '99+'
+                      : failedNotificationsCount}
+                  </span>
+                )}
               </Link>
             )
           })}

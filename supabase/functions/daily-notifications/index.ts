@@ -494,11 +494,20 @@ function computeCompletion(p: NudgeProfileRow): {
 async function processProfileNudges(
   supabase: ReturnType<typeof createClient>,
 ): Promise<number> {
-  // Window: registered between 4 days ago and 3 days ago (so we hit
-  // approximately the 3-day mark even with cron jitter — running daily,
-  // the same user only matches once because we set the sent_at column
-  // on first send).
-  const fourDaysAgo = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString()
+  // Target the "3-day" mark but with a wide enough window that a
+  // cron skip (infra hiccup, service window) can't silently drop an
+  // entire cohort. Previous narrow [Y-4d, Y-3d] window would miss any
+  // signup whose match-day got skipped — they'd never get nudged.
+  //
+  // New window: created between 3 and 30 days ago, AND no nudge yet.
+  // `profile_nudge_email_sent_at IS NULL` remains the dedupe guard —
+  // every user matches at most once across all future cron runs.
+  //
+  // 30-day ceiling keeps stale signups out of the pool (someone who
+  // bounced 45 days ago isn't getting a nudge now).
+  const thirtyDaysAgo = new Date(
+    Date.now() - 30 * 24 * 60 * 60 * 1000,
+  ).toISOString()
   const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
 
   const { data: profiles, error } = await supabase
@@ -506,7 +515,7 @@ async function processProfileNudges(
     .select(
       'id, full_name, email, avatar_url, bio, linkedin_url, job_title, company, industry, phone_number',
     )
-    .gte('created_at', fourDaysAgo)
+    .gte('created_at', thirtyDaysAgo)
     .lte('created_at', threeDaysAgo)
     .is('deleted_at', null)
     .is('profile_nudge_email_sent_at', null)

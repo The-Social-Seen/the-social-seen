@@ -53,7 +53,10 @@ export function UnverifiedBanner({ verified }: UnverifiedBannerProps) {
     }
   }
 
-  const verifyHref = `/verify?from=${encodeURIComponent(pathname ?? '/events')}`
+  // `source=banner` propagates to the verify-form auto-send so PostHog
+   // can attribute which surface (banner vs modal vs direct) drove the
+   // verification request. Matches the schema in track.ts.
+  const verifyHref = `/verify?from=${encodeURIComponent(pathname ?? '/events')}&source=banner`
 
   // Top margin matches the fixed Header's height (h-16 mobile, sm:h-20 desktop
   // in src/components/layout/Header.tsx). Without this the banner would render
