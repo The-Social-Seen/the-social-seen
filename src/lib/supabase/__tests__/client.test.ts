@@ -73,4 +73,38 @@ describe('createClient (browser)', () => {
     const { createClient } = await import('../client')
     expect(() => createClient()).not.toThrow()
   })
+
+  it('memoises the client — two createClient() calls return the same instance', async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://test.supabase.co'
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key'
+
+    const { createClient } = await import('../client')
+    expect(createClient()).toBe(createClient())
+  })
+
+  it('__TEST_ONLY__resetClient drops the singleton so the next createClient() rebuilds', async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://test.supabase.co'
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key'
+
+    const { createClient, __TEST_ONLY__resetClient } = await import('../client')
+    const first = createClient()
+    __TEST_ONLY__resetClient()
+    const second = createClient()
+    expect(first).not.toBe(second)
+  })
+
+  it('__TEST_ONLY__resetClient throws outside of test env', async () => {
+    const prevNodeEnv = process.env.NODE_ENV
+    // @ts-expect-error — readonly in types, mutable at runtime in Node.
+    process.env.NODE_ENV = 'production'
+    try {
+      const { __TEST_ONLY__resetClient } = await import('../client')
+      expect(() => __TEST_ONLY__resetClient()).toThrow(
+        /must not be called outside of tests/,
+      )
+    } finally {
+      // @ts-expect-error — restoring the original.
+      process.env.NODE_ENV = prevNodeEnv
+    }
+  })
 })

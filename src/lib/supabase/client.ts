@@ -34,3 +34,22 @@ export function createClient(): SupabaseClient {
   client = createBrowserClient(supabaseUrl, supabaseAnonKey)
   return client
 }
+
+/**
+ * Test-only: drop the memoised singleton so the next `createClient()`
+ * call constructs a fresh instance. Exists so integration-style tests
+ * that don't mock `@supabase/ssr` can reset state between cases
+ * (otherwise a signed-in fixture leaks across tests via the module
+ * cache).
+ *
+ * Guarded to only run under Vitest (NODE_ENV=test, set by the Vitest
+ * harness) so a stray prod caller can't nuke the live client.
+ */
+export function __TEST_ONLY__resetClient(): void {
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error(
+      '__TEST_ONLY__resetClient must not be called outside of tests.',
+    )
+  }
+  client = null
+}
