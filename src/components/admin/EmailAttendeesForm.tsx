@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from 'react'
 import { Send } from 'lucide-react'
 import { emailEventAttendees } from '@/app/(admin)/admin/actions'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface EmailAttendeesFormProps {
   eventId: string
@@ -22,6 +23,7 @@ export default function EmailAttendeesForm({
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   const disabled = confirmedCount === 0
 
@@ -29,20 +31,19 @@ export default function EmailAttendeesForm({
     e.preventDefault()
     setError(null)
     setSuccess(null)
+    // Capture the form snapshot now — the dialog will dispatch on confirm.
+    // Can't rely on `e.currentTarget` after the event loop yields.
+    setConfirmOpen(true)
+  }
 
-    if (
-      !confirm(
-        `Send this message to ${confirmedCount} confirmed attendee${confirmedCount === 1 ? '' : 's'}? This can't be undone.`,
-      )
-    ) {
-      return
-    }
-
-    const formData = new FormData(e.currentTarget)
+  async function handleConfirmSend() {
+    if (!formRef.current) return
+    const formData = new FormData(formRef.current)
     startTransition(async () => {
       const result = await emailEventAttendees(eventId, formData)
       if ('error' in result) {
         setError(result.error)
+        setConfirmOpen(false)
         return
       }
       setSuccess(
@@ -51,6 +52,7 @@ export default function EmailAttendeesForm({
       setSubject('')
       setBody('')
       formRef.current?.reset()
+      setConfirmOpen(false)
     })
   }
 
@@ -130,6 +132,25 @@ export default function EmailAttendeesForm({
           {isPending ? 'Sending…' : 'Send to Attendees'}
         </button>
       </div>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={`Send to ${confirmedCount} attendee${confirmedCount === 1 ? '' : 's'}?`}
+        description={
+          <>
+            <p>
+              This will immediately email every confirmed attendee of this
+              event. There&rsquo;s no undo.
+            </p>
+            <p className="rounded-lg border border-gold/30 bg-gold/5 p-3 text-xs">
+              <strong>Subject:</strong> {subject || '(empty)'}
+            </p>
+          </>
+        }
+        confirmLabel="Send"
+        onConfirm={handleConfirmSend}
+      />
     </form>
   )
 }

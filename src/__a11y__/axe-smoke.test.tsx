@@ -108,6 +108,7 @@ import React from 'react'
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
 import ContactForm from '@/app/contact/ContactForm'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 describe('a11y smoke — WCAG 2.1 A + AA', () => {
   it('Header renders without axe violations', async () => {
@@ -125,6 +126,44 @@ describe('a11y smoke — WCAG 2.1 A + AA', () => {
   it('ContactForm renders without axe violations', async () => {
     const { container } = render(<ContactForm />)
     const results = await axe(container)
+    expect(results).toHaveNoViolations()
+  })
+
+  it('ConfirmDialog (simple variant) renders without axe violations', async () => {
+    const { baseElement } = render(
+      <ConfirmDialog
+        open
+        onOpenChange={() => {}}
+        title="Delete widget?"
+        description={<p>This cannot be undone.</p>}
+        confirmLabel="Delete"
+        onConfirm={() => {}}
+      />,
+    )
+    // Dialog content is rendered in a portal — axe must scan the whole
+    // document body, not just the mount container.
+    const results = await axe(baseElement)
+    expect(results).toHaveNoViolations()
+  })
+
+  it('ConfirmDialog (typed-confirmation variant) renders without axe violations', async () => {
+    const { baseElement } = render(
+      <ConfirmDialog
+        open
+        onOpenChange={() => {}}
+        title="Delete your account?"
+        description={<p>This closes your account permanently.</p>}
+        confirmLabel="Delete my account"
+        tone="danger"
+        typedConfirmation={{
+          phrase: 'delete my account',
+          inputLabel: 'Type "delete my account" to confirm:',
+          inputPlaceholder: 'delete my account',
+        }}
+        onConfirm={() => {}}
+      />,
+    )
+    const results = await axe(baseElement)
     expect(results).toHaveNoViolations()
   })
 })

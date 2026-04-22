@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Copy } from 'lucide-react'
 import { duplicateEvent } from '@/app/(admin)/admin/actions'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface DuplicateEventButtonProps {
   eventId: string
@@ -14,44 +15,49 @@ export default function DuplicateEventButton({
 }: DuplicateEventButtonProps) {
   const router = useRouter()
   const [error, setError] = useState<string | null>(null)
-  const [isPending, startTransition] = useTransition()
+  const [dialogOpen, setDialogOpen] = useState(false)
 
-  function handleClick() {
-    if (
-      !confirm(
-        'Duplicate this event as a new draft? The copy will be scheduled 1 week later and unpublished — edit it before sharing.',
-      )
-    ) {
+  async function handleConfirm() {
+    setError(null)
+    const result = await duplicateEvent(eventId)
+    if ('error' in result) {
+      setError(result.error)
       return
     }
-
-    setError(null)
-    startTransition(async () => {
-      const result = await duplicateEvent(eventId)
-      if ('error' in result) {
-        setError(result.error)
-        return
-      }
-      router.push(`/admin/events/${result.event.id}`)
-    })
+    setDialogOpen(false)
+    router.push(`/admin/events/${result.event.id}`)
   }
 
   return (
     <>
       <button
         type="button"
-        onClick={handleClick}
-        disabled={isPending}
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-bg-card hover:bg-bg-secondary transition-colors text-sm font-medium text-text-primary disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px]"
+        onClick={() => setDialogOpen(true)}
+        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-bg-card hover:bg-bg-secondary transition-colors text-sm font-medium text-text-primary min-h-[44px]"
       >
         <Copy className="w-4 h-4" />
-        {isPending ? 'Duplicating…' : 'Duplicate Event'}
+        Duplicate Event
       </button>
       {error && (
         <p className="text-sm text-red-600 mt-2" role="alert">
           {error}
         </p>
       )}
+
+      <ConfirmDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        title="Duplicate this event?"
+        description={
+          <p>
+            The copy will be created as an unpublished draft scheduled
+            one week later than the original. Edit the copy (date, slug,
+            hosts) before publishing.
+          </p>
+        }
+        confirmLabel="Duplicate"
+        onConfirm={handleConfirm}
+      />
     </>
   )
 }
