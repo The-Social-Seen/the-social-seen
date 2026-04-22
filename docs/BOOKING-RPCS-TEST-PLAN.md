@@ -34,7 +34,7 @@ Run on staging with seed data. All three RPCs in each row unless noted.
 | 9 | soft-deleted event (deleted_at set) | `book_event` | error: "Event not found" |
 | 10 | two concurrent calls for last seat | `book_event` × 2 in parallel | one returns confirmed, one returns waitlisted. No double-book. |
 | 11 | confirmed user cancels via cancelBooking; another user claims | `claim_waitlist_spot` | pending_payment (paid) or confirmed (free). Position-1 waitlister transitions cleanly. |
-| 12 | claim_waitlist_spot but event capacity > attendees (no free spot yet) | `claim_waitlist_spot` | error: "No spot available" |
+| 12 | claim_waitlist_spot but event capacity > attendees (no free spot yet) | `claim_waitlist_spot` | error: "Someone else just claimed this spot. You're still on the waitlist." |
 
 ---
 
