@@ -279,6 +279,33 @@ export async function deleteMyAccount(
     }
   }
 
+  // Remove from Brevo newsletter list + hard-delete the contact so
+  // Brevo doesn't retain the PII after Article 17 erasure. Best-effort
+  // — a 404 ("contact didn't exist") is treated as success inside
+  // deleteContact. On real failure we log + Sentry but proceed with
+  // the local anonymisation.
+  if (user.email) {
+    const { deleteContact } = await import('@/lib/brevo/sync')
+    const brevoResult = await deleteContact(user.email)
+    if (!brevoResult.success) {
+      console.warn(
+        '[deleteMyAccount] Brevo contact delete failed:',
+        brevoResult.error,
+      )
+      // Sentry already captured inside the sync helper; no re-capture.
+    }
+
+    // Also mark the newsletter_subscribers row as unsubscribed so our
+    // own table reflects reality even if Brevo was unreachable.
+    await admin
+      .from('newsletter_subscribers')
+      .update({
+        status: 'unsubscribed',
+        unsubscribed_at: new Date().toISOString(),
+      })
+      .ilike('email', user.email)
+  }
+
   // Soft-delete the profile + clear PII. Note `email` is required for
   // Supabase Auth so we put a placeholder pointing at the Supabase
   // user id — admin hard-delete clears it fully. We also null

@@ -1,6 +1,29 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+
+// The newsletter signup form inside the footer uses TurnstileWidget,
+// which consumes the ThemeProvider context. Mock both rather than
+// spin up a real provider tree for every test.
+vi.mock('@/components/layout/ThemeProvider', () => ({
+  useTheme: () => ({ theme: 'light', toggleTheme: vi.fn() }),
+}))
+
+// Turnstile widget no-ops in tests (no site key, no loaded script).
+// Stub it to a fragment so axe / tests don't see the Cloudflare iframe.
+vi.mock('@/components/forms/TurnstileWidget', () => ({
+  TurnstileWidget: () => null,
+}))
+
+// The subscribe Server Action is imported at module load; mock it so
+// no DB client is constructed during Footer render.
+vi.mock('@/app/newsletter/actions', () => ({
+  subscribeToNewsletter: vi.fn().mockResolvedValue({
+    success: true,
+    message: 'stubbed',
+  }),
+}))
+
 import { Footer } from '../Footer'
 
 describe('Footer', () => {
