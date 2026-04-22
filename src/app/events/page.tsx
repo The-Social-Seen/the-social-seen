@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { getPublishedEvents } from "@/lib/supabase/queries/events";
+import { canonicalUrl } from "@/lib/utils/site";
 import EventsPageClient from "@/components/events/EventsPageClient";
 import type { Metadata } from "next";
 
@@ -8,6 +9,7 @@ export const metadata: Metadata = {
   title: "Events — The Social Seen",
   description:
     "Discover curated experiences designed to inspire, connect, and delight. From intimate dinners to cultural excursions, find your next unforgettable evening.",
+  alternates: { canonical: canonicalUrl("/events") },
 };
 
 export default async function EventsPage() {

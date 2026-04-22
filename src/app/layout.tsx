@@ -6,6 +6,9 @@ import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
 import { PostHogProvider } from "@/components/providers/PostHogProvider";
 import CookieConsentBanner from "@/components/layout/CookieConsentBanner";
+import { JsonLd } from "@/components/seo/JsonLd";
+import { organizationJsonLd } from "@/lib/seo/organization";
+import { getCanonicalSiteUrl } from "@/lib/utils/site";
 import "./globals.css";
 
 const playfair = Playfair_Display({
@@ -23,7 +26,7 @@ const dmSans = DM_Sans({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://thesocialseen.com"),
+  metadataBase: new URL(getCanonicalSiteUrl()),
   title: "The Social Seen — Where Connections Become Stories",
   description:
     "A curated community for those who believe the best moments are experienced together. Discover handpicked social events -- wine tastings, supper clubs, gallery openings, and cultural soirees.",
@@ -41,7 +44,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "en_GB",
-    url: "https://thesocialseen.com",
+    url: getCanonicalSiteUrl(),
     siteName: "The Social Seen",
     title: "The Social Seen | Where Connections Become Stories",
     description:
@@ -81,6 +84,9 @@ export default async function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        {/* Organization JSON-LD — emitted on every page so search engines can
+            attach the brand knowledge panel + link the social profiles back. */}
+        <JsonLd data={organizationJsonLd()} />
         <script
           dangerouslySetInnerHTML={{
             __html: `

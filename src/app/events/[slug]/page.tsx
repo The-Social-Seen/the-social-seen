@@ -9,7 +9,10 @@ import {
 import { createServerClient } from "@/lib/supabase/server";
 import { isPastEvent } from "@/lib/utils/dates";
 import { resolveEventImage } from "@/lib/utils/images";
+import { canonicalUrl } from "@/lib/utils/site";
 import EventDetailClient from "@/components/events/EventDetailClient";
+import { JsonLd } from "@/components/seo/JsonLd";
+import { eventJsonLd } from "@/lib/seo/event";
 import type { Metadata } from "next";
 import type { ReviewWithAuthor, EventPhoto } from "@/types";
 
@@ -34,8 +37,12 @@ export async function generateMetadata({
   return {
     title: `${event.title} — The Social Seen`,
     description: event.short_description,
+    alternates: {
+      canonical: canonicalUrl(`/events/${event.slug}`),
+    },
     openGraph: {
       type: "website",
+      url: canonicalUrl(`/events/${event.slug}`),
       title: event.title,
       description: event.short_description,
       ...(ogImage
@@ -87,62 +94,12 @@ export default async function EventDetailPage({ params }: PageProps) {
     emailVerified = profile?.email_verified ?? false
   }
 
-  const ogImage = resolveEventImage(event.image_url);
-
-  const jsonLd = {
-    "@context": "https://schema.org",
-    "@type": "Event",
-    name: event.title,
-    description: event.short_description,
-    startDate: event.date_time,
-    endDate: event.end_time,
-    eventStatus: "https://schema.org/EventScheduled",
-    eventAttendanceMode: "https://schema.org/OfflineEventAttendanceMode",
-    location: event.venue_revealed
-      ? {
-          "@type": "Place",
-          name: event.venue_name,
-          address: {
-            "@type": "PostalAddress",
-            streetAddress: event.venue_address,
-            addressLocality: "London",
-            postalCode: event.postcode ?? undefined,
-            addressCountry: "GB",
-          },
-        }
-      : {
-          "@type": "Place",
-          name: "Venue revealed 1 week before the event",
-          address: {
-            "@type": "PostalAddress",
-            addressLocality: "London",
-            addressCountry: "GB",
-          },
-        },
-    organizer: {
-      "@type": "Organization",
-      name: "The Social Seen",
-      url: "https://thesocialseen.com",
-    },
-    offers: {
-      "@type": "Offer",
-      price: event.price,
-      priceCurrency: "GBP",
-      availability:
-        event.capacity === null || (event.spots_left ?? 1) > 0
-          ? "https://schema.org/InStock"
-          : "https://schema.org/SoldOut",
-      url: `https://thesocialseen.com/events/${event.slug}`,
-    },
-    ...(ogImage ? { image: ogImage } : {}),
-  };
+  // resolveEventImage is still called inside the helper for the
+  // JSON-LD `image` field; no need to pre-compute here.
 
   return (
     <>
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
+      <JsonLd data={eventJsonLd(event)} />
       <EventDetailClient
         event={event}
         reviews={reviews}
