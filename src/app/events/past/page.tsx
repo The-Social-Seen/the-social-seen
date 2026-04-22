@@ -1,12 +1,9 @@
 import Link from 'next/link'
-import Image from 'next/image'
-import { Star } from 'lucide-react'
 import type { Metadata } from 'next'
 import { getPastEvents } from '@/lib/supabase/queries/events'
-import { formatDateCard } from '@/lib/utils/dates'
-import { resolveEventImage } from '@/lib/utils/images'
 import { canonicalUrl } from '@/lib/utils/site'
-import { categoryLabel } from '@/types'
+import PastEventCard from '@/components/events/PastEventCard'
+import PastEventsLoadMore from './LoadMore'
 
 export const metadata: Metadata = {
   title: 'Past Events — The Social Seen',
@@ -15,25 +12,8 @@ export const metadata: Metadata = {
   alternates: { canonical: canonicalUrl('/events/past') },
 }
 
-function StarRow({ rating }: { rating: number }) {
-  return (
-    <div className="flex gap-0.5" aria-label={`${rating} out of 5 stars`}>
-      {Array.from({ length: 5 }).map((_, i) => (
-        <Star
-          key={i}
-          className={
-            i < rating
-              ? 'h-3.5 w-3.5 fill-gold text-gold'
-              : 'h-3.5 w-3.5 fill-none text-text-tertiary/40'
-          }
-        />
-      ))}
-    </div>
-  )
-}
-
 export default async function PastEventsPage() {
-  const events = await getPastEvents()
+  const { events, nextCursor } = await getPastEvents()
 
   return (
     <main className="min-h-screen bg-bg-primary">
@@ -68,72 +48,14 @@ export default async function PastEventsPage() {
             </Link>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {events.map((event) => {
-              const imgSrc = resolveEventImage(event.image_url)
-              return (
-              <Link
-                key={event.id}
-                href={`/events/${event.slug}`}
-                className="group flex flex-col overflow-hidden rounded-xl border border-border bg-bg-card transition-colors hover:border-gold/40"
-              >
-                <div className="relative aspect-[4/3] w-full overflow-hidden bg-bg-secondary">
-                  {imgSrc ? (
-                    <Image
-                      src={imgSrc}
-                      alt={event.title}
-                      fill
-                      sizes="(min-width: 1024px) 33vw, (min-width: 768px) 50vw, 100vw"
-                      className="object-cover transition-transform duration-500 group-hover:scale-105"
-                    />
-                  ) : null}
-                  <div className="absolute right-3 top-3 rounded-full bg-charcoal/70 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
-                    {formatDateCard(event.date_time)}
-                  </div>
-                </div>
-
-                <div className="flex flex-1 flex-col gap-3 p-5">
-                  <div className="flex items-center gap-2">
-                    <span className="rounded-full border border-gold/20 px-2.5 py-0.5 text-xs font-medium text-gold">
-                      {categoryLabel(event.category)}
-                    </span>
-                    {event.review_count > 0 && (
-                      <span className="flex items-center gap-1 text-xs text-text-secondary">
-                        <Star className="h-3 w-3 fill-gold text-gold" />
-                        {event.avg_rating.toFixed(1)} · {event.review_count}{' '}
-                        review{event.review_count === 1 ? '' : 's'}
-                      </span>
-                    )}
-                  </div>
-
-                  <h2 className="font-serif text-xl font-semibold text-text-primary group-hover:text-gold">
-                    {event.title}
-                  </h2>
-
-                  <p className="text-sm text-text-secondary line-clamp-2">
-                    {event.short_description}
-                  </p>
-
-                  {event.top_review ? (
-                    <figure className="mt-auto rounded-lg bg-cream/40 p-4">
-                      <StarRow rating={event.top_review.rating} />
-                      <blockquote className="mt-2 text-sm italic text-text-primary line-clamp-3">
-                        &ldquo;{event.top_review.review_text}&rdquo;
-                      </blockquote>
-                      <figcaption className="mt-2 text-xs font-medium text-text-tertiary">
-                        — {event.top_review.author_name}
-                      </figcaption>
-                    </figure>
-                  ) : (
-                    <p className="mt-auto text-xs text-text-tertiary">
-                      No reviews yet for this one.
-                    </p>
-                  )}
-                </div>
-              </Link>
-              )
-            })}
-          </div>
+          <>
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+              {events.map((event) => (
+                <PastEventCard key={event.id} event={event} />
+              ))}
+            </div>
+            <PastEventsLoadMore initialCursor={nextCursor} />
+          </>
         )}
       </section>
     </main>
