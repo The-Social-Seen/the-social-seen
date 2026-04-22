@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache'
 import { createServerClient } from '@/lib/supabase/server'
 import { sendEmail } from '@/lib/email/send'
 import { welcomeTemplate } from '@/lib/email/templates/welcome'
+import { upsertContact } from '@/lib/brevo/sync'
 
 // ── Validation schemas ──────────────────────────────────────────────────────
 
@@ -333,7 +334,7 @@ export async function completeOnboarding(): Promise<{ success: true } | { error:
   try {
     const { data: profile } = await supabase
       .from('profiles')
-      .select('full_name, email')
+      .select('full_name, email, email_consent')
       .eq('id', user.id)
       .single()
 
@@ -356,6 +357,23 @@ export async function completeOnboarding(): Promise<{ success: true } | { error:
       })
       if (!result.success) {
         console.warn('[completeOnboarding] welcome email failed:', result.error)
+      }
+    }
+
+    // Brevo newsletter sync — only if the member opted into marketing at
+    // signup. Skip silently on failure so a Brevo hiccup doesn't block
+    // onboarding. A Phase-3 reconciler can backfill orphan opt-ins.
+    if (profile?.email_consent && recipient) {
+      const syncResult = await upsertContact({
+        email: recipient,
+        fullName,
+        source: 'profile',
+      })
+      if (!syncResult.success) {
+        console.warn(
+          '[completeOnboarding] Brevo sync failed:',
+          syncResult.error,
+        )
       }
     }
   } catch (err) {

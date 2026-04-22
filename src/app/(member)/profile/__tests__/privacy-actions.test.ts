@@ -70,8 +70,8 @@ function unauth() {
 function mockChain(response: { data?: unknown; error?: unknown }) {
   const chain: Record<string, ReturnType<typeof vi.fn>> = {}
   const methods = [
-    'select', 'insert', 'update', 'delete', 'eq', 'neq', 'is', 'not', 'in', 'single',
-    'maybeSingle', 'order', 'limit',
+    'select', 'insert', 'update', 'delete', 'eq', 'neq', 'is', 'not', 'in',
+    'ilike', 'single', 'maybeSingle', 'order', 'limit',
   ]
   for (const m of methods) {
     chain[m] = vi.fn().mockReturnValue(chain)
@@ -203,12 +203,14 @@ describe('deleteMyAccount', () => {
 
     // Sequence: bookings cancel → profiles (full_name lookup) →
     // rpc (scrub) → user_interests → profiles (stripe lookup) →
+    // newsletter_subscribers (Batch 9 Brevo mirror) →
     // profiles (anonymise).
     expect(tablesTouched).toEqual([
       'bookings',
       'profiles',
       'user_interests',
       'profiles',
+      'newsletter_subscribers',
       'profiles',
     ])
     expect(mockAdminRpc).toHaveBeenCalledWith('sanitise_user_notifications', {

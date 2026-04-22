@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { Instagram, ArrowRight } from "lucide-react";
+import { Instagram } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { SOCIAL_LINKS } from "@/lib/constants";
+import NewsletterSignupForm from "@/components/layout/NewsletterSignupForm";
 
 // Split into two thematic groups so a single scanning pass is obvious
 // on mobile and doesn't leave one column at 8 vertical entries.
@@ -130,35 +131,7 @@ export function Footer() {
             <p className="mt-4 text-sm text-text-secondary">
               Stay in the loop with curated events and insider stories.
             </p>
-            <form
-              onSubmit={(e) => e.preventDefault()}
-              className="mt-4 flex gap-2"
-            >
-              <input
-                type="email"
-                placeholder="Your email"
-                className={cn(
-                  "flex-1 rounded-lg border border-border bg-bg-primary px-4 py-2.5",
-                  "text-sm text-text-primary placeholder:text-text-tertiary",
-                  "transition-all duration-200",
-                  "focus:border-gold focus:outline-none focus:ring-1 focus:ring-gold"
-                )}
-                aria-label="Email address for newsletter"
-              />
-              <button
-                type="submit"
-                className={cn(
-                  "flex items-center justify-center rounded-lg px-4 py-2.5",
-                  "bg-gold text-text-inverse",
-                  "text-sm font-medium transition-all duration-200",
-                  "hover:bg-gold-dark",
-                  "focus:outline-none focus:ring-2 focus:ring-gold focus:ring-offset-2"
-                )}
-                aria-label="Subscribe to newsletter"
-              >
-                <ArrowRight className="h-4 w-4" />
-              </button>
-            </form>
+            <NewsletterSignupForm source="footer" variant="footer" />
           </div>
         </div>
 
