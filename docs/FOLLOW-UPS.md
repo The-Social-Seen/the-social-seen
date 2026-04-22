@@ -13,6 +13,15 @@ Items flagged during batches that were deliberately out of scope at the time. Ma
 
 ## 🔴 Security / compliance
 
+### Public contact + collaborate forms have no rate limiting (HIGH — before public launch)
+**Source:** P2-12 pre-push code review (S2)
+**Rationale:** `sendContactMessage` and `sendCollaborationPitch` accept anonymous POST submissions and dispatch via Resend (free tier: 3,000 emails / month). Defences shipped in P2-12 are honeypot + 2-second timing — sufficient for v1 demo traffic, trivially bypassable by a determined attacker scripting a 3-second wait. A modest 100 req/hour for 30 hours empties the entire month's Resend budget, taking down the P2-9 attendee-messaging + P2-5 cron-email pipelines as collateral.
+**Action:** Add rate limiting BEFORE the contact + collaborate forms go in front of the public web. Three options ranked by effort:
+1. **Cloudflare Turnstile** (recommended) — free, invisible, ~5-min wire-up. Add a token input + verify server-side in the Server Actions.
+2. **Vercel Edge Middleware + KV/Upstash** — IP-bucketed rate limit. Heavier but auth-system-agnostic.
+3. **Auth-gate the forms** — defeats the purpose; prospects can't reach us.
+**Priority:** **HIGH — must ship before the contact + collaborate routes are publicly linked beyond the demo.** Inline comment in `src/app/contact/actions.ts` already flags Phase-3 deferral; this entry escalates the timing.
+
 ### Tighten `profiles` anon GRANT list further
 **Source:** P2-2 code review (re-review)
 **Rationale:** Current anon-safe list includes `email`, `onboarding_complete`, `referral_source`, `updated_at`, `deleted_at`. None of these are actively leaking PII, but they're over-permissive under the "secure by default" principle. Email in particular is arguably PII (spammer fodder).
@@ -243,6 +252,30 @@ logo: { '@type': 'ImageObject', url: canonicalUrl('/logo.png'), width: 600, heig
 **Rationale:** `src/components/seo/JsonLd.tsx` escapes `<` to prevent script-tag breakout. Sufficient against the `</script>` attack, but some style guides also escape `>` and `&` as `\u003e` / `\u0026` for HTML-context defence-in-depth and consistency with `serialize-javascript`'s well-known behaviour. Not a known vulnerability vector for JSON-LD specifically; just hardening.
 **Action:** Extend to `.replace(/[<>&\u2028\u2029]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))`. Mention in the JSON-LD security audit when one happens.
 **Priority:** Very low.
+
+### Footer quick-links column is now 8 entries
+**Source:** P2-12 pre-push code review (S3)
+**Rationale:** Events / Past Events / Gallery / About / Contact / Collaborate / Join / Sign In = 8 vertical entries in a single footer column. Functional but visually dense on desktop and a long scroll on mobile. The links are all useful — splitting them is the better fix than removing.
+**Action:** Either two CSS columns under one heading, or two thematic groups: "Discover" (Events / Past Events / Gallery / About) + "Connect" (Contact / Collaborate / Join / Sign In). `src/components/layout/Footer.tsx`.
+**Priority:** Low.
+
+### `<InstagramFollowSection>` link doesn't announce "opens in new tab" to screen readers
+**Source:** P2-12 pre-push code review (nit)
+**Rationale:** Both card + banner variants render `<a target="_blank" rel="noopener noreferrer">` with text "Follow @the_social_seen" — visually clear, but screen readers don't announce the new-tab behaviour without an explicit signal. The lucide Instagram icon next to the text has no `aria-hidden` either; not a problem because the text label is sufficient, but tidy to mark decorative.
+**Action:** Add `aria-label="Follow @the_social_seen on Instagram (opens in a new tab)"` on the anchor (or a visually-hidden `<span class="sr-only">`). Add `aria-hidden="true"` to the icon. `src/components/landing/InstagramFollowSection.tsx`.
+**Priority:** Low.
+
+### Honeypot field name `company_website` lives next to a real `website` field on /collaborate
+**Source:** P2-12 pre-push code review (nit)
+**Rationale:** A sophisticated bot inspecting form fields could clock the difference and skip only `company_website`. The 2-second timing check is the real second line, so this is defence-in-depth only, but renaming the honeypot to something semantically distant (`fax_number`, `referral_code`) closes the proximity vector.
+**Action:** Rename `HONEYPOT_FIELD` constant in `src/app/contact/actions.ts` and the matching `<input name="...">` in both `ContactForm.tsx` and `CollaborateForm.tsx`. Three-file find-and-replace. Will land cleanly with the rate-limiting follow-up.
+**Priority:** Very low.
+
+### Sandbox `replyTo` is not rewritten — replies escape the sandbox
+**Source:** P2-12 pre-push code review (nit)
+**Rationale:** When `SANDBOX_FALLBACK_RECIPIENT` is set (current state until Resend domain DNS verifies), `sendEmail` rewrites `to` to the sandbox recipient and prefixes the subject. The new `replyTo` extension does NOT participate — a contact-form submission goes to the sandbox inbox, but if the team replies, it goes to the real visitor email. For internal testing this is confusing (test "submissions" trigger replies that hit the real visitor); for prod it's the desired behaviour but invisible during sandbox.
+**Action:** Either (a) also rewrite `replyTo` to the sandbox recipient when sandbox is active, or (b) accept the current behaviour and document it in `src/lib/email/send.ts` doc comment + `docs/SPRINT-2-HANDOVER.md`. Operator concern.
+**Priority:** Low.
 
 ### Document the `sent_by` = recipient convention for cron-driven sends
 **Source:** P2-10 post-merge code review (nit, partially actioned)

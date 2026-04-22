@@ -12,6 +12,15 @@ export const SITE_CONFIG = {
   avgRating:   '4.9',
 } as const
 
+// ── Social ───────────────────────────────────────────────────────────────────
+// Single source of truth for the brand's social URLs. Used by the footer,
+// the gallery follow-CTA, the post-booking nudge, and the Organization
+// JSON-LD `sameAs`. Add additional channels here as they go live.
+
+export const SOCIAL_LINKS = {
+  instagram: 'https://www.instagram.com/the_social_seen',
+} as const
+
 // ── Timezone ──────────────────────────────────────────────────────────────────
 
 export const LONDON_TZ = 'Europe/London'

@@ -36,6 +36,8 @@ describe('sitemap', () => {
     expect(urls).toContain('https://thesocialseen.com/events/past')
     expect(urls).toContain('https://thesocialseen.com/gallery')
     expect(urls).toContain('https://thesocialseen.com/about')
+    expect(urls).toContain('https://thesocialseen.com/contact')
+    expect(urls).toContain('https://thesocialseen.com/collaborate')
     expect(urls).toContain('https://thesocialseen.com/join')
     expect(urls).toContain('https://thesocialseen.com/privacy')
     expect(urls).toContain('https://thesocialseen.com/terms')

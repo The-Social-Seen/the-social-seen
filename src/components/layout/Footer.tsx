@@ -1,32 +1,30 @@
 "use client";
 
 import Link from "next/link";
-import { Instagram, Twitter, Linkedin, ArrowRight } from "lucide-react";
+import { Instagram, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
+import { SOCIAL_LINKS } from "@/lib/constants";
 
 const quickLinks = [
   { label: "Events", href: "/events" },
+  { label: "Past Events", href: "/events/past" },
   { label: "Gallery", href: "/gallery" },
   { label: "About", href: "/about" },
+  { label: "Contact", href: "/contact" },
+  { label: "Collaborate", href: "/collaborate" },
   { label: "Join", href: "/join" },
   { label: "Sign In", href: "/login" },
 ];
 
+// Single channel today — Instagram. Twitter / LinkedIn omitted until we
+// actually have those accounts; placeholders shipped as broken anchor
+// links would do more harm than good. Add additional entries to
+// `SOCIAL_LINKS` in `src/lib/constants.ts` and surface them here.
 const socialLinks = [
   {
     label: "Instagram",
-    href: "#",
+    href: SOCIAL_LINKS.instagram,
     icon: Instagram,
-  },
-  {
-    label: "X (Twitter)",
-    href: "#",
-    icon: Twitter,
-  },
-  {
-    label: "LinkedIn",
-    href: "#",
-    icon: Linkedin,
   },
 ];
 
@@ -55,10 +53,8 @@ export function Footer() {
                 <a
                   key={social.label}
                   href={social.href}
-                  {...(social.href !== "#" && {
-                    target: "_blank",
-                    rel: "noopener noreferrer",
-                  })}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className={cn(
                     "flex h-10 w-10 items-center justify-center rounded-full",
                     "border border-border transition-all duration-200",

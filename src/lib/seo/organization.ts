@@ -7,7 +7,7 @@
  * Update both together if a new social channel is added.
  */
 import { canonicalUrl, getCanonicalSiteUrl } from '@/lib/utils/site'
-import { SITE_CONFIG } from '@/lib/constants'
+import { SITE_CONFIG, SOCIAL_LINKS } from '@/lib/constants'
 
 export function organizationJsonLd(): Record<string, unknown> {
   return {
@@ -25,11 +25,12 @@ export function organizationJsonLd(): Record<string, unknown> {
         addressCountry: 'GB',
       },
     },
-    // `sameAs` deliberately omitted until launch comms confirms the real
-    // Instagram + LinkedIn handles. The footer's social links currently
-    // point at "#" placeholders — putting guessed slugs here would risk
-    // 404s and pollute Google's Knowledge Graph for the brand. Add back
-    // alongside the real footer hrefs in P2-12.
+    // `sameAs` lists profiles that the search engine can use to verify
+    // brand identity for the Knowledge Graph. Sourced from `SOCIAL_LINKS`
+    // — the same constant the footer reads — so adding a new channel
+    // (Twitter/LinkedIn/etc.) only needs one edit there. Today: just
+    // Instagram. The P2-11 deferral note is now resolved.
+    sameAs: Object.values(SOCIAL_LINKS),
     contactPoint: {
       '@type': 'ContactPoint',
       contactType: 'customer support',

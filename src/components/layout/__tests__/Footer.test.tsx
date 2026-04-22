@@ -57,11 +57,17 @@ describe('Footer', () => {
     expect(screen.getByRole('link', { name: /terms of service/i }).getAttribute('href')).toBe('/terms')
   })
 
-  it('renders social media icons with aria-labels', () => {
+  it('renders the Instagram social icon linking to the canonical handle', () => {
     render(<Footer />)
-    expect(screen.getByLabelText('Instagram')).toBeTruthy()
-    expect(screen.getByLabelText('X (Twitter)')).toBeTruthy()
-    expect(screen.getByLabelText('LinkedIn')).toBeTruthy()
+    const ig = screen.getByLabelText('Instagram')
+    expect(ig).toBeTruthy()
+    expect(ig.getAttribute('href')).toBe(
+      'https://www.instagram.com/the_social_seen',
+    )
+    // Twitter / LinkedIn deliberately removed — those accounts don't
+    // exist yet (P2-12). Add back when they do.
+    expect(screen.queryByLabelText('X (Twitter)')).toBeNull()
+    expect(screen.queryByLabelText('LinkedIn')).toBeNull()
   })
 
   it('renders updated tagline copy', () => {

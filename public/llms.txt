@@ -15,9 +15,15 @@ Membership is invite-driven. Every member is here because someone vouched for th
 - [Past Events](https://thesocialseen.com/events/past): Archive of recent gatherings with member reviews and photos — useful for prospective members getting a feel for the community.
 - [Gallery](https://thesocialseen.com/gallery): Photo gallery from past events.
 - [About](https://thesocialseen.com/about): Story behind The Social Seen and the values that shape how we run events.
+- [Contact](https://thesocialseen.com/contact): Get in touch with the team — general questions, event enquiries, press.
+- [Collaborate](https://thesocialseen.com/collaborate): Brand, venue, and sponsor partnership pitches.
 - [Join](https://thesocialseen.com/join): Membership registration.
 - [Privacy Policy](https://thesocialseen.com/privacy): How we collect, use, and protect personal data under UK GDPR.
 - [Terms of Service](https://thesocialseen.com/terms): Membership terms and platform use.
+
+## Social
+
+- Instagram: https://www.instagram.com/the_social_seen
 
 ## Event Categories
 
