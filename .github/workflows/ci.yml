@@ -83,11 +83,23 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
 
       - name: Start local Supabase stack
-        # Inbucket stays included — the UI auth spec reads OTP emails
-        # from it. Realtime / imgproxy / edge-runtime stay excluded
-        # to trim Docker boot time; their omission auto-skips the
-        # daily-notifications spec via its reachability probe.
-        run: supabase start --exclude studio,realtime,imgproxy,edge-runtime
+        # Inbucket included for the UI auth spec; edge-runtime
+        # included for the daily-notifications spec (CL-9). Studio /
+        # realtime / imgproxy stay excluded — none of them are needed
+        # by the test suite and dropping them shaves ~30s of Docker
+        # boot.
+        run: supabase start --exclude studio,realtime,imgproxy
+
+      - name: Serve daily-notifications edge function
+        # Background process: Playwright's spec polls
+        # /functions/v1/daily-notifications and skips with a clear
+        # diagnostic if it can't reach it. Serving it gives the spec
+        # actual coverage of the cron path.
+        run: |
+          supabase functions serve daily-notifications --env-file <(echo "RESEND_API_KEY=re_test_dummy") &
+          # Allow the function runtime ~10s to come up before the spec
+          # polls it. Cheaper than the spec's 15s polling timeout.
+          sleep 10
 
       - name: Run E2E suite
         run: pnpm e2e

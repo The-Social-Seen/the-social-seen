@@ -203,6 +203,124 @@ describe('emailEventAttendees', () => {
     })
   })
 
+  // ── CL-6: notification_preferences batch-fetch ────────────────────────
+
+  it('CL-6: opted-out attendees are filtered before the send loop fires', async () => {
+    authenticateAdmin('admin-cl6')
+    let callCount = 0
+    mockFrom.mockImplementation(() => {
+      callCount++
+      // 1: requireAdmin role check
+      if (callCount === 1) return mockChain({ data: { role: 'admin' } })
+      // 2: event lookup
+      if (callCount === 2)
+        return mockChain({ data: { id: 'evt-1', title: 'Wine', slug: 'wine' } })
+      // 3: bookings (3 confirmed attendees)
+      if (callCount === 3)
+        return mockChain({
+          data: [
+            { id: 'b1', user_id: 'in-1', profile: { id: 'in-1', full_name: 'Anna', email: 'anna@example.com' } },
+            { id: 'b2', user_id: 'opt-out-1', profile: { id: 'opt-out-1', full_name: 'Ben', email: 'ben@example.com' } },
+            { id: 'b3', user_id: 'in-2', profile: { id: 'in-2', full_name: 'Cara', email: 'cara@example.com' } },
+          ],
+        })
+      // 4: notification_preferences — Ben opted out
+      return mockChain({
+        data: [
+          { user_id: 'in-1', admin_announcements: true },
+          { user_id: 'opt-out-1', admin_announcements: false },
+          // 'in-2' missing entirely — default-on, gets the email.
+        ],
+      })
+    })
+
+    const result = await emailEventAttendees(
+      'evt-1',
+      makeFormData('Headlines', 'Body content here.'),
+    )
+
+    expect(result).toEqual({ success: true, recipientCount: 2 })
+    await new Promise((r) => setTimeout(r, 200))
+
+    // Two sends, neither addressed to the opted-out user.
+    expect(mockSendEmail).toHaveBeenCalledTimes(2)
+    const recipientEmails = mockSendEmail.mock.calls.map(
+      (c) => (c[0] as { to: string }).to,
+    )
+    expect(recipientEmails).toEqual(['anna@example.com', 'cara@example.com'])
+    expect(recipientEmails).not.toContain('ben@example.com')
+  })
+
+  it('CL-6: returns a clear error when every attendee has opted out', async () => {
+    authenticateAdmin('admin-allout')
+    let callCount = 0
+    mockFrom.mockImplementation(() => {
+      callCount++
+      if (callCount === 1) return mockChain({ data: { role: 'admin' } })
+      if (callCount === 2)
+        return mockChain({ data: { id: 'evt-1', title: 'X', slug: 'x' } })
+      if (callCount === 3)
+        return mockChain({
+          data: [
+            { id: 'b1', user_id: 'u-1', profile: { id: 'u-1', full_name: 'A', email: 'a@x.com' } },
+            { id: 'b2', user_id: 'u-2', profile: { id: 'u-2', full_name: 'B', email: 'b@x.com' } },
+          ],
+        })
+      // All opted out
+      return mockChain({
+        data: [
+          { user_id: 'u-1', admin_announcements: false },
+          { user_id: 'u-2', admin_announcements: false },
+        ],
+      })
+    })
+
+    const result = await emailEventAttendees(
+      'evt-1',
+      makeFormData('Subject', 'Body content here.'),
+    )
+    expect(result).toEqual({
+      error: 'No attendees are opted in to admin announcements',
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('CL-6: preference-query failure falls through to over-sending (rather than silently dropping the batch)', async () => {
+    authenticateAdmin('admin-prefdown')
+    let callCount = 0
+    mockFrom.mockImplementation(() => {
+      callCount++
+      if (callCount === 1) return mockChain({ data: { role: 'admin' } })
+      if (callCount === 2)
+        return mockChain({ data: { id: 'evt-1', title: 'X', slug: 'x' } })
+      if (callCount === 3)
+        return mockChain({
+          data: [
+            { id: 'b1', user_id: 'u-1', profile: { id: 'u-1', full_name: 'A', email: 'a@x.com' } },
+          ],
+        })
+      // Preference query errors out — sendEmail's per-send check is the
+      // safety net; we'd rather over-send than silently drop the whole
+      // batch on a transient DB hiccup.
+      return mockChain({ error: { message: 'connection refused' } })
+    })
+
+    const result = await emailEventAttendees(
+      'evt-1',
+      makeFormData('Subject', 'Body content here.'),
+    )
+
+    expect(result).toEqual({ success: true, recipientCount: 1 })
+    await new Promise((r) => setTimeout(r, 200))
+    expect(mockSendEmail).toHaveBeenCalledTimes(1)
+    // sendEmail still receives preferenceCategory so the per-send check
+    // catches a real opt-out even when the batch lookup failed.
+    expect(mockSendEmail.mock.calls[0][0]).toMatchObject({
+      preferenceCategory: 'admin_announcements',
+    })
+  })
+
   // Tests below use the same mocks/helpers above.
 
   // ──────────────────────────────────────────────────────────────────────

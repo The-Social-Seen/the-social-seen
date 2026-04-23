@@ -328,6 +328,101 @@ describe('signIn', () => {
       expect(result.error).not.toContain('Invalid login credentials')
     }
   })
+
+  // ── CL-7: rate-limit integration ──────────────────────────────────────────
+
+  describe('rate-limit (CL-7)', () => {
+    beforeEach(async () => {
+      vi.clearAllMocks()
+      // Drop any rate-limit state leaking between tests in the same suite.
+      const { __TEST_ONLY__resetRateLimits } = await import(
+        '@/lib/rate-limit'
+      )
+      __TEST_ONLY__resetRateLimits()
+    })
+
+    it('successful logins do NOT bump the cap (10 successes still allow the 11th)', async () => {
+      mockSignInWithPassword.mockResolvedValue({
+        data: { user: { id: 'shared-ip-user' } },
+        error: null,
+      })
+      // role lookup short-circuits with redirectTo === '/events' default
+      mockSupabaseChain({ data: { role: 'member' } })
+
+      // 11 sequential successes — represents office-NAT scenario where
+      // many real users sign in from the same IP within the window.
+      for (let i = 0; i < 11; i++) {
+        const result = await signIn({
+          email: `coworker-${i}@example.com`,
+          password: 'password123',
+        })
+        expect(result).toEqual({ success: true, redirectTo: '/events' })
+      }
+    })
+
+    it('11th failure on the same email returns the friendly throttle message', async () => {
+      mockSignInWithPassword.mockResolvedValue({
+        error: { message: 'Invalid login credentials' },
+      })
+
+      // 10 failures consume the cap.
+      for (let i = 0; i < 10; i++) {
+        const r = await signIn({
+          email: 'attacker@example.com',
+          password: `guess-${i}`,
+        })
+        if ('error' in r) {
+          expect(r.error).toBe('Invalid email or password')
+        } else {
+          throw new Error('expected an error')
+        }
+      }
+
+      // 11th — should short-circuit with the friendly throttle message
+      // BEFORE reaching Supabase.
+      mockSignInWithPassword.mockClear()
+      const blocked = await signIn({
+        email: 'attacker@example.com',
+        password: 'guess-11',
+      })
+
+      expect(blocked).toEqual({
+        error:
+          'Too many sign-in attempts. Please wait a few minutes and try again.',
+      })
+      expect(mockSignInWithPassword).not.toHaveBeenCalled()
+    })
+
+    it('throttle message does not leak which axis tripped (IP vs email)', async () => {
+      mockSignInWithPassword.mockResolvedValue({
+        error: { message: 'Invalid login credentials' },
+      })
+
+      // Burn through the email bucket for one address.
+      for (let i = 0; i < 10; i++) {
+        await signIn({
+          email: 'target@example.com',
+          password: `g-${i}`,
+        })
+      }
+
+      const blocked = await signIn({
+        email: 'target@example.com',
+        password: 'g-11',
+      })
+
+      // Identical message regardless of which bucket exhausted —
+      // prevents an attacker probing for a registered username via
+      // differential responses.
+      if ('error' in blocked) {
+        expect(blocked.error).not.toContain('email')
+        expect(blocked.error).not.toContain('IP')
+        expect(blocked.error).toContain('Too many sign-in attempts')
+      } else {
+        throw new Error('expected an error')
+      }
+    })
+  })
 })
 
 describe('saveInterests', () => {

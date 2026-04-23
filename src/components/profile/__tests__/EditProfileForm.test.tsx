@@ -77,4 +77,67 @@ describe('EditProfileForm', () => {
 
     expect(screen.getByText('Name is required')).toBeTruthy()
   })
+
+  // ── CL-7: phone-number field ──────────────────────────────────────────────
+
+  it('CL-7: renders phone input pre-populated with profile.phone_number', () => {
+    render(
+      <EditProfileForm
+        profile={{ ...mockProfile, phone_number: '07123456789' }}
+        open={true}
+        onOpenChange={vi.fn()}
+      />,
+    )
+    const phoneInput = screen.getByPlaceholderText(
+      /07123 456789 or \+44 7123 456789/,
+    ) as HTMLInputElement
+    expect(phoneInput.value).toBe('07123456789')
+  })
+
+  it('CL-7: shows "Enter a valid phone number" when input has letters', () => {
+    render(
+      <EditProfileForm
+        profile={mockProfile}
+        open={true}
+        onOpenChange={vi.fn()}
+      />,
+    )
+
+    const phoneInput = screen.getByPlaceholderText(
+      /07123 456789 or \+44 7123 456789/,
+    )
+    fireEvent.change(phoneInput, { target: { value: 'not-a-phone' } })
+    fireEvent.click(screen.getByText('Save Changes'))
+
+    expect(screen.getByText('Enter a valid phone number')).toBeTruthy()
+  })
+
+  it('CL-7: passes phone_number through to updateProfile on submit', async () => {
+    const { updateProfile } = await import('@/app/(member)/profile/actions')
+    const updateProfileMock = updateProfile as unknown as ReturnType<
+      typeof vi.fn
+    >
+    updateProfileMock.mockClear()
+
+    render(
+      <EditProfileForm
+        profile={mockProfile}
+        open={true}
+        onOpenChange={vi.fn()}
+      />,
+    )
+
+    const phoneInput = screen.getByPlaceholderText(
+      /07123 456789 or \+44 7123 456789/,
+    )
+    fireEvent.change(phoneInput, { target: { value: '+44 7700 900111' } })
+    fireEvent.click(screen.getByText('Save Changes'))
+
+    // updateProfile fires inside startTransition; flush microtasks.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(updateProfileMock).toHaveBeenCalledTimes(1)
+    expect(updateProfileMock.mock.calls[0][0]).toMatchObject({
+      phone_number: '+44 7700 900111',
+    })
+  })
 })
