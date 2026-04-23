@@ -45,31 +45,57 @@ export interface PastEventWithSnippet extends EventWithStats {
   photos: { image_url: string }[]
 }
 
+export interface PastEventsPage {
+  events: PastEventWithSnippet[]
+  /**
+   * ISO date_time of the last event in this page. Pass back as
+   * `cursor` to fetch the next page. `null` when there are no more
+   * results (the page returned fewer than `pageSize` rows).
+   */
+  nextCursor: string | null
+}
+
+export const PAST_EVENTS_PAGE_SIZE = 60
+
 /**
- * Past, published events ordered most-recent first. Joins a representative
- * top review (visible only) and a few photos so the listing card can show
- * a snippet without a per-event fetch on the client.
+ * Past, published events ordered most-recent first. Includes cancelled
+ * events (tagged via `is_cancelled` on the row) so the archive doesn't
+ * silently hide an event an attendee actually booked and remembers.
+ *
+ * Cursor-paginated by `date_time` (descending). Pass the previous page's
+ * `nextCursor` to fetch older events. Page size = `PAST_EVENTS_PAGE_SIZE`.
  */
-export async function getPastEvents(): Promise<PastEventWithSnippet[]> {
+export async function getPastEvents(
+  opts: { cursor?: string | null } = {},
+): Promise<PastEventsPage> {
   const supabase = await createServerClient()
 
   const nowIso = new Date().toISOString()
-  const { data: events, error } = await supabase
+  let query = supabase
     .from('event_with_stats')
     .select('*')
     .eq('is_published', true)
-    .eq('is_cancelled', false)
     .lt('date_time', nowIso)
     .order('date_time', { ascending: false })
-    .limit(60)
+    .limit(PAST_EVENTS_PAGE_SIZE)
+
+  if (opts.cursor) {
+    // `date_time` is not strictly unique (two events at the same
+    // minute would collide on the cursor); at The Social Seen scale
+    // this hasn't happened and the UX cost of dropping one event
+    // across a page boundary is trivial vs adding a composite cursor.
+    query = query.lt('date_time', opts.cursor)
+  }
+
+  const { data: events, error } = await query
 
   if (error) {
     console.error('[getPastEvents]', error.message)
-    return []
+    return { events: [], nextCursor: null }
   }
 
   const rows = (events ?? []) as EventWithStats[]
-  if (rows.length === 0) return []
+  if (rows.length === 0) return { events: [], nextCursor: null }
 
   const eventIds = rows.map((e) => e.id)
 
@@ -119,11 +145,20 @@ export async function getPastEvents(): Promise<PastEventWithSnippet[]> {
     }
   }
 
-  return rows.map((e) => ({
+  const pageEvents = rows.map((e) => ({
     ...e,
     top_review: reviewsByEvent.get(e.id) ?? null,
     photos: photosByEvent.get(e.id) ?? [],
   }))
+
+  // Only advertise a next-cursor when we got a full page — otherwise
+  // the "Load more" button would fetch an empty page.
+  const nextCursor =
+    rows.length === PAST_EVENTS_PAGE_SIZE
+      ? (rows[rows.length - 1].date_time as string)
+      : null
+
+  return { events: pageEvents, nextCursor }
 }
 
 // ── Single event by slug (detail page) ───────────────────────────────────────

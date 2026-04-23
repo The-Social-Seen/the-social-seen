@@ -1275,6 +1275,45 @@ export async function emailEventAttendees(
     return { error: 'No confirmed attendees to email' }
   }
 
+  // Pre-filter recipients by their admin_announcements preference in a
+  // single round-trip. Previously sendEmail's per-send
+  // `preferenceCategory` check issued one SELECT per attendee — fine at
+  // small events, compounding with the 120ms throttle + Resend latency
+  // once attendee lists cross ~100. One IN query builds a map, the
+  // loop consults it in memory.
+  //
+  // Default-on semantics: a missing row means the user hasn't opted
+  // out of anything yet, so they receive admin announcements.
+  const { data: prefRows, error: prefErr } = await supabase
+    .from('notification_preferences')
+    .select('user_id, admin_announcements')
+    .in('user_id', recipients.map((r) => r.userId))
+  if (prefErr) {
+    console.error('[emailEventAttendees] preference lookup failed', prefErr)
+    // Fall through — we'd rather over-send than silently drop the whole
+    // batch on a transient DB error. sendEmail's own per-send check will
+    // still run and enforce opt-outs individually (at the old cost).
+  }
+  const optedOut = new Set<string>()
+  for (const row of prefRows ?? []) {
+    const r = row as { user_id: string; admin_announcements: boolean | null }
+    if (r.admin_announcements === false) optedOut.add(r.user_id)
+  }
+  const deliverable = recipients.filter((r) => !optedOut.has(r.userId))
+
+  if (deliverable.length === 0) {
+    // Every attendee has opted out — return a clear signal so the admin
+    // UI can inform them rather than showing a "sent to 0 of N" toast.
+    return { error: 'No attendees are opted in to admin announcements' }
+  }
+
+  // Keep `preferenceCategory` on the sendEmail call below as a
+  // defence-in-depth check — the in-memory map is the fast path; if a
+  // user opts out between the batch-fetch and the send (during the
+  // throttled delivery loop) sendEmail's per-send lookup catches it.
+  // The optimisation is that the *common case* (no opt-out change
+  // mid-batch) skips the per-send SELECT via the pre-filter.
+
   // Snapshot what we need inside `after()` — closure-captured values
   // outlive the request scope.
   const eventSnapshot = {
@@ -1294,8 +1333,8 @@ export async function emailEventAttendees(
   const BATCH_PAUSE_MS = 1000
   const BATCH_SIZE = 50
   after(async () => {
-    for (let i = 0; i < recipients.length; i++) {
-      const r = recipients[i]
+    for (let i = 0; i < deliverable.length; i++) {
+      const r = deliverable[i]
       const rendered = adminAnnouncementTemplate({
         fullName: r.fullName,
         eventTitle: eventSnapshot.title,
@@ -1322,7 +1361,7 @@ export async function emailEventAttendees(
         ],
       })
       // Throttle: standard pause after every send, longer pause every 50.
-      const isLast = i === recipients.length - 1
+      const isLast = i === deliverable.length - 1
       if (!isLast) {
         const pause =
           (i + 1) % BATCH_SIZE === 0 ? BATCH_PAUSE_MS : THROTTLE_MS
@@ -1331,7 +1370,7 @@ export async function emailEventAttendees(
     }
   })
 
-  return { success: true, recipientCount: recipients.length }
+  return { success: true, recipientCount: deliverable.length }
 }
 
 // ════════════════════════════════════════════════════════════════════════════

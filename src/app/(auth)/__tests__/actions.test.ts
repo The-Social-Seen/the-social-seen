@@ -670,4 +670,26 @@ describe('verifyEmailOtp', () => {
       expect(result.error).not.toContain('Token has expired or is invalid')
     }
   })
+
+  it('returns profile_update_failed error when the profile flag update fails on both attempts', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'user-1', email: 'charlotte@example.com' } },
+      error: null,
+    })
+    mockVerifyOtp.mockResolvedValue({ error: null })
+    // The .eq() terminator on update resolves with the error; our
+    // helper chains them so both retry attempts see the same error.
+    mockSupabaseChain({
+      data: null,
+      error: { message: 'transient db error' },
+    })
+
+    const result = await verifyEmailOtp({ code: '123456' })
+
+    expect(result).toHaveProperty('error')
+    if ('error' in result) {
+      expect(result.code).toBe('profile_update_failed')
+      expect(result.error).toContain('request a new code')
+    }
+  })
 })

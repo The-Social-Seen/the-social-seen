@@ -559,34 +559,34 @@ describe('getUserBookingForEvent', () => {
 // (top-rated review per event), photo cap (3), and the null-author fallback.
 
 describe('getPastEvents', () => {
-  it('returns empty array on events query error', async () => {
+  it('returns empty page on events query error', async () => {
     const builder = createQueryBuilder()
     builder.mockReject('connection refused')
     fromBuilders['event_with_stats'] = builder
 
     const result = await getPastEvents()
 
-    expect(result).toEqual([])
+    expect(result).toEqual({ events: [], nextCursor: null })
     expect(console.error).toHaveBeenCalledWith(
       '[getPastEvents]',
       'connection refused',
     )
   })
 
-  it('returns empty array when no past events exist (and skips review/photo queries)', async () => {
+  it('returns empty page when no past events exist (and skips review/photo queries)', async () => {
     const eventsBuilder = createQueryBuilder()
     eventsBuilder.mockResolve([])
     fromBuilders['event_with_stats'] = eventsBuilder
 
     const result = await getPastEvents()
 
-    expect(result).toEqual([])
+    expect(result).toEqual({ events: [], nextCursor: null })
     // The reviews/photos queries should not have been issued.
     expect(fromBuilders['event_reviews']).toBeUndefined()
     expect(fromBuilders['event_photos']).toBeUndefined()
   })
 
-  it('filters to is_published + non-cancelled + past + ordered desc with limit 60', async () => {
+  it('filters to is_published + past + ordered desc with limit 60 (cancelled events included)', async () => {
     const eventsBuilder = createQueryBuilder()
     eventsBuilder.mockResolve([])
     fromBuilders['event_with_stats'] = eventsBuilder
@@ -594,7 +594,8 @@ describe('getPastEvents', () => {
     await getPastEvents()
 
     expect(eventsBuilder.eq).toHaveBeenCalledWith('is_published', true)
-    expect(eventsBuilder.eq).toHaveBeenCalledWith('is_cancelled', false)
+    // is_cancelled is NOT filtered — cancelled events appear with a badge.
+    expect(eventsBuilder.eq).not.toHaveBeenCalledWith('is_cancelled', false)
     expect(eventsBuilder.lt).toHaveBeenCalledWith(
       'date_time',
       expect.any(String),
@@ -643,7 +644,7 @@ describe('getPastEvents', () => {
     )
     fromBuilders['event_photos'] = photosBuilder
 
-    const result = await getPastEvents()
+    const { events: result } = await getPastEvents()
 
     expect(result).toHaveLength(2)
     const e1 = result.find((e) => e.id === 'evt-1')!
@@ -686,7 +687,7 @@ describe('getPastEvents', () => {
     photosBuilder.mockResolve([])
     fromBuilders['event_photos'] = photosBuilder
 
-    const result = await getPastEvents()
+    const { events: result } = await getPastEvents()
 
     expect(result[0].top_review?.author_name).toBe('A member')
   })
@@ -713,7 +714,7 @@ describe('getPastEvents', () => {
     photosBuilder.mockResolve([])
     fromBuilders['event_photos'] = photosBuilder
 
-    const result = await getPastEvents()
+    const { events: result } = await getPastEvents()
 
     expect(result[0].top_review?.author_name).toBe('Charlotte Davis')
   })
@@ -736,5 +737,66 @@ describe('getPastEvents', () => {
     expect(reviewsBuilder.eq).toHaveBeenCalledWith('is_visible', true)
     expect(reviewsBuilder.not).toHaveBeenCalledWith('review_text', 'is', null)
     expect(reviewsBuilder.neq).toHaveBeenCalledWith('review_text', '')
+  })
+
+  it('includes cancelled events in the archive (surfaced with a badge on the card)', async () => {
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve([
+      { ...mockEventWithStats, id: 'evt-cancelled', is_cancelled: true },
+    ])
+    fromBuilders['event_with_stats'] = eventsBuilder
+    fromBuilders['event_reviews'] = createQueryBuilder()
+    fromBuilders['event_reviews'].mockResolve([])
+    fromBuilders['event_photos'] = createQueryBuilder()
+    fromBuilders['event_photos'].mockResolve([])
+
+    const { events } = await getPastEvents()
+    expect(events).toHaveLength(1)
+    expect(events[0].is_cancelled).toBe(true)
+  })
+
+  it('applies cursor via .lt("date_time", cursor) when supplied', async () => {
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve([])
+    fromBuilders['event_with_stats'] = eventsBuilder
+
+    await getPastEvents({ cursor: '2026-01-01T00:00:00Z' })
+
+    const lts = (eventsBuilder.lt as unknown as { mock: { calls: unknown[][] } })
+      .mock.calls
+    // One .lt for "past-dated" (now), another for the cursor.
+    expect(lts.length).toBeGreaterThanOrEqual(2)
+    expect(lts).toContainEqual(['date_time', '2026-01-01T00:00:00Z'])
+  })
+
+  it('returns nextCursor = last event date_time when a full page is returned', async () => {
+    const full = Array.from({ length: 60 }, (_, i) => ({
+      ...mockEventWithStats,
+      id: `evt-${i}`,
+      date_time: new Date(2026, 0, 60 - i).toISOString(),
+    }))
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve(full)
+    fromBuilders['event_with_stats'] = eventsBuilder
+    fromBuilders['event_reviews'] = createQueryBuilder()
+    fromBuilders['event_reviews'].mockResolve([])
+    fromBuilders['event_photos'] = createQueryBuilder()
+    fromBuilders['event_photos'].mockResolve([])
+
+    const { nextCursor } = await getPastEvents()
+    expect(nextCursor).toBe(full[full.length - 1].date_time)
+  })
+
+  it('returns nextCursor = null when the page is partial (no more to load)', async () => {
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve([{ ...mockEventWithStats, id: 'evt-1' }])
+    fromBuilders['event_with_stats'] = eventsBuilder
+    fromBuilders['event_reviews'] = createQueryBuilder()
+    fromBuilders['event_reviews'].mockResolve([])
+    fromBuilders['event_photos'] = createQueryBuilder()
+    fromBuilders['event_photos'].mockResolve([])
+
+    const { nextCursor } = await getPastEvents()
+    expect(nextCursor).toBeNull()
   })
 })

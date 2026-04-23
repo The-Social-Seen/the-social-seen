@@ -484,6 +484,7 @@ export type VerifyEmailOtpErrorCode =
   | 'validation_error'
   | 'unauthenticated'
   | 'invalid_otp'
+  | 'profile_update_failed'
 
 export type VerifyEmailOtpResult =
   | { success: true }
@@ -524,18 +525,46 @@ export async function verifyEmailOtp(input: {
   }
 
   // Flip the app-level verification flag. Supabase's email_confirmed_at is
-  // already set on all users (autoconfirm is True), so we track our own flag.
-  const { error: updateError } = await supabase
-    .from('profiles')
-    .update({ email_verified: true })
-    .eq('id', user.id)
+  // already set on all users (autoconfirm is True), so our `email_verified`
+  // column IS the source of truth — there's no external signal to
+  // reconcile against. That makes this UPDATE load-bearing: if it fails
+  // silently the user sees "verified" but can't book.
+  //
+  // Retry once with a short backoff before surfacing a hard error. The
+  // OTP we just verified is single-use (Supabase invalidates it), so a
+  // caller-side retry means "request a new OTP", not "resubmit this
+  // one". Two in-process attempts here absorb transient DB hiccups
+  // without burning the user's OTP.
+  let updateError: { message: string } | null = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { error } = await supabase
+      .from('profiles')
+      .update({ email_verified: true })
+      .eq('id', user.id)
+    if (!error) {
+      updateError = null
+      break
+    }
+    updateError = error
+    if (attempt === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+  }
 
   if (updateError) {
-    // Verification succeeded in Supabase but we couldn't update our flag.
-    // Return success anyway — the user successfully verified their email;
-    // the flag will be reconciled on next fetch via a future fallback.
-    // For now, prefer a soft failure over a confusing error message.
-    return { success: true }
+    // Both attempts failed. The OTP is already consumed. Surface a
+    // clear error so the user isn't stuck with a misleading success
+    // + a perpetually unverified flag. They can request a fresh OTP
+    // and retry once the transient failure clears.
+    console.error(
+      '[verifyEmailOtp] profile update failed after retry',
+      updateError.message,
+    )
+    return {
+      error:
+        'Your code was accepted but we couldn\u2019t save your verification. Please request a new code and try again.',
+      code: 'profile_update_failed',
+    }
   }
 
   revalidatePath('/', 'layout')
