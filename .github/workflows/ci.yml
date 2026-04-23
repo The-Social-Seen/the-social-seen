@@ -71,6 +71,17 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps chromium
 
+      - name: Build (for `pnpm start` webServer)
+        # UI specs run against `pnpm start` — dev-mode hydration is
+        # too slow under CI load and framer-motion's opacity:0 initial
+        # state trips Playwright's visibility check. Prod build
+        # hydrates in ~100ms and matches what real users see.
+        run: pnpm build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+          SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+
       - name: Start local Supabase stack
         # Inbucket stays included — the UI auth spec reads OTP emails
         # from it. Realtime / imgproxy / edge-runtime stay excluded
@@ -86,8 +97,8 @@ jobs:
           # we don't have to capture them here.
           SUPABASE_E2E_URL: http://127.0.0.1:54321
           INBUCKET_URL: http://127.0.0.1:54324
-          # Public envs the dev server needs to boot. The UI project's
-          # webServer command runs `pnpm dev` against this Supabase.
+          # Public envs for the web server Playwright auto-boots.
+          # In CI the webServer runs `pnpm start` (prod build).
           NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
           NEXT_PUBLIC_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
           SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU

@@ -30,6 +30,16 @@ import { defineConfig } from '@playwright/test'
 const PORT = 6500
 const BASE_URL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${PORT}`
 
+// In CI we run against a production build — dev-mode cold-start
+// hydration + framer-motion's initial opacity:0 makes the forms
+// intermittently "not visible" to Playwright even after 30s. Prod
+// build hydrates in ~100ms and matches what real users hit.
+// Locally we still prefer `pnpm dev` for fast iteration (reuses an
+// already-listening server).
+const webServerCommand = process.env.CI
+  ? `pnpm start --port ${PORT}`
+  : `pnpm dev --port ${PORT}`
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
@@ -49,13 +59,16 @@ export default defineConfig({
     },
   },
 
-  // The dev server boots only when the `ui` project actually runs.
+  // The server boots only when the `ui` project actually runs.
   // Playwright reuses an already-listening server on the same port.
+  // CI uses `pnpm start` (prod); local uses `pnpm dev` (HMR).
   webServer: {
-    command: `pnpm dev --port ${PORT}`,
+    command: webServerCommand,
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
+    // 180s to allow for `pnpm build` on a cold CI runner; dev-mode
+    // local starts take <5s.
+    timeout: 180_000,
     stdout: 'ignore',
     stderr: 'pipe',
   },
