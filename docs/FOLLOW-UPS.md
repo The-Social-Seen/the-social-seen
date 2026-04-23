@@ -15,12 +15,6 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 
 ## 🔴 Security / compliance
 
-### Migrate CSP `script-src` to nonce-based — required for the `httpOnly: false` posture to be defensible
-**Source:** CL-7 code review (where the CSP itself shipped).
-**Rationale:** The CSP shipped in `next.config.ts` allows `'unsafe-inline'` in `script-src` because we render an inline theme-detection script in `app/layout.tsx`. That means an XSS in the app can still execute inline `<script>` and read `document.cookie` — including the Supabase auth cookie that `src/lib/supabase/middleware.ts` deliberately leaves with `httpOnly: false` so the browser client can read it. The cookie comment used to claim "CSP is the compensating control"; until this follow-up lands, that's only partially true.
-**Action:** Generate a per-request nonce in middleware, expose via a request header (e.g. `x-csp-nonce`), read in the root layout Server Component, render the inline theme script with `nonce={nonce}`, and drop `'unsafe-inline'` from `script-src` (replace with `'nonce-...'`). Roughly 30 lines across `src/lib/supabase/middleware.ts`, `src/app/layout.tsx`, and `next.config.ts`.
-**Priority:** **High** — this gates the cookie-storage decision the rest of the codebase depends on.
-
 ### Refactor existing `callerIp` duplicates to the shared `getCallerIp` helper
 **Source:** CL-7 code review.
 **Rationale:** `src/lib/utils/caller-ip.ts` is now the canonical helper but `src/app/contact/actions.ts:65` and `src/app/newsletter/actions.ts:54` still have their own private copies. Three-line cleanup; matters because the next caller (e.g. signup throttling) should not invent a fourth.

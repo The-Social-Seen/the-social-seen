@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { buildCsp, CSP_NONCE_HEADER, generateNonce } from '@/lib/security/csp'
 
 const PROTECTED_ROUTES = ['/profile', '/bookings', '/admin']
 
@@ -10,9 +11,24 @@ function isProtectedRoute(pathname: string): boolean {
 }
 
 export async function updateSession(request: NextRequest) {
+  // Per-request CSP nonce (CL-8). Set on the REQUEST headers so
+  // Server Components can read it via `next/headers` → `headers()`,
+  // and on the RESPONSE `Content-Security-Policy` header so the
+  // browser enforces it.
+  const nonce = generateNonce()
+  const isDev = process.env.NODE_ENV !== 'production'
+  const csp = buildCsp(nonce, isDev)
+
+  const requestHeaders = new Headers(request.headers)
+  requestHeaders.set(CSP_NONCE_HEADER, nonce)
+
   let supabaseResponse = NextResponse.next({
-    request,
+    request: { headers: requestHeaders },
   })
+  // Set CSP up-front so every return path (including early redirects)
+  // carries the policy. Subsequent recreations of `supabaseResponse`
+  // inside the cookies.setAll callback re-apply it.
+  supabaseResponse.headers.set('Content-Security-Policy', csp)
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -39,22 +55,20 @@ export async function updateSession(request: NextRequest) {
           request.cookies.set(name, value)
         )
         supabaseResponse = NextResponse.next({
-          request,
+          request: { headers: requestHeaders },
         })
+        supabaseResponse.headers.set('Content-Security-Policy', csp)
         cookiesToSet.forEach(({ name, value, options }) =>
           supabaseResponse.cookies.set(name, value, {
             ...options,
-            // httpOnly must be false so createBrowserClient can read the auth
-            // token from document.cookie.
-            //
-            // ⚠ The CSP shipped in next.config.ts currently allows
-            // `'unsafe-inline'` in script-src (for the inline theme-
-            // detection script in app/layout.tsx), so it does NOT
-            // meaningfully block XSS-driven cookie exfiltration yet.
-            // Tracked in docs/FOLLOW-UPS.md → "Migrate CSP script-src
-            // to nonce-based". Until that lands, treat this cookie
-            // as XSS-exposed and weight any pending XSS findings
-            // accordingly.
+            // httpOnly must be false so createBrowserClient can read the
+            // auth token from document.cookie. The compensating control
+            // against XSS-driven cookie exfiltration is the per-request
+            // nonce-based CSP set above: in production `script-src`
+            // allows only `'self'` + a fresh nonce per request +
+            // the third-party origin allowlist. Attacker-injected
+            // `<script>` tags lack the nonce and are refused by the
+            // browser. See `src/lib/security/csp.ts`.
             httpOnly: false,
           })
         )
@@ -131,7 +145,10 @@ export async function updateSession(request: NextRequest) {
     }
   }
 
-  // Forward pathname to root layout so it can conditionally render Header/Footer
+  // Forward pathname to root layout so it can conditionally render
+  // Header/Footer. Set on BOTH the request (so `next/headers` in Server
+  // Components reads it) and the response (cheap telemetry for proxies).
+  requestHeaders.set('x-pathname', pathname)
   supabaseResponse.headers.set('x-pathname', pathname)
 
   return supabaseResponse
