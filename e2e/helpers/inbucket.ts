@@ -65,10 +65,19 @@ async function fetchMessage(
 
 /**
  * Convert an email address to its Inbucket mailbox name. Inbucket
- * normalises by stripping the domain and lowercasing.
+ * normalises by:
+ *   - stripping the domain
+ *   - lowercasing
+ *   - **stripping `+subaddress` tags** (standard email plus-aliasing;
+ *     `foo+bar@example.com` is delivered to mailbox `foo`). The E2E
+ *     fixtures use `+tag` to keep addresses unique per scenario, so
+ *     forgetting this would cause every OTP to land in a mailbox our
+ *     poll ignores.
  */
 export function emailToMailbox(email: string): string {
-  return email.split('@')[0]!.toLowerCase()
+  const localPart = email.split('@')[0]!.toLowerCase()
+  const plusIdx = localPart.indexOf('+')
+  return plusIdx >= 0 ? localPart.slice(0, plusIdx) : localPart
 }
 
 /**
