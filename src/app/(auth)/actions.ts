@@ -7,6 +7,8 @@ import { createServerClient } from '@/lib/supabase/server'
 import { sendEmail } from '@/lib/email/send'
 import { welcomeTemplate } from '@/lib/email/templates/welcome'
 import { upsertContact } from '@/lib/brevo/sync'
+import { peekAttempts, recordAttempt } from '@/lib/rate-limit'
+import { getCallerIp } from '@/lib/utils/caller-ip'
 
 // ── Validation schemas ──────────────────────────────────────────────────────
 
@@ -154,6 +156,34 @@ export async function signIn(input: {
   }
 
   const { email, password, redirectTo } = parsed.data
+
+  // Application-layer brute-force brake. Two independent windows:
+  // per-IP catches credential-stuffing across many emails from one
+  // host; per-email catches password-spraying against one account
+  // from rotating IPs.
+  //
+  // Counts ONLY failed attempts — a real user logging into ten
+  // browsers from a coworking IP shouldn't trip the cap, but ten
+  // failed password tries should. Cap is checked up-front so callers
+  // already over the limit short-circuit without burning the upstream
+  // Supabase quota; the bucket is then bumped only when Supabase
+  // rejects the credentials.
+  const ip = await getCallerIp()
+  const ipKey = ip ? `login:ip:${ip}` : null
+  const emailKey = `login:email:${email.toLowerCase()}`
+  const limitOpts = { limit: 10, windowMs: 15 * 60 * 1000 }
+
+  if (
+    (ipKey && peekAttempts(ipKey, limitOpts) >= limitOpts.limit) ||
+    peekAttempts(emailKey, limitOpts) >= limitOpts.limit
+  ) {
+    // Friendly message — don't leak which axis tripped (an attacker
+    // probing a username could otherwise infer registration status).
+    return {
+      error: 'Too many sign-in attempts. Please wait a few minutes and try again.',
+    }
+  }
+
   const supabase = await createServerClient()
 
   const { data, error } = await supabase.auth.signInWithPassword({
@@ -162,6 +192,10 @@ export async function signIn(input: {
   })
 
   if (error) {
+    // Burn the bucket on failure only. Successful logins (the common
+    // case for legit shared-IP traffic) don't count toward the cap.
+    if (ipKey) recordAttempt(ipKey, limitOpts)
+    recordAttempt(emailKey, limitOpts)
     return { error: 'Invalid email or password' }
   }
 

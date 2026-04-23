@@ -17,6 +17,19 @@ const profileSchema = z.object({
     .url('Enter a valid URL')
     .optional()
     .or(z.literal('')),
+  // Phone is collected at sign-up; the profile UI lets the user revise
+  // it later. Stored stripped of whitespace; the DB CHECK enforces
+  // 10–15 digits with an optional leading +.
+  phone_number: z
+    .string()
+    .max(24)
+    .optional()
+    .default('')
+    .transform((v) => v.replace(/\s+/g, ''))
+    .refine(
+      (v) => v === '' || /^\+?[0-9]{10,15}$/.test(v),
+      'Enter a valid phone number',
+    ),
 })
 
 const interestsSchema = z.object({
@@ -46,8 +59,15 @@ export async function updateProfile(
     return { success: false, error: 'Authentication required' }
   }
 
-  const { full_name, job_title, company, industry, bio, linkedin_url } =
-    parsed.data
+  const {
+    full_name,
+    job_title,
+    company,
+    industry,
+    bio,
+    linkedin_url,
+    phone_number,
+  } = parsed.data
 
   const { error } = await supabase
     .from('profiles')
@@ -58,6 +78,8 @@ export async function updateProfile(
       industry: industry || null,
       bio: bio || null,
       linkedin_url: linkedin_url || null,
+      // Empty string clears the field. The column is nullable.
+      phone_number: phone_number || null,
       updated_at: new Date().toISOString(),
     })
     .eq('id', user.id)

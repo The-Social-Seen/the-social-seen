@@ -3,9 +3,13 @@
  *
  * Add new events to `AnalyticsEvents` to keep naming consistent.
  * Safe to call on the server — it's a no-op outside the browser.
+ *
+ * Reads the PostHog client from the shared module holder rather than
+ * importing `posthog-js` directly, so the SDK stays out of the bundle
+ * for visitors who decline analytics consent (CL-7).
  */
 
-import posthog from "posthog-js";
+import { getPostHog } from "./posthog-instance";
 
 export interface AnalyticsEvents {
   sign_up: {
@@ -45,8 +49,9 @@ export function track<E extends AnalyticsEventName>(
   properties: AnalyticsEvents[E],
 ): void {
   if (typeof window === "undefined") return;
-  if (!posthog.__loaded) return;
-  posthog.capture(event, properties);
+  const ph = getPostHog();
+  if (!ph?.__loaded) return;
+  ph.capture(event, properties);
 }
 
 /**
@@ -59,8 +64,9 @@ export function identifyUser(
   traits?: { email?: string; is_admin?: boolean },
 ): void {
   if (typeof window === "undefined") return;
-  if (!posthog.__loaded) return;
-  posthog.identify(userId, traits);
+  const ph = getPostHog();
+  if (!ph?.__loaded) return;
+  ph.identify(userId, traits);
 }
 
 /**
@@ -68,6 +74,7 @@ export function identifyUser(
  */
 export function resetAnalytics(): void {
   if (typeof window === "undefined") return;
-  if (!posthog.__loaded) return;
-  posthog.reset();
+  const ph = getPostHog();
+  if (!ph?.__loaded) return;
+  ph.reset();
 }

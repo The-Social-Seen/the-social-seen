@@ -15,6 +15,29 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 
 ## 🔴 Security / compliance
 
+### Migrate CSP `script-src` to nonce-based — required for the `httpOnly: false` posture to be defensible
+**Source:** CL-7 code review (where the CSP itself shipped).
+**Rationale:** The CSP shipped in `next.config.ts` allows `'unsafe-inline'` in `script-src` because we render an inline theme-detection script in `app/layout.tsx`. That means an XSS in the app can still execute inline `<script>` and read `document.cookie` — including the Supabase auth cookie that `src/lib/supabase/middleware.ts` deliberately leaves with `httpOnly: false` so the browser client can read it. The cookie comment used to claim "CSP is the compensating control"; until this follow-up lands, that's only partially true.
+**Action:** Generate a per-request nonce in middleware, expose via a request header (e.g. `x-csp-nonce`), read in the root layout Server Component, render the inline theme script with `nonce={nonce}`, and drop `'unsafe-inline'` from `script-src` (replace with `'nonce-...'`). Roughly 30 lines across `src/lib/supabase/middleware.ts`, `src/app/layout.tsx`, and `next.config.ts`.
+**Priority:** **High** — this gates the cookie-storage decision the rest of the codebase depends on.
+
+### Refactor existing `callerIp` duplicates to the shared `getCallerIp` helper
+**Source:** CL-7 code review.
+**Rationale:** `src/lib/utils/caller-ip.ts` is now the canonical helper but `src/app/contact/actions.ts:65` and `src/app/newsletter/actions.ts:54` still have their own private copies. Three-line cleanup; matters because the next caller (e.g. signup throttling) should not invent a fourth.
+**Action:** Replace both inline `callerIp` functions with `import { getCallerIp } from '@/lib/utils/caller-ip'`.
+**Priority:** Low.
+
+### Cover the rate-limited signIn flow with an integration test
+**Source:** CL-7 code review.
+**Rationale:** The unit-tests for `src/lib/rate-limit.ts` cover the limiter in isolation; the wiring into `signIn` (which axes are checked, that successful logins do NOT bump the bucket, that the friendly "too many attempts" error surfaces) is currently uncovered.
+**Action:** Add a Vitest case that stubs `supabase.auth.signInWithPassword` to fail 10× then asserts the 11th `signIn` returns the friendly error without ever calling Supabase.
+**Priority:** Low.
+
+### Add a phone-field test to `EditProfileForm`
+**Source:** CL-7 code review.
+**Rationale:** The phone input was added without an accompanying test. The wider form is well-tested; phone needs a render + change + submit assertion.
+**Priority:** Low.
+
 ### Dedicated `UNSUBSCRIBE_TOKEN_SECRET` — rotate off the service-role fallback
 **Source:** Phase 2.5 Batch 2 code review.
 **Rationale:** Unsubscribe + newsletter HMAC tokens fall back to `SUPABASE_SERVICE_ROLE_KEY` as the signing secret when `UNSUBSCRIBE_TOKEN_SECRET` is unset. Works for v1; rotating the service role key (ever) silently invalidates every outstanding token in flight.
