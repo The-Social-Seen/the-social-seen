@@ -30,17 +30,31 @@ export function uniquePassword(): string {
 }
 
 /**
- * Fill /join Step 1 (Account) and click Continue. Waits for the form
- * to advance to Step 2 (Interests) before returning.
+ * Fill /join Step 1 (Account) and click Continue. Waits for the
+ * Step 1 heading to be visible first so framer-motion's slide-in
+ * animation has finished before we start typing — otherwise the
+ * fields exist in the DOM but Playwright's visibility check fails
+ * while the wrapping motion.div is still off-screen.
+ *
+ * Targets fields by stable `id` attributes (form has `id="name"`,
+ * `id="email"`, `id="password"`, `id="phoneNumber"`) to avoid
+ * label-text collisions with the Footer's newsletter signup form
+ * (which carries `aria-label="Email address for newsletter"`).
  */
 export async function fillRegistrationStep1(
   page: Page,
   fields: RegistrationFormFields,
 ): Promise<void> {
-  await page.getByLabel(/full name/i).fill(fields.fullName)
-  await page.getByLabel(/email address/i).fill(fields.email)
-  await page.getByLabel(/^password$/i).fill(fields.password)
-  await page.getByLabel(/phone number/i).fill(fields.phoneNumber)
+  // Wait for the Step 1 heading so the AnimatePresence slide-in
+  // resolves before we type. 10s covers cold-start dev-server hydration.
+  await page
+    .getByRole('heading', { name: /create your account/i })
+    .waitFor({ state: 'visible', timeout: 10_000 })
+
+  await page.locator('#name').fill(fields.fullName)
+  await page.locator('#email').fill(fields.email)
+  await page.locator('#password').fill(fields.password)
+  await page.locator('#phoneNumber').fill(fields.phoneNumber)
 
   if (fields.emailConsent) {
     await page
@@ -53,7 +67,13 @@ export async function fillRegistrationStep1(
       .check()
   }
 
-  await page.getByRole('button', { name: /^continue$/i }).click()
+  // Two "Continue" buttons can exist on /join (Steps 1 + 2 are mounted
+  // in the same form, switched by AnimatePresence). Scope to the
+  // first visible match.
+  await page
+    .getByRole('button', { name: /^continue$/i })
+    .first()
+    .click()
 }
 
 /**
@@ -80,6 +100,10 @@ export async function fillRegistrationStep2(
  * Submit the login form with email + password and wait for navigation
  * to settle. Does NOT assert success — caller decides what success
  * means (could be `/events`, `/verify`, `/admin`, etc.).
+ *
+ * Targets by id (`#login-email`, `#login-password`) to avoid the
+ * Footer newsletter form's `aria-label="Email address for newsletter"`
+ * which otherwise causes a strict-mode `getByLabel` collision.
  */
 export async function signInViaForm(
   page: Page,
@@ -87,8 +111,15 @@ export async function signInViaForm(
   password: string,
 ): Promise<void> {
   await page.goto('/login')
-  await page.getByLabel(/email address/i).fill(email)
-  await page.getByLabel(/password/i).fill(password)
+  await page
+    .getByRole('heading', { name: /welcome back/i })
+    .waitFor({ state: 'visible', timeout: 10_000 })
+    .catch(() => {
+      // Login page heading wording may drift; the field-level wait
+      // below catches any actual mount issue.
+    })
+  await page.locator('#login-email').fill(email)
+  await page.locator('#login-password').fill(password)
   await page.getByRole('button', { name: /^sign in$/i }).click()
 }
 
