@@ -33,6 +33,12 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 **Action:** Add a Vitest case that stubs `supabase.auth.signInWithPassword` to fail 10× then asserts the 11th `signIn` returns the friendly error without ever calling Supabase.
 **Priority:** Low.
 
+### Diagnose Supabase-local OTP delivery for the login + verify E2E scenario
+**Source:** CL-7 CI runs.
+**Rationale:** `e2e/ui/auth.spec.ts` scenario 3 is currently `test.skip()`'d. Inbucket IS running in CI and the plus-alias normalisation is correct, but `waitForOtp` times out — the OTP email never lands in the mailbox we poll. Possible causes include Supabase auth's OTP mailer using a different Inbucket route, a `@test.local` domain filter, or an autoconfirm short-circuit for users seeded with `email_confirm: true`.
+**Action:** Run scenario 3 locally with Inbucket's webUI open at `http://127.0.0.1:54324` to see which mailbox (if any) receives the OTP, then adjust `emailToMailbox` / `waitForOtp` accordingly. If Supabase local skips the send entirely for pre-confirmed users, switch the fixture to use an unconfirmed seed or invoke the OTP via the app's `sendVerificationOtp` Server Action from the test.
+**Priority:** Medium — the register flows (scenarios 1 + 2) cover the signup path; this scenario is the only E2E of the verify flow.
+
 ### Add a phone-field test to `EditProfileForm`
 **Source:** CL-7 code review.
 **Rationale:** The phone input was added without an accompanying test. The wider form is well-tested; phone needs a render + change + submit assertion.
