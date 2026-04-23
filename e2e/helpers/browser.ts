@@ -45,26 +45,29 @@ export async function fillRegistrationStep1(
   page: Page,
   fields: RegistrationFormFields,
 ): Promise<void> {
-  // Wait for the Step 1 heading so the AnimatePresence slide-in
-  // resolves before we type. 10s covers cold-start dev-server hydration.
-  await page
-    .getByRole('heading', { name: /create your account/i })
-    .waitFor({ state: 'visible', timeout: 10_000 })
+  // Wait until the input is attached to the DOM (not visible — the
+  // form is wrapped in framer-motion AnimatePresence with `initial:
+  // {x:300, opacity:0}` which makes Playwright's visibility check
+  // misfire intermittently even after the slide-in completes).
+  await page.locator('#name').waitFor({ state: 'attached', timeout: 15_000 })
 
-  await page.locator('#name').fill(fields.fullName)
-  await page.locator('#email').fill(fields.email)
-  await page.locator('#password').fill(fields.password)
-  await page.locator('#phoneNumber').fill(fields.phoneNumber)
+  // `force: true` skips the "visible + stable" wait. The inputs are
+  // focusable + keystroke-receiving the moment they're attached;
+  // Playwright's stricter visibility check is the false-positive.
+  await page.locator('#name').fill(fields.fullName, { force: true })
+  await page.locator('#email').fill(fields.email, { force: true })
+  await page.locator('#password').fill(fields.password, { force: true })
+  await page.locator('#phoneNumber').fill(fields.phoneNumber, { force: true })
 
   if (fields.emailConsent) {
     await page
       .getByRole('checkbox', { name: /keep me updated/i })
-      .check()
+      .check({ force: true })
   }
   if (fields.smsConsent) {
     await page
       .getByRole('checkbox', { name: /text me venue reveals/i })
-      .check()
+      .check({ force: true })
   }
 
   // Two "Continue" buttons can exist on /join (Steps 1 + 2 are mounted
@@ -73,7 +76,7 @@ export async function fillRegistrationStep1(
   await page
     .getByRole('button', { name: /^continue$/i })
     .first()
-    .click()
+    .click({ force: true })
 }
 
 /**
@@ -90,10 +93,14 @@ export async function fillRegistrationStep2(
   picks = 1,
 ): Promise<void> {
   const interestPills = page.getByTestId('interest-pill')
+  await interestPills.first().waitFor({ state: 'attached', timeout: 15_000 })
   for (let i = 0; i < picks; i++) {
-    await interestPills.nth(i).click()
+    await interestPills.nth(i).click({ force: true })
   }
-  await page.getByRole('button', { name: /^continue$/i }).click()
+  await page
+    .getByRole('button', { name: /^continue$/i })
+    .first()
+    .click({ force: true })
 }
 
 /**
@@ -112,15 +119,16 @@ export async function signInViaForm(
 ): Promise<void> {
   await page.goto('/login')
   await page
-    .getByRole('heading', { name: /welcome back/i })
-    .waitFor({ state: 'visible', timeout: 10_000 })
-    .catch(() => {
-      // Login page heading wording may drift; the field-level wait
-      // below catches any actual mount issue.
-    })
-  await page.locator('#login-email').fill(email)
-  await page.locator('#login-password').fill(password)
-  await page.getByRole('button', { name: /^sign in$/i }).click()
+    .locator('#login-email')
+    .waitFor({ state: 'attached', timeout: 15_000 })
+  // `force: true` for the same reason as fillRegistrationStep1 —
+  // the login form is also framer-motion-wrapped and Playwright's
+  // visibility check intermittently false-positives.
+  await page.locator('#login-email').fill(email, { force: true })
+  await page.locator('#login-password').fill(password, { force: true })
+  await page
+    .getByRole('button', { name: /^sign in$/i })
+    .click({ force: true })
 }
 
 /**
