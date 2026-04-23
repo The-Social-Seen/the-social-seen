@@ -10,6 +10,7 @@ import AccountDeletedHandler from "@/components/layout/AccountDeletedHandler";
 import { JsonLd } from "@/components/seo/JsonLd";
 import { organizationJsonLd } from "@/lib/seo/organization";
 import { getCanonicalSiteUrl } from "@/lib/utils/site";
+import { CSP_NONCE_HEADER } from "@/lib/security/csp";
 import "./globals.css";
 
 const playfair = Playfair_Display({
@@ -80,6 +81,10 @@ export default async function RootLayout({
   const headerList = await headers();
   const pathname = headerList.get("x-pathname") ?? "";
   const isAdmin = pathname.startsWith("/admin");
+  // Per-request nonce set by middleware. Applied to the inline
+  // theme-detect script so CSP can drop `'unsafe-inline'` — the
+  // script runs, attacker-injected `<script>` tags don't.
+  const cspNonce = headerList.get(CSP_NONCE_HEADER) ?? undefined;
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -89,6 +94,7 @@ export default async function RootLayout({
             attach the brand knowledge panel + link the social profiles back. */}
         <JsonLd data={organizationJsonLd()} />
         <script
+          nonce={cspNonce}
           dangerouslySetInnerHTML={{
             __html: `
               (function() {
