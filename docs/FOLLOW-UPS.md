@@ -35,8 +35,13 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 
 ### Diagnose Supabase-local OTP delivery for the login + verify E2E scenario
 **Source:** CL-7 CI runs.
-**Rationale:** `e2e/ui/auth.spec.ts` scenario 3 is currently `test.skip()`'d. Inbucket IS running in CI and the plus-alias normalisation is correct, but `waitForOtp` times out — the OTP email never lands in the mailbox we poll. Possible causes include Supabase auth's OTP mailer using a different Inbucket route, a `@test.local` domain filter, or an autoconfirm short-circuit for users seeded with `email_confirm: true`.
-**Action:** Run scenario 3 locally with Inbucket's webUI open at `http://127.0.0.1:54324` to see which mailbox (if any) receives the OTP, then adjust `emailToMailbox` / `waitForOtp` accordingly. If Supabase local skips the send entirely for pre-confirmed users, switch the fixture to use an unconfirmed seed or invoke the OTP via the app's `sendVerificationOtp` Server Action from the test.
+**Rationale:** `e2e/ui/auth.spec.ts` scenario 3 is currently `test.skip()`'d. Inbucket IS running in CI and the plus-alias normalisation is correct, but `waitForOtp` times out — the OTP email never lands in the mailbox we poll.
+**Candidate causes (check in this order):**
+1. **Supabase's `rate_limit_email_sent` (4/hour default, project-wide)** — should reset per CI run but worth checking Auth Logs for `over_email_send_rate_limit`.
+2. **Autoconfirm short-circuit** for users seeded with `admin.createUser({ email_confirm: true })` — `signInWithOtp` may skip the send entirely when the email is already confirmed at the auth-user level.
+3. **Inbucket mailbox routing** — OTP may be landing in a different mailbox shape than our helper expects (beyond the plus-alias stripping we already do).
+4. **`@test.local` domain filter** in Supabase Auth.
+**Action:** Run scenario 3 locally with Inbucket's webUI open at `http://127.0.0.1:54324` and Supabase's Auth Logs open; see which mailbox (if any) receives the OTP and whether the send even fires. Fix whichever bucket the evidence points at — likely either switch the fixture to an unverified seed that triggers a real signup OTP, or invoke the OTP via the app's `sendVerificationOtp` Server Action from the test rather than via `/verify` auto-fire.
 **Priority:** Medium — the register flows (scenarios 1 + 2) cover the signup path; this scenario is the only E2E of the verify flow.
 
 ### Add a phone-field test to `EditProfileForm`
