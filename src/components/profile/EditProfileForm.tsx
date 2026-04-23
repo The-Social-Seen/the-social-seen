@@ -25,6 +25,7 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
   const [industry, setIndustry] = useState(profile.industry ?? '')
   const [bio, setBio] = useState(profile.bio ?? '')
   const [linkedinUrl, setLinkedinUrl] = useState(profile.linkedin_url ?? '')
+  const [phoneNumber, setPhoneNumber] = useState(profile.phone_number ?? '')
   const [selectedInterests, setSelectedInterests] = useState<string[]>(profile.interests)
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null)
   const [avatarFile, setAvatarFile] = useState<File | null>(null)
@@ -82,6 +83,11 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
       newErrors.linkedin_url = 'Enter a valid LinkedIn URL'
     }
 
+    const phoneStripped = phoneNumber.replace(/\s+/g, '')
+    if (phoneStripped && !/^\+?[0-9]{10,15}$/.test(phoneStripped)) {
+      newErrors.phone_number = 'Enter a valid phone number'
+    }
+
     if (selectedInterests.length === 0) {
       newErrors.interests = 'Select at least one interest'
     }
@@ -114,6 +120,7 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
         industry: industry.trim(),
         bio: bio.trim(),
         linkedin_url: linkedinUrl.trim(),
+        phone_number: phoneNumber.trim(),
       })
 
       if (!profileResult.success) {
@@ -267,6 +274,21 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
                 onChange={(e) => setLinkedinUrl(e.target.value)}
                 className={cn(fieldClass, errors.linkedin_url && 'border-danger')}
                 placeholder="https://linkedin.com/in/yourname"
+              />
+            </FieldGroup>
+
+            {/* Phone — collected at sign-up; editable here. Used for
+                event reminders + venue-reveal SMS (gated by sms_consent). */}
+            <FieldGroup label="Phone number" error={errors.phone_number}>
+              <input
+                type="tel"
+                inputMode="tel"
+                value={phoneNumber}
+                onChange={(e) => setPhoneNumber(e.target.value)}
+                maxLength={24}
+                autoComplete="tel"
+                className={cn(fieldClass, errors.phone_number && 'border-danger')}
+                placeholder="07123 456789 or +44 7123 456789"
               />
             </FieldGroup>
 

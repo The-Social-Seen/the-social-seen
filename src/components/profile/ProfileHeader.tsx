@@ -1,7 +1,7 @@
 'use client'
 
 import Image from 'next/image'
-import { Edit3, Linkedin, ExternalLink, Briefcase, Building2, Calendar } from 'lucide-react'
+import { Edit3, Linkedin, ExternalLink, Briefcase, Building2, Calendar, Phone } from 'lucide-react'
 import { resolveAvatarUrl, getInitials } from '@/lib/utils/images'
 import type { Profile } from '@/types'
 
@@ -85,10 +85,10 @@ export function ProfileHeader({ profile, onEditClick }: ProfileHeaderProps) {
             </p>
           )}
 
-          {/* Member since + LinkedIn */}
+          {/* Member since + LinkedIn + phone (owner-only) */}
           <div className="mb-4 flex flex-wrap items-center gap-4 text-sm text-text-tertiary">
             <span className="flex items-center gap-1.5">
-              <Calendar className="h-3.5 w-3.5" />
+              <Calendar aria-hidden="true" className="h-3.5 w-3.5" />
               Member since {memberSince}
             </span>
             {profile.linkedin_url && (
@@ -98,10 +98,20 @@ export function ProfileHeader({ profile, onEditClick }: ProfileHeaderProps) {
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 transition-colors hover:text-gold"
               >
-                <Linkedin className="h-3.5 w-3.5" />
+                <Linkedin aria-hidden="true" className="h-3.5 w-3.5" />
                 LinkedIn
-                <ExternalLink className="h-3 w-3" />
+                <ExternalLink aria-hidden="true" className="h-3 w-3" />
               </a>
+            )}
+            {/* Phone is sensitive — this header only renders for the
+                signed-in owner of the profile, so showing the number
+                is fine. The /admin profile-browser uses a separate
+                read path. */}
+            {profile.phone_number && (
+              <span className="flex items-center gap-1.5">
+                <Phone aria-hidden="true" className="h-3.5 w-3.5" />
+                {profile.phone_number}
+              </span>
             )}
           </div>
 

@@ -393,6 +393,7 @@ function StepInterests({ selected, onToggle, error, loading, onSubmit, onBack }:
             <button
               key={interest.value}
               type="button"
+              data-testid="interest-pill"
               onClick={() => onToggle(interest.value)}
               className={cn(
                 'rounded-full border px-4 py-2 text-sm font-medium transition-all duration-200',

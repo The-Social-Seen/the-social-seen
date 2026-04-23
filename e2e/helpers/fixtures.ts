@@ -23,6 +23,12 @@ export type UserStatus = 'active' | 'suspended' | 'banned'
 export interface TestUser {
   id: string
   email: string
+  /**
+   * Password used at admin.createUser time. Returned so UI E2E specs
+   * can drive the actual /login form for the seeded user instead of
+   * hand-injecting cookies.
+   */
+  password: string
   accessToken: string
 }
 
@@ -97,6 +103,7 @@ export async function createTestUser(
   return {
     id: created.user.id,
     email,
+    password,
     accessToken: signInBody.access_token,
   }
 }

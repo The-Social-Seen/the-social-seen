@@ -45,8 +45,16 @@ export async function updateSession(request: NextRequest) {
           supabaseResponse.cookies.set(name, value, {
             ...options,
             // httpOnly must be false so createBrowserClient can read the auth
-            // token from document.cookie. XSS → session theft is mitigated by
-            // Content-Security-Policy headers (see next.config.ts), not httpOnly.
+            // token from document.cookie.
+            //
+            // ⚠ The CSP shipped in next.config.ts currently allows
+            // `'unsafe-inline'` in script-src (for the inline theme-
+            // detection script in app/layout.tsx), so it does NOT
+            // meaningfully block XSS-driven cookie exfiltration yet.
+            // Tracked in docs/FOLLOW-UPS.md → "Migrate CSP script-src
+            // to nonce-based". Until that lands, treat this cookie
+            // as XSS-exposed and weight any pending XSS findings
+            // accordingly.
             httpOnly: false,
           })
         )
