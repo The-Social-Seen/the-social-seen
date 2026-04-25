@@ -10,7 +10,7 @@ import {
   Check,
   CalendarPlus,
 } from "lucide-react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { formatDateFull, formatTimeRange } from "@/lib/utils/dates";
 import { formatPrice } from "@/lib/utils/currency";
 import { downloadIcsFile } from "@/lib/utils/calendar";
@@ -290,22 +290,25 @@ function ConfirmedState({
   booking: Booking;
   userName: string | null;
 }) {
+  const router = useRouter();
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [cancelError, setCancelError] = useState<string | null>(null);
 
-  // 48h refund policy preview — same cut-off as server-side constant.
-  // Captured at mount via useState's lazy initializer: runs once,
-  // doesn't re-read Date.now() on every render, and satisfies the
-  // "no impure calls in render" lint rule. The value is stable enough
-  // for the lifetime of the sidebar — no one keeps it open long
-  // enough for the window to cross 48h mid-session.
+  // Per-event refund-policy preview. Mirrors the server logic in
+  // cancelBooking: refund_window_hours = 0 → non-refundable; otherwise
+  // eligible if hoursUntilEvent > refund_window_hours. Captured at
+  // mount via useState's lazy initializer so we don't re-read Date.now
+  // on every render and don't violate the "no impure calls in render"
+  // lint rule — the window won't cross mid-session.
   const isPaid = event.price > 0;
+  const refundWindowHours = event.refund_window_hours;
+  const isNonRefundable = isPaid && refundWindowHours === 0;
   const [refundEligible] = useState(() => {
-    if (!isPaid) return false;
+    if (!isPaid || refundWindowHours === 0) return false;
     const hoursUntilEvent =
       (new Date(event.date_time).getTime() - Date.now()) / (1000 * 60 * 60);
-    return hoursUntilEvent > 48;
+    return hoursUntilEvent > refundWindowHours;
   });
 
   function handleCancel() {
@@ -316,11 +319,13 @@ function ConfirmedState({
         setCancelError(result.error ?? "Something went wrong. Please try again.");
         return;
       }
-      // Success — full refresh so the sidebar re-renders in the
-      // LoggedOutState/BookableState and the cancellation is reflected
-      // in the bookings list. The refund (if any) was already issued
-      // server-side.
-      window.location.reload();
+      // Navigate to the cancellation-confirmed page so the user gets
+      // a clear acknowledgement screen (mirrors the "you're going"
+      // booking-success flow). Server has already issued any refund.
+      const refundedPence = result.refundedPence ?? 0;
+      router.push(
+        `/events/${event.slug}/cancellation-confirmed?refunded_pence=${refundedPence}`,
+      );
     });
   }
 
@@ -387,9 +392,11 @@ function ConfirmedState({
             </p>
             {isPaid && (
               <p className="mb-3 text-xs text-text-primary/60">
-                {refundEligible
-                  ? `We\u2019ll refund ${formatPrice(booking.price_at_booking)} to your card (2\u20133 working days).`
-                  : "Cancellations within 48h of the event aren\u2019t refundable."}
+                {isNonRefundable
+                  ? "This event is non-refundable."
+                  : refundEligible
+                    ? `We\u2019ll refund ${formatPrice(booking.price_at_booking)} to your card (2\u20133 working days).`
+                    : `Cancellations within ${refundWindowHours}h of the event aren\u2019t refundable.`}
               </p>
             )}
             {cancelError && (

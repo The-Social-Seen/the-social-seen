@@ -44,6 +44,7 @@ export default async function AdminEventEditPage({ params }: PageProps) {
       capacity: data.capacity,
       image_url: data.image_url,
       dress_code: data.dress_code,
+      refund_window_hours: data.refund_window_hours,
       is_published: data.is_published,
     }
     inclusions = (data.inclusions ?? []).map((inc: { label: string; icon: string | null }) => ({

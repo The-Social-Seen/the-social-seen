@@ -29,7 +29,23 @@ interface EventData {
   capacity: number | null
   image_url: string | null
   dress_code: string | null
+  refund_window_hours: number
   is_published: boolean
+}
+
+type RefundPolicyChoice = 'none' | 'standard' | 'custom'
+
+function deriveRefundPolicy(hours: number | undefined): {
+  choice: RefundPolicyChoice
+  customHours: string
+} {
+  if (hours === undefined || hours === 48) {
+    return { choice: 'standard', customHours: '' }
+  }
+  if (hours === 0) {
+    return { choice: 'none', customHours: '' }
+  }
+  return { choice: 'custom', customHours: String(hours) }
 }
 
 interface Inclusion {
@@ -60,6 +76,12 @@ export default function EventForm({ event, inclusions: initialInclusions }: Even
   const [inclusions, setInclusions] = useState<Inclusion[]>(
     initialInclusions ?? []
   )
+
+  const initialRefund = deriveRefundPolicy(event?.refund_window_hours)
+  const [refundPolicy, setRefundPolicy] = useState<RefundPolicyChoice>(
+    initialRefund.choice
+  )
+  const [customHours, setCustomHours] = useState(initialRefund.customHours)
 
   const liveSlug = slugify(title)
 
@@ -251,6 +273,66 @@ export default function EventForm({ event, inclusions: initialInclusions }: Even
           className="form-input"
           placeholder="Unlimited"
         />
+      </FormField>
+
+      <FormField
+        label="Refund Policy"
+        hint="When can customers cancel for a refund?"
+      >
+        <div className="space-y-2">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-text-primary">
+            <input
+              type="radio"
+              name="refund_policy"
+              value="none"
+              checked={refundPolicy === 'none'}
+              onChange={() => setRefundPolicy('none')}
+              className="h-4 w-4 accent-gold"
+            />
+            <span>No refunds &mdash; this event is non-refundable</span>
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-text-primary">
+            <input
+              type="radio"
+              name="refund_policy"
+              value="standard"
+              checked={refundPolicy === 'standard'}
+              onChange={() => setRefundPolicy('standard')}
+              className="h-4 w-4 accent-gold"
+            />
+            <span>48 hours before the event (recommended)</span>
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-text-primary">
+            <input
+              type="radio"
+              name="refund_policy"
+              value="custom"
+              checked={refundPolicy === 'custom'}
+              onChange={() => setRefundPolicy('custom')}
+              className="h-4 w-4 accent-gold"
+            />
+            <span>Custom &mdash; refunds close N hours before the event</span>
+          </label>
+          {refundPolicy === 'custom' && (
+            <div className="ml-6 mt-1 max-w-xs">
+              <input
+                name="refund_window_custom_hours"
+                type="number"
+                min={1}
+                step={1}
+                required
+                value={customHours}
+                onChange={(e) => setCustomHours(e.target.value)}
+                className="form-input"
+                placeholder="e.g. 72"
+                aria-label="Custom refund window in hours"
+              />
+              <p className="mt-1 text-xs text-text-tertiary">
+                Hours before start. e.g. 72 = 3 days, 168 = 7 days.
+              </p>
+            </div>
+          )}
+        </div>
       </FormField>
 
       <FormField label="Image URL" hint="External image URL for the event">

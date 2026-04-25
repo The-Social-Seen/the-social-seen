@@ -93,6 +93,9 @@ export interface Event {
   capacity:          number | null  // null = unlimited capacity
   image_url:         string | null
   dress_code:        string | null
+  // Hours before start within which cancellations are refunded.
+  // 0 = non-refundable. Default 48. Per-event configurable.
+  refund_window_hours: number
   is_published:      boolean
   is_cancelled:      boolean
   created_at:        string
