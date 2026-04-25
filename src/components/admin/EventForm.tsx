@@ -138,8 +138,10 @@ export default function EventForm({ event, inclusions: initialInclusions }: Even
           placeholder="Wine & Wisdom at Borough Market"
         />
         {title && (
-          <p className="mt-1 text-xs text-text-tertiary">
-            thesocialseen.com/events/<span className="text-gold">{liveSlug}</span>
+          <p className="mt-1 text-xs text-text-tertiary truncate">
+            <span className="hidden md:inline">thesocialseen.com/events/</span>
+            <span className="md:hidden">…/events/</span>
+            <span className="text-gold">{liveSlug}</span>
           </p>
         )}
       </FormField>
@@ -247,8 +249,8 @@ export default function EventForm({ event, inclusions: initialInclusions }: Even
           />
         </FormField>
 
-        <div className="flex items-end pb-2">
-          <label className="flex items-center gap-3 cursor-pointer">
+        <div className="flex items-end md:pb-2">
+          <label className="flex items-center gap-3 cursor-pointer min-h-[44px]">
             <input
               name="venue_hidden"
               type="checkbox"
@@ -256,7 +258,7 @@ export default function EventForm({ event, inclusions: initialInclusions }: Even
               defaultChecked={event ? !event.venue_revealed : true}
               className="sr-only peer"
             />
-            <div className="relative w-11 h-6 bg-bg-tertiary rounded-full peer peer-checked:bg-gold transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-gold/50 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
+            <span className="relative w-11 h-6 bg-bg-tertiary rounded-full peer peer-checked:bg-gold transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-gold/50 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full shrink-0" />
             <span className="text-sm font-medium text-text-primary">
               Hide venue until 1 week before
             </span>
@@ -279,42 +281,42 @@ export default function EventForm({ event, inclusions: initialInclusions }: Even
         label="Refund Policy"
         hint="When can customers cancel for a refund?"
       >
-        <div className="space-y-2">
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-text-primary">
+        <div className="space-y-1">
+          <label className="flex cursor-pointer items-center gap-3 text-sm text-text-primary min-h-[44px] py-1">
             <input
               type="radio"
               name="refund_policy"
               value="none"
               checked={refundPolicy === 'none'}
               onChange={() => setRefundPolicy('none')}
-              className="h-4 w-4 accent-gold"
+              className="h-4 w-4 accent-gold shrink-0"
             />
             <span>No refunds &mdash; this event is non-refundable</span>
           </label>
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-text-primary">
+          <label className="flex cursor-pointer items-center gap-3 text-sm text-text-primary min-h-[44px] py-1">
             <input
               type="radio"
               name="refund_policy"
               value="standard"
               checked={refundPolicy === 'standard'}
               onChange={() => setRefundPolicy('standard')}
-              className="h-4 w-4 accent-gold"
+              className="h-4 w-4 accent-gold shrink-0"
             />
             <span>48 hours before the event (recommended)</span>
           </label>
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-text-primary">
+          <label className="flex cursor-pointer items-center gap-3 text-sm text-text-primary min-h-[44px] py-1">
             <input
               type="radio"
               name="refund_policy"
               value="custom"
               checked={refundPolicy === 'custom'}
               onChange={() => setRefundPolicy('custom')}
-              className="h-4 w-4 accent-gold"
+              className="h-4 w-4 accent-gold shrink-0"
             />
             <span>Custom &mdash; refunds close N hours before the event</span>
           </label>
           {refundPolicy === 'custom' && (
-            <div className="ml-6 mt-1 max-w-xs">
+            <div className="ml-7 mt-2 max-w-xs">
               <input
                 name="refund_window_custom_hours"
                 type="number"
@@ -357,8 +359,8 @@ export default function EventForm({ event, inclusions: initialInclusions }: Even
 
       <InclusionsList items={inclusions} onChange={setInclusions} />
 
-      <div className="flex items-center gap-3">
-        <label className="relative inline-flex items-center cursor-pointer">
+      <label className="flex cursor-pointer items-center gap-3 min-h-[44px]">
+        <span className="relative inline-flex items-center">
           <input
             name="is_published"
             type="checkbox"
@@ -366,32 +368,59 @@ export default function EventForm({ event, inclusions: initialInclusions }: Even
             defaultChecked={event?.is_published ?? false}
             className="sr-only peer"
           />
-          <div className="w-11 h-6 bg-bg-tertiary rounded-full peer peer-checked:bg-gold transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-gold/50 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
-        </label>
+          <span className="w-11 h-6 bg-bg-tertiary rounded-full peer peer-checked:bg-gold transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-gold/50 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
+        </span>
         <span className="text-sm font-medium text-text-primary">Published</span>
+      </label>
+
+      {/*
+        Sticky save bar on mobile. position: sticky lets iOS Safari push
+        the bar above the keyboard naturally (per the Step-2 brief — `fixed`
+        causes the keyboard to occlude the bar). On lg+ this is a normal
+        in-flow row with the original styling.
+
+        bottom-16 keeps the bar above the 64px AdminSidebar bottom-nav.
+        pb-[max(0.75rem,env(safe-area-inset-bottom))] handles devices with
+        a home indicator. -mx-4 / -mb-4 extend the bar to the card edges
+        (the wrapper is bg-bg-card border rounded-xl p-6 → effectively p-4
+        on mobile after spec §1.1; we negate the horizontal padding here).
+      */}
+      <div className="sticky bottom-16 lg:static z-10 -mx-6 -mb-6 lg:m-0 mt-6 bg-bg-card border-t border-border px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:bg-transparent lg:border-0 lg:px-0 lg:py-0 lg:pt-4 lg:border-t lg:border-border">
+        <div className="flex flex-col-reverse gap-3 lg:flex-row lg:items-center lg:gap-3">
+          <button
+            type="button"
+            onClick={() => router.push('/admin/events')}
+            className="border border-border text-text-primary font-medium text-sm px-8 py-3 rounded-full hover:bg-bg-secondary transition-colors min-h-[44px] w-full lg:w-auto"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={isPending}
+            className="bg-gold hover:bg-gold-dark text-white font-medium text-sm px-8 py-3 rounded-full transition-colors disabled:opacity-50 min-h-[44px] w-full lg:w-auto"
+          >
+            {isPending ? (
+              'Saving...'
+            ) : isEditing ? (
+              <>
+                <span className="lg:hidden">Save</span>
+                <span className="hidden lg:inline">Update Event</span>
+              </>
+            ) : (
+              <>
+                <span className="lg:hidden">Create</span>
+                <span className="hidden lg:inline">Create Event</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
-      <div className="flex items-center gap-3 pt-4 border-t border-border">
-        <button
-          type="submit"
-          disabled={isPending}
-          className="bg-gold hover:bg-gold-dark text-white font-medium text-sm px-8 py-3 rounded-full transition-colors disabled:opacity-50"
-        >
-          {isPending ? 'Saving...' : isEditing ? 'Update Event' : 'Create Event'}
-        </button>
-        <button
-          type="button"
-          onClick={() => router.push('/admin/events')}
-          className="border border-border text-text-primary font-medium text-sm px-8 py-3 rounded-full hover:bg-bg-secondary transition-colors"
-        >
-          Cancel
-        </button>
-      </div>
-
-      {/* Style for form inputs */}
+      {/* Style for form inputs — 44px min-height on mobile, 36px on md+. */}
       <style jsx global>{`
         .form-input {
           width: 100%;
+          min-height: 2.75rem;
           padding: 0.5rem 0.75rem;
           border-radius: 0.5rem;
           border: 1px solid var(--color-border);
@@ -402,6 +431,11 @@ export default function EventForm({ event, inclusions: initialInclusions }: Even
         .form-input:focus {
           outline: none;
           box-shadow: 0 0 0 2px rgba(201, 169, 110, 0.5);
+        }
+        @media (min-width: 768px) {
+          .form-input {
+            min-height: 0;
+          }
         }
       `}</style>
     </form>

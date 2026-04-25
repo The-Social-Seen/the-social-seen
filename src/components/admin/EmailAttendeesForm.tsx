@@ -74,7 +74,7 @@ export default function EmailAttendeesForm({
           maxLength={MAX_SUBJECT}
           disabled={disabled || isPending}
           placeholder="Quick update on tonight's venue"
-          className="w-full px-3 py-2 rounded-lg border border-border bg-bg-card text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-gold/50 disabled:opacity-50"
+          className="w-full px-3 h-11 md:h-9 rounded-lg border border-border bg-bg-card text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-gold/50 disabled:opacity-50"
           required
         />
         <p className="text-xs text-text-tertiary mt-1">
@@ -117,7 +117,7 @@ export default function EmailAttendeesForm({
         </p>
       )}
 
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col-reverse gap-3 md:flex-row md:items-center md:justify-between">
         <p className="text-sm text-text-tertiary">
           {disabled
             ? 'No confirmed attendees to email yet.'
@@ -126,10 +126,25 @@ export default function EmailAttendeesForm({
         <button
           type="submit"
           disabled={disabled || isPending || subject.length < 3 || body.length < 10}
-          className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-gold text-white hover:bg-gold-hover transition-colors text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px]"
+          className="inline-flex items-center justify-center gap-2 px-5 py-2 rounded-full bg-gold text-white hover:bg-gold-hover transition-colors text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px] w-full md:w-auto"
         >
           <Send className="w-4 h-4" />
-          {isPending ? 'Sending…' : 'Send to Attendees'}
+          {isPending ? (
+            'Sending…'
+          ) : (
+            <>
+              {/*
+                On mobile the form is stacked and "Send to {N}" anchors the
+                action to the actual recipient count. On md+ the count sits
+                in the helper text above and the CTA reads "Send to Attendees"
+                to avoid duplicating the number.
+              */}
+              <span className="md:hidden">
+                Send to {confirmedCount}
+              </span>
+              <span className="hidden md:inline">Send to Attendees</span>
+            </>
+          )}
         </button>
       </div>
 

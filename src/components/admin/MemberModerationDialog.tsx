@@ -87,13 +87,30 @@ export default function MemberModerationDialog({
     <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+        {/*
+          Bottom-sheet on mobile, centred card on desktop — matches the
+          public BookingModal pattern. See ConfirmDialog for the same
+          treatment; this dialog is bespoke (4 stateful action buttons)
+          so we duplicate the responsive class set rather than try to
+          force everything through ConfirmDialog.
+        */}
         <Dialog.Content
           className={cn(
-            'fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-border bg-bg-card p-6 shadow-xl',
+            'fixed z-50 border border-border bg-bg-card shadow-xl',
+            'inset-x-0 bottom-0 top-auto w-full max-h-[90vh] overflow-y-auto rounded-t-2xl rounded-b-none p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]',
+            'md:inset-x-auto md:left-1/2 md:top-1/2 md:bottom-auto md:max-w-md md:max-h-none md:overflow-visible md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-2xl md:pb-6',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold',
-            'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
+            'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+            'data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom',
+            'md:data-[state=closed]:slide-out-to-bottom-0 md:data-[state=open]:slide-in-from-bottom-0',
+            'md:data-[state=closed]:zoom-out-95 md:data-[state=open]:zoom-in-95',
           )}
         >
+          {/* Mobile drag handle (visual cue only) */}
+          <div className="md:hidden -mt-2 mb-3 flex justify-center">
+            <span aria-hidden="true" className="h-1 w-10 rounded-full bg-border" />
+          </div>
+
           <div className="mb-4 flex items-start justify-between gap-3">
             <div>
               <Dialog.Title className="font-serif text-xl font-bold text-text-primary">
@@ -107,7 +124,7 @@ export default function MemberModerationDialog({
               </Dialog.Description>
             </div>
             <Dialog.Close
-              className="rounded-lg p-1 text-text-tertiary transition-colors hover:bg-bg-secondary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold"
+              className="rounded-lg p-1 text-text-tertiary transition-colors hover:bg-bg-secondary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center shrink-0"
               aria-label="Close moderation dialog"
             >
               <X className="h-4 w-4" />
@@ -145,13 +162,19 @@ export default function MemberModerationDialog({
             </p>
           )}
 
-          <div className="flex flex-wrap justify-end gap-2">
+          {/*
+            Mobile: actions stack full-width, top→bottom Reinstate, Suspend,
+            Ban, Cancel. Per spec §1.5 — most destructive (Ban) is in the
+            primary-thumb zone; Cancel anchors the bottom as the safe exit.
+            Desktop: original right-aligned wrap-row.
+          */}
+          <div className="flex flex-col gap-2 md:flex-row md:flex-wrap md:justify-end">
             {(isSuspended || isBanned) && (
               <button
                 type="button"
                 onClick={() => run(reinstateMember)}
                 disabled={isPending}
-                className="rounded-full bg-success px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-success/90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold"
+                className="rounded-full bg-success px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-success/90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold min-h-[44px] md:min-h-0 w-full md:w-auto"
               >
                 Reinstate
               </button>
@@ -161,7 +184,7 @@ export default function MemberModerationDialog({
                 type="button"
                 onClick={() => run(suspendMember)}
                 disabled={isPending || isBanned}
-                className="rounded-full border border-gold/40 bg-gold/10 px-4 py-2 text-sm font-medium text-gold transition-colors hover:bg-gold/20 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold"
+                className="rounded-full border border-gold/40 bg-gold/10 px-4 py-2 text-sm font-medium text-gold transition-colors hover:bg-gold/20 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold min-h-[44px] md:min-h-0 w-full md:w-auto"
               >
                 Suspend
               </button>
@@ -171,13 +194,13 @@ export default function MemberModerationDialog({
                 type="button"
                 onClick={() => run(banMember)}
                 disabled={isPending}
-                className="rounded-full bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold"
+                className="rounded-full bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold min-h-[44px] md:min-h-0 w-full md:w-auto"
               >
                 Ban
               </button>
             )}
             <Dialog.Close
-              className="rounded-full border border-border px-4 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-bg-secondary disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold"
+              className="rounded-full border border-border px-4 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-bg-secondary disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold min-h-[44px] md:min-h-0 w-full md:w-auto"
               disabled={isPending}
             >
               Cancel
