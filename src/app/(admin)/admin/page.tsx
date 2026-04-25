@@ -24,8 +24,12 @@ export default async function AdminDashboardPage() {
     <div className="space-y-6">
       <h1 className="font-serif text-2xl text-text-primary">Dashboard</h1>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      {/*
+        KPI Cards — 2-up on mobile so all four headline metrics are
+        visible without scroll at 375px. Tighter gap + padding on mobile
+        keeps the £-revenue value within its card.
+      */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
         <KPICard
           icon={Users}
           label="Total Members"

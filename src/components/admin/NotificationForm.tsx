@@ -57,7 +57,7 @@ export default function NotificationForm() {
           required
           value={recipientType}
           onChange={(e) => setRecipientType(e.target.value)}
-          className="w-full px-3 py-2 rounded-lg border border-border bg-bg-card text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold/50"
+          className="w-full px-3 h-11 md:h-9 rounded-lg border border-border bg-bg-card text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold/50"
         >
           <option value="all">All Members</option>
           <option value="event_attendees">Event Attendees</option>
@@ -77,7 +77,7 @@ export default function NotificationForm() {
           name="subject"
           type="text"
           required
-          className="w-full px-3 py-2 rounded-lg border border-border bg-bg-card text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold/50"
+          className="w-full px-3 h-11 md:h-9 rounded-lg border border-border bg-bg-card text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold/50"
           placeholder="New event this Saturday!"
         />
       </div>
@@ -99,7 +99,7 @@ export default function NotificationForm() {
       <button
         type="submit"
         disabled={isPending}
-        className="inline-flex items-center gap-2 bg-gold hover:bg-gold-dark text-white font-medium text-sm px-6 py-2.5 rounded-full transition-colors disabled:opacity-50"
+        className="inline-flex items-center justify-center gap-2 bg-gold hover:bg-gold-dark text-white font-medium text-sm px-6 py-2.5 rounded-full transition-colors disabled:opacity-50 min-h-[44px] w-full md:w-auto"
       >
         <Send className="w-4 h-4" />
         {isPending ? 'Sending...' : 'Send Notification'}
