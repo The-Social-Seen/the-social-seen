@@ -343,6 +343,11 @@ export async function createPaidCheckout(
       '[createPaidCheckout] Stripe flow failed, rolling back booking:',
       err instanceof Error ? err.message : err,
     )
+    Sentry.captureException(err, {
+      tags: { surface: 'createPaidCheckout' },
+      extra: { bookingId, eventId, userId: user.id },
+      level: 'error',
+    })
     await supabase
       .from('bookings')
       .update({ status: 'cancelled' as BookingStatus })
