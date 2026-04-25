@@ -15,6 +15,18 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 
 ## 🔴 Bugs / regressions to investigate
 
+### Orphan `pending_payment` row when Stripe Checkout creation fails
+**Source:** User report, post-CL-9.
+**Symptom:** Failed paid-event booking shows the generic "Something went wrong" error in the modal, BUT a `pending_payment` row was already inserted by the `book_event_paid` RPC. The orphan shows in the user's bookings list. Cancelling it returns "Booking not found" / "Only confirmed bookings can be cancelled" because `cancelBooking` (src/app/events/[slug]/actions.ts:657) gates on `status === 'confirmed'`.
+**Root cause:** `createPaidCheckout` calls `book_event_paid` (commits a `pending_payment` row) BEFORE creating the Stripe Checkout session. If Stripe session creation fails (network, key missing, webhook secret mismatch, etc.) the row is never rolled back. Two failure modes layered on top:
+  1. The user is stranded — no checkout to retry, no working cancel button.
+  2. The seat counts toward capacity (book_event's confirmed_count includes pending_payment) so it blocks a real attendee from booking.
+**Fix (two layers, both small):**
+  1. **Atomic rollback** in `createPaidCheckout`: wrap Stripe session creation in try/catch; on failure, soft-delete the freshly-created booking row before returning the error.
+  2. **Allow cancel on `pending_payment`**: `cancelBooking` should accept `pending_payment` (just flip status to 'cancelled', no Stripe refund needed since no charge happened). The existing `abandonPendingCheckout` does this for the back-button flow but isn't reachable from the bookings-list UI.
+**Manual cleanup until fixed:** SQL `UPDATE bookings SET status='cancelled', updated_at=now() WHERE id='<orphan-id>';`
+**Priority:** **HIGH — same root as the "Something went wrong" report; stranded users + blocked seats.**
+
 ### Paid-event booking returns "Something went wrong" on production
 **Source:** User report, post-CL-9.
 **Symptom:** Clicking "Book" on a paid event shows the generic BookingModal error toast. No Stripe Checkout redirect.
