@@ -13,6 +13,30 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 
 ---
 
+## 🔴 Bugs / regressions to investigate
+
+### Paid-event booking returns "Something went wrong" on production
+**Source:** User report, post-CL-9.
+**Symptom:** Clicking "Book" on a paid event shows the generic BookingModal error toast. No Stripe Checkout redirect.
+**Diagnostic order:**
+1. Vercel function logs (filter to Errors + `/events/[slug]`) — gives the actual exception thrown by the Server Action.
+2. Stripe dashboard → Developers → Logs — if request never reached Stripe, the failure is upstream (env / RPC / verification gate).
+3. Most likely cause: `profiles.email_verified = false` for the booker → `book_event_paid` RPC rejects with "Verify your email before booking", but the BookingModal swallows the message into the generic toast. Verify by `UPDATE profiles SET email_verified = true WHERE email = '...';` and retrying.
+4. Other suspects: `STRIPE_SECRET_KEY` missing in Vercel Production env, `book_event_paid` migration (20260423000001) not yet applied to the hosted project, Stripe webhook signing secret mismatch.
+**Fix once diagnosed:**
+- If verification gate: surface the RPC's `error` field to the user instead of the generic fallback. One-line change in `src/app/events/[slug]/actions.ts` createPaidCheckout — bubble `data.error` from the RPC response into the action's return.
+- If env / migration: pure operator fix, no code change.
+**Priority:** **HIGH — blocks first paid booking.**
+
+### Admin area is not mobile-friendly
+**Source:** User report, post-CL-9.
+**Rationale:** `/admin/*` routes were built desktop-first. The DataTable component overflows on small screens; the event create/edit form, attendee list, members table, reviews moderation, and notifications retry view all need a responsive pass.
+**Action:** Sprint-sized — touch every `/admin/*` page. DataTable likely needs a card-on-mobile variant; tables should swap to stacked rows below the `md:` breakpoint. Forms need single-column reflow.
+**Estimate:** ~1.5–2 days for a full responsive pass on the admin surface.
+**Priority:** Medium — admin is operator-only, so it doesn't block members. Worth doing before a second admin joins (cofounder, events ops, etc.).
+
+---
+
 ## 🔴 Security / compliance
 
 ### Refactor existing `callerIp` duplicates to the shared `getCallerIp` helper
