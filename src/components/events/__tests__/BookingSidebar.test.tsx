@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import type { EventDetail, Booking } from '@/types'
 
 // ── Mocks ──────────────────────────────────────────────────────────────────────
@@ -34,9 +34,18 @@ vi.mock('next/link', () => ({
 
 // WaitlistedState reads `?claim=1` via useSearchParams. Default to an
 // empty params object so the default render path stays un-claim-y.
+const mockRouterPush = vi.fn()
 vi.mock('next/navigation', () => ({
   useSearchParams: () => ({
     get: (_key: string) => null,
+  }),
+  useRouter: () => ({
+    push: mockRouterPush,
+    replace: vi.fn(),
+    refresh: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    prefetch: vi.fn(),
   }),
 }))
 
@@ -77,6 +86,7 @@ function makeEvent(overrides: Partial<EventDetail> = {}): EventDetail {
     capacity: 30,
     image_url: null,
     dress_code: null,
+    refund_window_hours: 48,
     is_published: true,
     is_cancelled: false,
     created_at: '2026-01-01T00:00:00Z',
@@ -214,6 +224,37 @@ describe('BookingSidebar', () => {
     )
 
     expect(screen.getByText('Need to cancel?')).toBeTruthy()
+  })
+
+  it('shows "non-refundable" copy in cancel modal when event refund_window_hours is 0', async () => {
+    render(
+      <BookingSidebar
+        event={makeEvent({ price: 3500, refund_window_hours: 0 })}
+        userBooking={makeBooking({ status: 'confirmed', price_at_booking: 3500 })}
+        {...defaultProps}
+      />
+    )
+
+    fireEvent.click(screen.getByText('Need to cancel?'))
+    expect(screen.getByText(/non-refundable/i)).toBeTruthy()
+  })
+
+  it('shows custom-window copy in cancel modal when refund_window_hours is non-default', async () => {
+    // Future event 1h away, 168h (7-day) refund window → ineligible.
+    render(
+      <BookingSidebar
+        event={makeEvent({
+          price: 3500,
+          refund_window_hours: 168,
+          date_time: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        })}
+        userBooking={makeBooking({ status: 'confirmed', price_at_booking: 3500 })}
+        {...defaultProps}
+      />
+    )
+
+    fireEvent.click(screen.getByText('Need to cancel?'))
+    expect(screen.getByText(/within 168h/i)).toBeTruthy()
   })
 
   // ── Waitlisted state ──

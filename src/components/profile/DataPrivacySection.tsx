@@ -138,9 +138,10 @@ export default function DataPrivacySection() {
             </p>
             <p className="rounded-lg border border-gold/30 bg-gold/5 p-3 text-xs">
               <strong>Heads-up:</strong> If you have a confirmed paid
-              booking, cancel it first. The 48h refund policy still
-              applies &mdash; deleting your account doesn&rsquo;t trigger
-              refunds for events within 48 hours.
+              booking, cancel it first. Each event&rsquo;s refund policy
+              still applies &mdash; deleting your account doesn&rsquo;t
+              trigger refunds for cancellations outside the refund
+              window.
             </p>
           </>
         }

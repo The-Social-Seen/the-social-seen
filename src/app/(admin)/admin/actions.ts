@@ -96,6 +96,10 @@ const eventFormSchema = z.object({
   capacity: z.number().int().positive().nullable(),
   image_url: z.string().url().nullable().or(z.literal('')).transform(v => v || null),
   dress_code: z.string().nullable().transform(v => v || null),
+  refund_window_hours: z
+    .number()
+    .int('Refund window must be a whole number')
+    .min(0, 'Refund window cannot be negative'),
   is_published: z.boolean(),
 }).refine(
   (data) => new Date(data.end_time) > new Date(data.date_time),
@@ -132,6 +136,20 @@ function parseEventFormData(formData: FormData) {
     ? parseInt(capacityRaw, 10)
     : null
 
+  // Refund policy: 'none' → 0, 'standard' → 48, 'custom' → user input.
+  // The form falls back to 'standard' when the field is missing (older
+  // form payloads, programmatic submissions) so existing behaviour is
+  // preserved.
+  const refundPolicy = (formData.get('refund_policy') as string) || 'standard'
+  let refundWindowHours = 48
+  if (refundPolicy === 'none') {
+    refundWindowHours = 0
+  } else if (refundPolicy === 'custom') {
+    const customRaw = formData.get('refund_window_custom_hours') as string
+    const parsed = parseInt(customRaw, 10)
+    refundWindowHours = Number.isFinite(parsed) && parsed > 0 ? parsed : 48
+  }
+
   return {
     title: (formData.get('title') as string) ?? '',
     description: (formData.get('description') as string) ?? '',
@@ -148,6 +166,7 @@ function parseEventFormData(formData: FormData) {
     capacity,
     image_url: (formData.get('image_url') as string) || null,
     dress_code: (formData.get('dress_code') as string) || null,
+    refund_window_hours: refundWindowHours,
     is_published: formData.get('is_published') === 'true',
   }
 }
@@ -309,6 +328,7 @@ export async function createEvent(formData: FormData) {
       capacity: data.capacity,
       image_url: data.image_url,
       dress_code: data.dress_code,
+      refund_window_hours: data.refund_window_hours,
       is_published: data.is_published,
     })
     .select()
@@ -385,6 +405,7 @@ export async function updateEvent(eventId: string, formData: FormData) {
       capacity: data.capacity,
       image_url: data.image_url,
       dress_code: data.dress_code,
+      refund_window_hours: data.refund_window_hours,
       is_published: data.is_published,
     })
     .eq('id', eventId)
@@ -463,6 +484,7 @@ export async function duplicateEvent(
       capacity: source.capacity,
       image_url: source.image_url,
       dress_code: source.dress_code,
+      refund_window_hours: source.refund_window_hours,
       is_published: false,
       is_cancelled: false,
     })

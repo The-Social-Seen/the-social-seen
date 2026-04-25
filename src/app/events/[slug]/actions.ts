@@ -33,9 +33,11 @@ interface ActionResult {
   checkoutUrl?: string
   /**
    * Cancellation-refund outcome (populated by cancelBooking).
-   *   - refundedPence > 0 + refundEligible: full refund issued (48h+ before event)
-   *   - refundedPence = 0 + !refundEligible: paid event, cancellation within 48h → no refund
-   *   - undefined: free event or nothing cancellation-related
+   *   - refundedPence > 0 + refundEligible: full refund issued (cancellation
+   *     was outside the event's refund_window_hours).
+   *   - refundedPence = 0 + !refundEligible: paid event, cancellation inside
+   *     the window OR event marked non-refundable (refund_window_hours = 0).
+   *   - undefined: free event or nothing cancellation-related.
    */
   refundedPence?: number
   refundEligible?: boolean
@@ -600,13 +602,20 @@ export async function abandonPendingCheckout(
 // ── cancelBooking ────────────────���──────────────────────────────────────────
 
 /**
- * Cancellation policy (P2-7b):
+ * Cancellation policy:
  *   - Free events: status → cancelled, no payment touched.
- *   - Paid events > 48h before start: status → cancelled, full Stripe
- *     refund issued. stripe_refund_id + refunded_amount_pence recorded.
- *   - Paid events ≤ 48h before start: status → cancelled, NO refund.
- *     `refundEligible: false` in the result so the UI can show the
- *     policy line without sending a second API call.
+ *   - Paid events, refund_window_hours = 0: status → cancelled, NO
+ *     refund (event is non-refundable by configuration).
+ *   - Paid events, hoursUntilEvent > refund_window_hours: status →
+ *     cancelled, full Stripe refund issued. stripe_refund_id +
+ *     refunded_amount_pence recorded.
+ *   - Paid events, hoursUntilEvent ≤ refund_window_hours: status →
+ *     cancelled, NO refund. `refundEligible: false` in the result so
+ *     the UI can show the policy line without sending a second API
+ *     call.
+ *
+ * `refund_window_hours` is per-event (defaults to 48). 0 is the
+ * sentinel for "non-refundable".
  *
  * After a successful cancel (any branch), we fire-and-forget a "spot
  * available" email to every remaining waitlisted member. First-to-pay
@@ -623,8 +632,6 @@ export async function abandonPendingCheckout(
  *     the same refund id from being recorded on two rows (defence in
  *     depth; not reachable under normal flow).
  */
-const REFUND_WINDOW_HOURS = 48
-
 export async function cancelBooking(bookingId: string): Promise<ActionResult> {
   if (!bookingId) {
     return { success: false, error: 'Booking ID is required' }
@@ -665,7 +672,7 @@ export async function cancelBooking(bookingId: string): Promise<ActionResult> {
 
   const { data: event, error: eventError } = await supabase
     .from('events')
-    .select('date_time, slug')
+    .select('date_time, slug, refund_window_hours')
     .eq('id', booking.event_id)
     .single()
 
@@ -679,13 +686,17 @@ export async function cancelBooking(bookingId: string): Promise<ActionResult> {
     return { success: false, error: 'Cannot cancel a booking for a past event' }
   }
 
-  // Refund decision. Paid event AND >48h before start AND we have a
-  // payment id AND we haven't already refunded (idempotency).
+  // Refund decision. Paid event AND outside the per-event refund window
+  // AND we have a payment id AND we haven't already refunded
+  // (idempotency). refund_window_hours = 0 → non-refundable.
   const hoursUntilEvent =
     (eventStart.getTime() - now.getTime()) / (1000 * 60 * 60)
   const isPaid =
     (booking.price_at_booking ?? 0) > 0 && !!booking.stripe_payment_id
-  const refundEligible = isPaid && hoursUntilEvent > REFUND_WINDOW_HOURS
+  const refundEligible =
+    isPaid &&
+    event.refund_window_hours > 0 &&
+    hoursUntilEvent > event.refund_window_hours
   const alreadyRefunded = (booking.refunded_amount_pence ?? 0) > 0
 
   let stripeRefundId: string | null = null

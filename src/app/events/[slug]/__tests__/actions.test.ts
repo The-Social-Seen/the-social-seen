@@ -452,9 +452,16 @@ describe('cancelBooking', () => {
    */
   function stubCancelSequence(opts: {
     booking: Record<string, unknown>
-    event: { date_time: string; slug: string }
+    event: { date_time: string; slug: string; refund_window_hours?: number }
     updateResult?: { data: unknown; error: unknown }
   }) {
+    // Default refund_window_hours to 48 (the standard policy) so tests
+    // that don't care about per-event configuration get the legacy
+    // behaviour. Tests covering "non-refundable" policy pass 0 explicitly.
+    const eventWithDefaults = {
+      refund_window_hours: 48,
+      ...opts.event,
+    }
     let callCount = 0
     mockFrom.mockImplementation(() => {
       callCount++
@@ -469,7 +476,7 @@ describe('cancelBooking', () => {
         )
       } else if (callCount === 2) {
         chain.then = vi.fn((resolve: (v: unknown) => void) =>
-          resolve({ data: opts.event, error: null }),
+          resolve({ data: eventWithDefaults, error: null }),
         )
       } else {
         chain.then = vi.fn((resolve: (v: unknown) => void) =>
@@ -530,6 +537,89 @@ describe('cancelBooking', () => {
       event: {
         date_time: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
         slug: 'wine',
+      },
+    })
+
+    const result = await cancelBooking('bk-1')
+    expect(result.success).toBe(true)
+    expect(result.refundEligible).toBe(false)
+    expect(result.refundedPence).toBe(0)
+    expect(mockStripeRefundCreate).not.toHaveBeenCalled()
+  })
+
+  it('does NOT refund paid booking when event is non-refundable (refund_window_hours = 0)', async () => {
+    authenticateUser('user-1')
+    stubCancelSequence({
+      booking: {
+        id: 'bk-1',
+        user_id: 'user-1',
+        event_id: 'evt-1',
+        status: 'confirmed',
+        price_at_booking: 3500,
+        stripe_payment_id: 'pi_xyz',
+        refunded_amount_pence: 0,
+      },
+      event: {
+        // 7 days out — well beyond the default 48h window — but the
+        // event is configured non-refundable, so no refund issues.
+        date_time: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        slug: 'supper-club',
+        refund_window_hours: 0,
+      },
+    })
+
+    const result = await cancelBooking('bk-1')
+    expect(result.success).toBe(true)
+    expect(result.refundEligible).toBe(false)
+    expect(result.refundedPence).toBe(0)
+    expect(mockStripeRefundCreate).not.toHaveBeenCalled()
+  })
+
+  it('refunds paid booking when cancelled outside a custom 168h (7-day) window', async () => {
+    authenticateUser('user-1')
+    mockStripeRefundCreate.mockResolvedValueOnce({ id: 're_custom' })
+    stubCancelSequence({
+      booking: {
+        id: 'bk-1',
+        user_id: 'user-1',
+        event_id: 'evt-1',
+        status: 'confirmed',
+        price_at_booking: 8500,
+        stripe_payment_id: 'pi_custom',
+        refunded_amount_pence: 0,
+      },
+      event: {
+        // 10 days out, custom 7-day window → eligible.
+        date_time: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+        slug: 'long-lead-event',
+        refund_window_hours: 168,
+      },
+    })
+
+    const result = await cancelBooking('bk-1')
+    expect(result.success).toBe(true)
+    expect(result.refundEligible).toBe(true)
+    expect(result.refundedPence).toBe(8500)
+    expect(mockStripeRefundCreate).toHaveBeenCalled()
+  })
+
+  it('does NOT refund paid booking inside a custom 168h (7-day) window', async () => {
+    authenticateUser('user-1')
+    stubCancelSequence({
+      booking: {
+        id: 'bk-1',
+        user_id: 'user-1',
+        event_id: 'evt-1',
+        status: 'confirmed',
+        price_at_booking: 8500,
+        stripe_payment_id: 'pi_custom',
+        refunded_amount_pence: 0,
+      },
+      event: {
+        // 5 days out with a 7-day window → ineligible.
+        date_time: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(),
+        slug: 'long-lead-event',
+        refund_window_hours: 168,
       },
     })
 

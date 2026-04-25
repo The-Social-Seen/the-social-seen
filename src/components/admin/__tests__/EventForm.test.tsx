@@ -43,6 +43,7 @@ describe('EventForm', () => {
           capacity: 20,
           image_url: null,
           dress_code: null,
+          refund_window_hours: 48,
           is_published: true,
         }}
       />
