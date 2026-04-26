@@ -1,6 +1,5 @@
 import { createServerClient } from '@/lib/supabase/server'
 import type {
-  EventCategory,
   EventDetail,
   EventPhoto,
   EventWithStats,
@@ -399,10 +398,23 @@ export async function getEventPhotos(eventId: string): Promise<EventPhoto[]> {
 // ── Related events ───────────────────────────────────────────────────────────
 
 /**
- * Fetch up to 3 related events in the same category (excluding the current one).
+ * Fetch up to 3 related events sharing the same primary tag (excluding the
+ * current one).
+ *
+ * F1b-app: filter is on `event_tags.tags.slug` (sharper match) rather than
+ * the legacy `events.category` enum (which collapses 15→9). A Theatre &
+ * Comedy event now returns only Theatre & Comedy peers, not the wider
+ * `cultural` bucket that used to also pull in Galleries & Museums,
+ * Festivals & Seasonal, and Charity & Volunteering.
+ *
+ * The `primaryTagSlug` arg is the slug from the source event's
+ * `primary_tag.slug` (member-facing pages already have it on the row).
+ * `is_primary = true` is part of the filter because event_tags also stores
+ * secondary tags — we want events whose PRIMARY matches, not events that
+ * merely have this tag as a secondary.
  */
 export async function getRelatedEvents(
-  category: EventCategory,
+  primaryTagSlug: string,
   excludeId: string,
 ): Promise<EventWithStats[]> {
   const supabase = await createServerClient()
@@ -410,11 +422,11 @@ export async function getRelatedEvents(
   const { data, error } = await supabase
     .from('event_with_stats')
     .select(`*, ${PRIMARY_TAG_EMBED}`)
-    .eq('category', category)
+    .eq('event_tags.is_primary', true)
+    .eq('event_tags.tags.slug', primaryTagSlug)
     .neq('id', excludeId)
     .eq('is_published', true)
     .eq('is_cancelled', false)
-    .eq('event_tags.is_primary', true)
     .order('date_time', { ascending: true })
     .limit(3)
 

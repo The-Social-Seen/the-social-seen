@@ -179,10 +179,12 @@ describe('BookingCard', () => {
     mockIsWithin48Hours.mockReturnValue(false)
   })
 
-  it('shows category label', () => {
+  it('shows the primary_tag label (F1b-app — was categoryLabel(event.category))', () => {
     render(<BookingCard booking={makeBooking()} variant="upcoming" />)
 
-    expect(screen.getByText('Dining')).toBeTruthy()
+    expect(screen.getByText('Dining & Supper Clubs')).toBeTruthy()
+    // Must NOT render the legacy enum label
+    expect(screen.queryByText('Dining')).toBeNull()
   })
 
   it('renders placeholder when event has no image', () => {

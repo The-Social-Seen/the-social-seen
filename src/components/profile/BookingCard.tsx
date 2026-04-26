@@ -7,7 +7,6 @@ import { cn } from '@/lib/utils/cn'
 import { resolveEventImage } from '@/lib/utils/images'
 import { formatDateCard, formatTime, isWithin48Hours } from '@/lib/utils/dates'
 import { downloadIcsFile } from '@/lib/utils/calendar'
-import { categoryLabel } from '@/types'
 import type { BookingWithEvent } from '@/types'
 import ShareActions from '@/components/shared/ShareActions'
 
@@ -56,8 +55,9 @@ export function BookingCard({ booking, variant, isReviewable, onReviewClick }: B
         <div className="flex flex-1 flex-col justify-between p-4 sm:p-5">
           <div>
             <div className="mb-2 flex flex-wrap items-center gap-2">
+              {/* Primary-tag chip (F1b-app — was categoryLabel(event.category)) */}
               <span className="rounded-full border border-gold/20 px-2.5 py-0.5 text-xs font-medium text-gold">
-                {categoryLabel(event.category)}
+                {event.primary_tag.label}
               </span>
               <StatusBadge status={booking.status} waitlistPosition={booking.waitlist_position} />
             </div>

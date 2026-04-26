@@ -459,10 +459,10 @@ export default function EventDetailClient({
             <div className="mx-auto max-w-7xl px-6 py-16">
               <motion.div {...fadeInUp}>
                 <div className="mb-8 flex items-center justify-between">
-                  {/* Heading uses primary_tag.label (F1a). Related events
-                      are still filtered by legacy category at the page
-                      layer (getRelatedEvents takes EventCategory) — that
-                      stays until F1b widens the related-events query. */}
+                  {/* Heading and the related-events query both key off
+                      primary_tag.slug (F1b-app). A Theatre & Comedy event
+                      now shows ONLY Theatre & Comedy peers — no more
+                      legacy `cultural`-bucket spillover. */}
                   <h2 className="text-2xl font-bold text-text-primary">
                     More {event.primary_tag.label} Events
                   </h2>
