@@ -4,13 +4,15 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { slugify } from '@/lib/utils/slugify'
 import { penceToPounds } from '@/lib/utils/currency'
-import { CATEGORY_LABELS, type EventCategory } from '@/types'
 import {
   createEvent,
+  saveEventTags,
   updateEvent,
   upsertEventInclusions,
 } from '@/app/(admin)/admin/actions'
 import InclusionsList from './InclusionsList'
+import TagPicker from './TagPicker'
+import type { Tag } from '@/types'
 
 interface EventData {
   id?: string
@@ -24,13 +26,17 @@ interface EventData {
   venue_address: string
   postcode: string | null
   venue_revealed: boolean
-  category: EventCategory
   price: number
   capacity: number | null
   image_url: string | null
   dress_code: string | null
   refund_window_hours: number
   is_published: boolean
+}
+
+export interface EventTagSelection {
+  primary: string | null
+  secondaries: string[]
 }
 
 type RefundPolicyChoice = 'none' | 'standard' | 'custom'
@@ -56,6 +62,10 @@ interface Inclusion {
 interface EventFormProps {
   event?: EventData
   inclusions?: Inclusion[]
+  /** Active taxonomy — required by the new tag picker. Empty array is treated as "tags not loaded". */
+  availableTags?: Tag[]
+  /** Pre-existing tag selection for edit screens; null primary means a new event. */
+  initialTagSelection?: EventTagSelection
 }
 
 function toDatetimeLocal(iso: string): string {
@@ -66,15 +76,32 @@ function toDatetimeLocal(iso: string): string {
   return local.toISOString().slice(0, 16)
 }
 
-export default function EventForm({ event, inclusions: initialInclusions }: EventFormProps) {
+export default function EventForm({
+  event,
+  inclusions: initialInclusions,
+  availableTags = [],
+  initialTagSelection,
+}: EventFormProps) {
   const router = useRouter()
   const isEditing = !!event?.id
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
+  const [tagError, setTagError] = useState<string | null>(null)
 
   const [title, setTitle] = useState(event?.title ?? '')
   const [inclusions, setInclusions] = useState<Inclusion[]>(
     initialInclusions ?? []
+  )
+
+  // Tag picker state — independent of the form, submitted via hidden inputs
+  // (primary_tag_slug + secondary_tag_slugs). The Server Action reads
+  // primary_tag_slug to derive the legacy `events.category` enum value;
+  // saveEventTags is then called separately to write event_tags rows.
+  const [primaryTagSlug, setPrimaryTagSlug] = useState<string | null>(
+    initialTagSelection?.primary ?? null,
+  )
+  const [secondaryTagSlugs, setSecondaryTagSlugs] = useState<string[]>(
+    initialTagSelection?.secondaries ?? [],
   )
 
   const initialRefund = deriveRefundPolicy(event?.refund_window_hours)
@@ -87,6 +114,25 @@ export default function EventForm({ event, inclusions: initialInclusions }: Even
 
   function handleSubmit(formData: FormData) {
     setError(null)
+    setTagError(null)
+
+    // Client-side guard: primary required.
+    if (!primaryTagSlug) {
+      setTagError(
+        'Pick a primary tag — this is the main category for the event.',
+      )
+      return
+    }
+    // Client-side guard: same tag in both slots is forbidden. The picker
+    // UI prevents this, but a defensive recheck before submit closes any
+    // race window.
+    if (secondaryTagSlugs.includes(primaryTagSlug)) {
+      setTagError(
+        'A tag can’t be both primary and secondary on the same event. Pick one.',
+      )
+      return
+    }
+
     startTransition(async () => {
       const result = isEditing
         ? await updateEvent(event!.id!, formData)
@@ -113,6 +159,20 @@ export default function EventForm({ event, inclusions: initialInclusions }: Even
             }))
           )
         }
+      }
+
+      // Persist event_tags via the dedicated Server Action. Server-side
+      // collision guard (defence in depth) re-checks primary !== secondaries.
+      const tagsResult = await saveEventTags(
+        eventId,
+        primaryTagSlug,
+        secondaryTagSlugs,
+      )
+      if (!tagsResult.success) {
+        setTagError(tagsResult.error ?? 'Failed to save tags')
+        // Don't navigate — the event row exists but tags didn't save.
+        // Admin can fix the picker and re-submit.
+        return
       }
 
       router.push(`/admin/events/${eventId}`)
@@ -169,28 +229,34 @@ export default function EventForm({ event, inclusions: initialInclusions }: Even
         />
       </FormField>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <FormField label="Category">
-          <select name="category" required defaultValue={event?.category ?? ''} className="form-input">
-            <option value="" disabled>Select category</option>
-            {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
-              <option key={value} value={value}>{label}</option>
-            ))}
-          </select>
-        </FormField>
+      {/* Phase 3 W5 — replaces the legacy `category` <select>. The tag
+          picker holds primary + secondary slugs in component state and
+          submits primary_tag_slug as a hidden input via the radio inputs;
+          secondary_tag_slugs is a comma-joined hidden input rendered by
+          the picker itself. The legacy events.category column is derived
+          server-side via `legacyCategoryForSlug()` and kept in sync by
+          the bidirectional trigger from the first event_tags primary
+          INSERT onwards. */}
+      <TagPicker
+        availableTags={availableTags}
+        primarySlug={primaryTagSlug}
+        secondarySlugs={secondaryTagSlugs}
+        onPrimaryChange={setPrimaryTagSlug}
+        onSecondariesChange={setSecondaryTagSlugs}
+        error={tagError}
+      />
 
-        <FormField label="Price (£)" hint="0 = free event">
-          <input
-            name="price"
-            type="number"
-            min={0}
-            step="0.01"
-            required
-            defaultValue={event ? penceToPounds(event.price) : 0}
-            className="form-input"
-          />
-        </FormField>
-      </div>
+      <FormField label="Price (£)" hint="0 = free event">
+        <input
+          name="price"
+          type="number"
+          min={0}
+          step="0.01"
+          required
+          defaultValue={event ? penceToPounds(event.price) : 0}
+          className="form-input"
+        />
+      </FormField>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <FormField label="Start Date & Time">

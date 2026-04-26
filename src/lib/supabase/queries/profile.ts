@@ -1,5 +1,11 @@
 import { createServerClient } from '@/lib/supabase/server'
-import type { Profile, UserInterest, BookingWithEvent } from '@/types'
+import type {
+  AgeRange,
+  BookingWithEvent,
+  Gender,
+  Profile,
+  UserInterest,
+} from '@/types'
 
 // ── Profile + interests ─────────────────────────────────────────────────────
 
@@ -44,8 +50,12 @@ export async function getProfile(
     console.error('[getProfile:interests]', interestsResult.error.message)
   }
 
+  // Cast loosely — the SELECT only fetches the `interest` text column for
+  // legacy read compatibility; F2 will eventually drop the column and the
+  // join to `tags.label` becomes the source. Until then, getProfile keeps
+  // returning a `string[]` of interest labels.
   const interests = (interestsResult.data ?? []).map(
-    (row: UserInterest) => row.interest,
+    (row: Pick<UserInterest, 'interest'>) => row.interest,
   )
 
   return {
@@ -67,6 +77,43 @@ export async function getProfile(
  * SECURITY DEFINER context, scoped to `auth.uid()` so it can only ever
  * return the caller's own number.
  */
+// ── Caller's own demographics (Phase 3 W1) ──────────────────────────────────
+
+export interface MyDemographics {
+  gender: Gender | null
+  age_range: AgeRange | null
+}
+
+/**
+ * Fetches the signed-in caller's own `gender` and `age_range` via the
+ * `get_my_demographics()` SECURITY DEFINER function.
+ *
+ * Why an RPC: Phase 3 W1 narrowed the `authenticated` GRANT on
+ * `public.profiles` so column-level SELECT on these fields raises `42501`.
+ * The function bypasses that by reading inside a SECURITY DEFINER context
+ * scoped to `auth.uid()` so it can only ever return the caller's own row.
+ *
+ * Returns `{ gender: null, age_range: null }` if the caller has no row or
+ * has not set either field.
+ */
+export async function getMyDemographics(): Promise<MyDemographics> {
+  const supabase = await createServerClient()
+  const { data, error } = await supabase.rpc('get_my_demographics')
+  if (error) {
+    console.error('[getMyDemographics]', error.message)
+    return { gender: null, age_range: null }
+  }
+  // RPC `RETURNS TABLE` resolves to an array of rows. auth.uid() filter
+  // guarantees ≤1 row; empty array = no profile row (shouldn't happen
+  // post-auth, but defensive).
+  const row = Array.isArray(data) ? data[0] : null
+  if (!row) return { gender: null, age_range: null }
+  return {
+    gender: (row as { gender: Gender | null }).gender ?? null,
+    age_range: (row as { age_range: AgeRange | null }).age_range ?? null,
+  }
+}
+
 export async function getMyPhone(): Promise<string | null> {
   const supabase = await createServerClient()
   const { data, error } = await supabase.rpc('get_my_phone')

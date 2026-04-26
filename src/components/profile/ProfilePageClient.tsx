@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { ProfileHeader } from '@/components/profile/ProfileHeader'
 import { ProfileCompletionBanner } from '@/components/profile/ProfileCompletionBanner'
+import { DemographicsBanner } from '@/components/profile/DemographicsBanner'
 import { EditProfileForm } from '@/components/profile/EditProfileForm'
 import { BookingsList } from '@/components/profile/BookingsList'
 import DataPrivacySection from '@/components/profile/DataPrivacySection'
@@ -13,7 +14,12 @@ import type {
   EmailPreferences,
   SmsPreferences,
 } from '@/app/(member)/profile/preferences-actions'
-import type { Profile, BookingWithEvent } from '@/types'
+import type {
+  AgeRange,
+  BookingWithEvent,
+  Gender,
+  Profile,
+} from '@/types'
 
 interface ProfilePageClientProps {
   profile: Profile & { interests: string[] }
@@ -23,6 +29,8 @@ interface ProfilePageClientProps {
   reviewableEventIds: Set<string>
   emailPreferences: EmailPreferences | null
   smsPreferences: SmsPreferences | null
+  /** Caller's own demographics — fetched via SECURITY DEFINER RPC server-side. Never derived from member-facing reads. */
+  demographics: { gender: Gender | null; age_range: AgeRange | null }
 }
 
 export function ProfilePageClient({
@@ -33,10 +41,16 @@ export function ProfilePageClient({
   reviewableEventIds,
   emailPreferences,
   smsPreferences,
+  demographics,
 }: ProfilePageClientProps) {
   const [editOpen, setEditOpen] = useState(false)
 
   const isSuspended = profile.status === 'suspended'
+
+  // Banner shows only when at least one demographic field is unset. Members
+  // who have already filled both fields don't see the prompt again.
+  const showDemographicsBanner =
+    demographics.gender === null || demographics.age_range === null
 
   return (
     <>
@@ -70,6 +84,14 @@ export function ProfilePageClient({
         </div>
       )}
 
+      {showDemographicsBanner && (
+        <div className="mb-4">
+          <DemographicsBanner
+            initialGender={demographics.gender}
+            initialAgeRange={demographics.age_range}
+          />
+        </div>
+      )}
       <ProfileCompletionBanner profile={profile} onCompleteClick={() => setEditOpen(true)} />
       <ProfileHeader profile={profile} onEditClick={() => setEditOpen(true)} />
 

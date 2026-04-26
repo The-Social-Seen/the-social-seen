@@ -28,6 +28,19 @@ export type NotificationType = 'reminder' | 'announcement' | 'waitlist' | 'event
 
 export type NotificationRecipient = 'all' | 'event_attendees' | 'waitlisted' | 'custom'
 
+// ── Member-data demographics (Phase 3, Migration 1) ──────────────────────────
+
+export type Gender = 'female' | 'male' | 'non_binary' | 'prefer_not_to_say'
+
+export type AgeRange =
+  | '18-24'
+  | '25-29'
+  | '30-34'
+  | '35-39'
+  | '40-44'
+  | '45-49'
+  | '50+'
+
 // ── Category label map ────────────────────────────────────────────────────────
 
 export const CATEGORY_LABELS: Record<EventCategory, string> = {
@@ -158,6 +171,30 @@ export interface UserInterest {
   id:         string
   user_id:    string
   interest:   string
+  // Phase 3 Migration 3 — required FK to public.tags. Kept alongside the
+  // legacy `interest` text column until follow-up F2 drops the text column.
+  tag_id:     string
+  created_at: string
+}
+
+// ── Canonical taxonomy (Phase 3, Migration 2) ────────────────────────────────
+
+export interface Tag {
+  id:         string
+  slug:       string
+  label:      string
+  parent_id:  string | null
+  sort_order: number
+  is_active:  boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface EventTag {
+  id:         string
+  event_id:   string
+  tag_id:     string
+  is_primary: boolean
   created_at: string
 }
 

@@ -3,7 +3,8 @@ import { ArrowLeft } from 'lucide-react'
 import { getAdminEventById } from '../../actions'
 import EventForm from '@/components/admin/EventForm'
 import DuplicateEventButton from '@/components/admin/DuplicateEventButton'
-import type { EventCategory } from '@/types'
+import { getActiveTags } from '@/lib/supabase/queries/tags'
+import { getEventTagsForEvent } from '@/lib/supabase/queries/tags'
 
 interface PageProps {
   params: Promise<{ id: string }>
@@ -24,6 +25,11 @@ export default async function AdminEventEditPage({ params }: PageProps) {
 
   let event = undefined
   let inclusions = undefined
+  let initialTagSelection = undefined
+
+  // The full active taxonomy is needed for both flows (new + edit) to
+  // populate the tag picker.
+  const availableTags = await getActiveTags()
 
   if (!isNew) {
     const data = await getAdminEventById(id)
@@ -39,7 +45,6 @@ export default async function AdminEventEditPage({ params }: PageProps) {
       venue_address: data.venue_address,
       postcode: data.postcode ?? null,
       venue_revealed: data.venue_revealed ?? true,
-      category: data.category as EventCategory,
       price: data.price,
       capacity: data.capacity,
       image_url: data.image_url,
@@ -51,6 +56,7 @@ export default async function AdminEventEditPage({ params }: PageProps) {
       label: inc.label,
       icon: inc.icon ?? '',
     }))
+    initialTagSelection = await getEventTagsForEvent(data.id)
   }
 
   return (
@@ -72,7 +78,12 @@ export default async function AdminEventEditPage({ params }: PageProps) {
       </div>
 
       <div className="bg-bg-card border border-border rounded-xl p-6">
-        <EventForm event={event} inclusions={inclusions} />
+        <EventForm
+          event={event}
+          inclusions={inclusions}
+          availableTags={availableTags}
+          initialTagSelection={initialTagSelection}
+        />
       </div>
     </div>
   )

@@ -8,9 +8,12 @@ import { sendEmail } from '@/lib/email/send'
 import { adminAnnouncementTemplate } from '@/lib/email/templates/admin-announcement'
 import { isRedacted } from '@/lib/notifications/redaction'
 import { z } from 'zod'
+import {
+  legacyCategoryForSlug,
+  PRIMARY_ELIGIBLE_TAG_SLUGS,
+} from '@/lib/constants/tags'
 import type {
   BookingStatus,
-  EventCategory,
   EventWithStats,
   MemberWithStats,
   NotificationRecipient,
@@ -72,11 +75,6 @@ async function requireAdmin() {
 
 // ── Zod Schemas ──────────────────────────────────────────────────────────────
 
-const EVENT_CATEGORIES = [
-  'drinks', 'dining', 'cultural', 'wellness',
-  'sport', 'workshops', 'music', 'networking',
-] as const
-
 const eventFormSchema = z.object({
   title: z.string().min(3, 'Title must be at least 3 characters').max(200),
   description: z.string().min(10, 'Description must be at least 10 characters'),
@@ -91,7 +89,18 @@ const eventFormSchema = z.object({
     .nullable()
     .transform((v) => (v && v.trim() ? v.trim() : null)),
   venue_revealed: z.boolean(),
-  category: z.enum(EVENT_CATEGORIES),
+  // Phase 3 W5: the form submits a primary tag slug instead of the legacy
+  // `category` enum. The Server Action derives the legacy enum value
+  // server-side via `legacyCategoryForSlug()` so the events.category column
+  // (still NOT NULL until F1 drops it) gets a valid value on INSERT/UPDATE.
+  // The bidirectional trigger keeps the column in sync with subsequent
+  // event_tags primary changes.
+  primary_tag_slug: z
+    .string()
+    .min(1, 'Pick a primary tag — this is the main category for the event.')
+    .refine((slug) => PRIMARY_ELIGIBLE_TAG_SLUGS.has(slug), {
+      message: 'Pick a primary tag from the allowed list.',
+    }),
   price: z.number().min(0, 'Price cannot be negative'),
   capacity: z.number().int().positive().nullable(),
   image_url: z.string().url().nullable().or(z.literal('')).transform(v => v || null),
@@ -161,7 +170,8 @@ function parseEventFormData(formData: FormData) {
     postcode: (formData.get('postcode') as string) || null,
     // Form checkbox is "Hide venue until 1 week before". Invert for DB.
     venue_revealed: formData.get('venue_hidden') !== 'true',
-    category: (formData.get('category') as string) ?? '',
+    // Phase 3 W5 — replaces the legacy `category` field.
+    primary_tag_slug: (formData.get('primary_tag_slug') as string) ?? '',
     price: priceInPence,
     capacity,
     image_url: (formData.get('image_url') as string) || null,
@@ -300,6 +310,15 @@ export async function createEvent(formData: FormData) {
 
   const data = parsed.data
 
+  // Derive the legacy `category` enum from the primary tag slug. The
+  // events table still has `category NOT NULL` until F1 ships; the
+  // bidirectional trigger keeps this column in sync with the primary
+  // event_tags row from this point on.
+  const legacyCategory = legacyCategoryForSlug(data.primary_tag_slug)
+  if (!legacyCategory) {
+    return { error: 'Pick a primary tag from the allowed list.' }
+  }
+
   // Generate unique slug
   const slug = await uniqueSlug(data.title, async (s) => {
     const { data: existing } = await supabase
@@ -323,7 +342,7 @@ export async function createEvent(formData: FormData) {
       venue_address: data.venue_address,
       postcode: data.postcode,
       venue_revealed: data.venue_revealed,
-      category: data.category as EventCategory,
+      category: legacyCategory,
       price: data.price,
       capacity: data.capacity,
       image_url: data.image_url,
@@ -364,6 +383,11 @@ export async function updateEvent(eventId: string, formData: FormData) {
 
   const data = parsed.data
 
+  const legacyCategory = legacyCategoryForSlug(data.primary_tag_slug)
+  if (!legacyCategory) {
+    return { error: 'Pick a primary tag from the allowed list.' }
+  }
+
   // Get current slug to check if title changed
   const { data: currentEvent } = await supabase
     .from('events')
@@ -400,7 +424,7 @@ export async function updateEvent(eventId: string, formData: FormData) {
       venue_address: data.venue_address,
       postcode: data.postcode,
       venue_revealed: data.venue_revealed,
-      category: data.category as EventCategory,
+      category: legacyCategory,
       price: data.price,
       capacity: data.capacity,
       image_url: data.image_url,
@@ -531,9 +555,161 @@ export async function duplicateEvent(
     )
   }
 
+  // Copy event_tags (primary + secondaries). Without this, the duplicate
+  // would have `events.category` set but no `event_tags` rows — violating
+  // the Phase 3 "exactly one primary per event" application invariant
+  // (and leaving the new event with no chip on the event card).
+  const { data: sourceTags } = await supabase
+    .from('event_tags')
+    .select('tag_id, is_primary')
+    .eq('event_id', eventId)
+
+  if (sourceTags && sourceTags.length > 0) {
+    await supabase.from('event_tags').insert(
+      sourceTags.map((t) => ({
+        event_id: inserted.id,
+        tag_id: t.tag_id,
+        is_primary: t.is_primary,
+      })),
+    )
+  }
+
   revalidatePath('/admin/events')
 
   return { event: inserted }
+}
+
+// ── Event tags (Phase 3 W5) ──────────────────────────────────────────────────
+
+// Canonical UUID format check — matches 8-4-4-4-12 hex without enforcing
+// RFC 4122 version digits, so the test/seed UUIDs (e.g.
+// `e1000000-0000-0000-0000-000000000001`) which have version field '0'
+// pass. The events table FK constraint catches anything that's not a
+// real row.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+const eventTagsSchema = z.object({
+  eventId: z.string().regex(UUID_RE, 'Invalid event ID'),
+  primarySlug: z
+    .string()
+    .min(1, 'Pick a primary tag — this is the main category for the event.')
+    .refine((slug) => PRIMARY_ELIGIBLE_TAG_SLUGS.has(slug), {
+      message: 'Pick a primary tag from the allowed list.',
+    }),
+  // Secondary slugs are zero or more. Empty array is fine — many events
+  // have no secondaries.
+  secondarySlugs: z.array(z.string().min(1)),
+})
+
+/**
+ * Replace the full set of event_tags for an event.
+ *
+ * Strategy: DELETE all event_tags rows for this event, then INSERT primary
+ * + secondaries fresh. Simpler than a per-row diff and the bidirectional
+ * trigger handles `events.category` automatically (Side B fires on the new
+ * primary INSERT and updates events.category if the legacy enum differs).
+ *
+ * Defence in depth — collision guards:
+ *   1. Slug must be in `PRIMARY_ELIGIBLE_TAG_SLUGS` (zod refinement).
+ *   2. Primary slug must NOT appear in the secondaries array (the picker UI
+ *      already enforces this; this server-side check rejects malicious or
+ *      malformed payloads).
+ *   3. Each secondary slug must exist in the `tags` table (we resolve them
+ *      in a single batched lookup; missing slugs short-circuit the action).
+ *   4. Caller must be an admin (requireAdmin throws otherwise).
+ */
+export async function saveEventTags(
+  eventId: string,
+  primarySlug: string,
+  secondarySlugs: string[],
+): Promise<{ success: boolean; error?: string }> {
+  const { supabase } = await requireAdmin()
+
+  const parsed = eventTagsSchema.safeParse({
+    eventId,
+    primarySlug,
+    secondarySlugs,
+  })
+  if (!parsed.success) {
+    return {
+      success: false,
+      error: parsed.error.issues[0]?.message ?? 'Invalid tag payload',
+    }
+  }
+
+  // Collision guard — defence in depth. The picker UI prevents this client-
+  // side, but the Server Action MUST also enforce it: if the same tag ends
+  // up as both primary and secondary, the bidirectional trigger's Side A
+  // would later fail with `uq_event_tags_event_tag` unique violation when
+  // an admin re-saved the event, surfacing as a confusing 500.
+  if (parsed.data.secondarySlugs.includes(parsed.data.primarySlug)) {
+    return {
+      success: false,
+      error:
+        'A tag can&rsquo;t be both primary and secondary on the same event. Pick one.',
+    }
+  }
+
+  // De-duplicate secondaries (UI shouldn't send dupes, but a malformed
+  // payload could).
+  const dedupedSecondaries = Array.from(new Set(parsed.data.secondarySlugs))
+
+  // Batch-resolve all required slugs to UUIDs in one query.
+  const allSlugs = [parsed.data.primarySlug, ...dedupedSecondaries]
+  const { data: tagRows, error: tagsError } = await supabase
+    .from('tags')
+    .select('id, slug')
+    .in('slug', allSlugs)
+
+  if (
+    tagsError ||
+    !tagRows ||
+    tagRows.length !== new Set(allSlugs).size
+  ) {
+    console.error(
+      '[saveEventTags:tags]',
+      tagsError?.message ??
+        `expected ${new Set(allSlugs).size} tag rows, got ${tagRows?.length ?? 0}`,
+    )
+    return { success: false, error: 'Failed to resolve tags' }
+  }
+  const slugToId = new Map(tagRows.map((t) => [t.slug, t.id]))
+  const primaryId = slugToId.get(parsed.data.primarySlug)!
+
+  // Replace strategy — DELETE all then INSERT primary + secondaries.
+  const { error: deleteError } = await supabase
+    .from('event_tags')
+    .delete()
+    .eq('event_id', parsed.data.eventId)
+
+  if (deleteError) {
+    console.error('[saveEventTags:delete]', deleteError.message)
+    return { success: false, error: 'Failed to clear existing tags' }
+  }
+
+  const rows = [
+    { event_id: parsed.data.eventId, tag_id: primaryId, is_primary: true },
+    ...dedupedSecondaries.map((slug) => ({
+      event_id: parsed.data.eventId,
+      tag_id: slugToId.get(slug)!,
+      is_primary: false,
+    })),
+  ]
+
+  const { error: insertError } = await supabase
+    .from('event_tags')
+    .insert(rows)
+
+  if (insertError) {
+    console.error('[saveEventTags:insert]', insertError.message)
+    return { success: false, error: 'Failed to save tags' }
+  }
+
+  revalidatePath('/admin/events')
+  revalidatePath(`/admin/events/${parsed.data.eventId}`)
+  revalidatePath('/events')
+
+  return { success: true }
 }
 
 export async function softDeleteEvent(eventId: string) {

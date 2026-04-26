@@ -3,6 +3,7 @@ import { createServerClient } from '@/lib/supabase/server'
 import {
   getProfile,
   getMyBookings,
+  getMyDemographics,
   getMyPhone,
 } from '@/lib/supabase/queries/profile'
 import { getReviewableEvents } from '@/lib/supabase/queries/reviews'
@@ -33,6 +34,7 @@ export default async function ProfilePage() {
   const [
     profile,
     phone,
+    demographics,
     bookings,
     reviewableEvents,
     emailPreferences,
@@ -40,6 +42,7 @@ export default async function ProfilePage() {
   ] = await Promise.all([
     getProfile(user.id),
     getMyPhone(),
+    getMyDemographics(),
     getMyBookings(user.id),
     getReviewableEvents(),
     getMyEmailPreferences(),
@@ -65,6 +68,7 @@ export default async function ProfilePage() {
           reviewableEventIds={reviewableEventIds}
           emailPreferences={emailPreferences}
           smsPreferences={smsPreferences}
+          demographics={demographics}
         />
       </div>
     </div>

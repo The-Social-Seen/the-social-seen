@@ -240,3 +240,72 @@ export async function updateInterests(
   revalidatePath('/profile')
   return { success: true }
 }
+
+// ── Update demographics (Phase 3 W1: gender + age_range) ────────────────────
+
+const GENDER_VALUES = ['female', 'male', 'non_binary', 'prefer_not_to_say'] as const
+const AGE_RANGE_VALUES = [
+  '18-24',
+  '25-29',
+  '30-34',
+  '35-39',
+  '40-44',
+  '45-49',
+  '50+',
+] as const
+
+const demographicsSchema = z.object({
+  // Both fields are optional but, when present, must be valid enum values.
+  // Empty string from a form input is normalised to null so the user can
+  // clear a previously-set value if they want to.
+  gender: z
+    .enum(GENDER_VALUES)
+    .nullable()
+    .optional()
+    .or(z.literal('').transform(() => null)),
+  age_range: z
+    .enum(AGE_RANGE_VALUES)
+    .nullable()
+    .optional()
+    .or(z.literal('').transform(() => null)),
+})
+
+export async function updateMyDemographics(input: {
+  gender?: string | null
+  age_range?: string | null
+}): Promise<{ success: boolean; error?: string }> {
+  const parsed = demographicsSchema.safeParse(input)
+  if (!parsed.success) {
+    return {
+      success: false,
+      error: parsed.error.issues[0]?.message ?? 'Invalid demographics value',
+    }
+  }
+
+  const supabase = await createServerClient()
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser()
+  if (authError || !user) {
+    return { success: false, error: 'Authentication required' }
+  }
+
+  // Writes flow through the SECURITY DEFINER `set_my_demographics()` RPC
+  // shipped in Migration 1a (20260503000001). The function scopes the
+  // UPDATE to `auth.uid()`, so the caller can only modify their own row;
+  // the broader `authenticated` GRANT on `profiles` excludes these
+  // columns by design (Decision 7 — Option A).
+  const { error: rpcError } = await supabase.rpc('set_my_demographics', {
+    p_gender: parsed.data.gender ?? null,
+    p_age_range: parsed.data.age_range ?? null,
+  })
+
+  if (rpcError) {
+    console.error('[updateMyDemographics]', rpcError.message)
+    return { success: false, error: 'Failed to save demographics' }
+  }
+
+  revalidatePath('/profile')
+  return { success: true }
+}
