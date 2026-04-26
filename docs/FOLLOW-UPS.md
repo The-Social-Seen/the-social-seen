@@ -28,30 +28,14 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 
 ---
 
-### Orphan `pending_payment` row when Stripe Checkout creation fails
-**Source:** User report, post-CL-9.
-**Symptom:** Failed paid-event booking shows the generic "Something went wrong" error in the modal, BUT a `pending_payment` row was already inserted by the `book_event_paid` RPC. The orphan shows in the user's bookings list. Cancelling it returns "Booking not found" / "Only confirmed bookings can be cancelled" because `cancelBooking` (src/app/events/[slug]/actions.ts:657) gates on `status === 'confirmed'`.
-**Root cause:** `createPaidCheckout` calls `book_event_paid` (commits a `pending_payment` row) BEFORE creating the Stripe Checkout session. If Stripe session creation fails (network, key missing, webhook secret mismatch, etc.) the row is never rolled back. Two failure modes layered on top:
-  1. The user is stranded — no checkout to retry, no working cancel button.
-  2. The seat counts toward capacity (book_event's confirmed_count includes pending_payment) so it blocks a real attendee from booking.
-**Fix (two layers, both small):**
-  1. **Atomic rollback** in `createPaidCheckout`: wrap Stripe session creation in try/catch; on failure, soft-delete the freshly-created booking row before returning the error.
-  2. **Allow cancel on `pending_payment`**: `cancelBooking` should accept `pending_payment` (just flip status to 'cancelled', no Stripe refund needed since no charge happened). The existing `abandonPendingCheckout` does this for the back-button flow but isn't reachable from the bookings-list UI.
-**Manual cleanup until fixed:** SQL `UPDATE bookings SET status='cancelled', updated_at=now() WHERE id='<orphan-id>';`
-**Priority:** **HIGH — same root as the "Something went wrong" report; stranded users + blocked seats.**
-
-### Paid-event booking returns "Something went wrong" on production
-**Source:** User report, post-CL-9.
-**Symptom:** Clicking "Book" on a paid event shows the generic BookingModal error toast. No Stripe Checkout redirect.
-**Diagnostic order:**
-1. Vercel function logs (filter to Errors + `/events/[slug]`) — gives the actual exception thrown by the Server Action.
-2. Stripe dashboard → Developers → Logs — if request never reached Stripe, the failure is upstream (env / RPC / verification gate).
-3. Most likely cause: `profiles.email_verified = false` for the booker → `book_event_paid` RPC rejects with "Verify your email before booking", but the BookingModal swallows the message into the generic toast. Verify by `UPDATE profiles SET email_verified = true WHERE email = '...';` and retrying.
-4. Other suspects: `STRIPE_SECRET_KEY` missing in Vercel Production env, `book_event_paid` migration (20260423000001) not yet applied to the hosted project, Stripe webhook signing secret mismatch.
-**Fix once diagnosed:**
-- If verification gate: surface the RPC's `error` field to the user instead of the generic fallback. One-line change in `src/app/events/[slug]/actions.ts` createPaidCheckout — bubble `data.error` from the RPC response into the action's return.
-- If env / migration: pure operator fix, no code change.
-**Priority:** **HIGH — blocks first paid booking.**
+### Stripe receipt emails not sent in test mode
+**Source:** User report, 2026-04-25 — paid bookings complete but no receipt email arrives from Stripe sandbox.
+**Symptom:** After successful Checkout in test mode, no receipt email is delivered to the customer.
+**Root cause:** Stripe doesn't auto-send receipts in test mode unless explicitly opted in. Production receipts depend on Stripe Dashboard → Settings → Customer emails → "Successful payments" being enabled. In test mode, the Dashboard setting is honored only after explicit opt-in OR if `payment_intent_data.receipt_email` is set on the Checkout session.
+**Fix (pick one, do both for safety):**
+1. Code: pass `payment_intent_data.receipt_email: input.userEmail` in `src/lib/stripe/checkout.ts:124-130` (already passing `metadata` there — add receipt_email next to it). Forces a receipt regardless of Dashboard setting, in any mode.
+2. Operator: enable "Email customers about successful payments" in Stripe Dashboard for both Test and Live modes.
+**Priority:** Medium — receipts are expected by users; lack of one looks broken even if charge succeeded.
 
 ### Admin area mobile responsive — Phase 2 deferrals
 **Source:** PR #53 (`feat(admin): mobile-responsive pass on /admin/*`) shipped Phase 1; spec at `docs/admin-mobile-spec.md` §5 lists Phase 2 items deferred from that PR.
