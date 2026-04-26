@@ -75,7 +75,7 @@ export default async function EventDetailPage({ params }: PageProps) {
       supabase.auth.getUser(),
       isPast ? getEventReviews(event.id) : Promise.resolve([] as ReviewWithAuthor[]),
       isPast ? getEventPhotos(event.id) : Promise.resolve([] as EventPhoto[]),
-      getRelatedEvents(event.category, event.id),
+      getRelatedEvents(event.primary_tag.slug, event.id),
       getUserBookingForEvent(event.id),
     ]);
 

@@ -482,15 +482,29 @@ describe('getEventPhotos', () => {
 })
 
 describe('getRelatedEvents', () => {
-  it('returns related events in the same category', async () => {
+  it('returns related events sharing the same primary tag (F1b-app)', async () => {
     const builder = createQueryBuilder()
     builder.mockResolve([mockEventWithStats])
     fromBuilders['event_with_stats'] = builder
 
-    const result = await getRelatedEvents('dining', 'evt-other')
+    // F1b-app: takes a primary_tag.slug, not a legacy category enum.
+    const result = await getRelatedEvents('dining-supper-clubs', 'evt-other')
 
     expect(result).toHaveLength(1)
-    expect(result[0].category).toBe('dining')
+    expect(result[0].primary_tag.slug).toBe('dining-supper-clubs')
+  })
+
+  it('filters via event_tags.tags.slug = $primaryTagSlug AND is_primary = true', async () => {
+    // Sharper-than-category match: the JOIN keys off the primary tag's
+    // slug, which is the part that changed in F1b-app.
+    const builder = createQueryBuilder()
+    builder.mockResolve([mockEventWithStats])
+    fromBuilders['event_with_stats'] = builder
+
+    await getRelatedEvents('theatre-comedy', 'evt-other')
+
+    expect(builder.eq).toHaveBeenCalledWith('event_tags.is_primary', true)
+    expect(builder.eq).toHaveBeenCalledWith('event_tags.tags.slug', 'theatre-comedy')
   })
 
   it('returns empty array on error', async () => {
@@ -498,7 +512,7 @@ describe('getRelatedEvents', () => {
     builder.mockReject('timeout')
     fromBuilders['event_with_stats'] = builder
 
-    const result = await getRelatedEvents('dining', 'evt-1')
+    const result = await getRelatedEvents('dining-supper-clubs', 'evt-1')
 
     expect(result).toEqual([])
     expect(console.error).toHaveBeenCalledWith('[getRelatedEvents]', 'timeout')
@@ -509,7 +523,7 @@ describe('getRelatedEvents', () => {
     builder.mockResolve([])
     fromBuilders['event_with_stats'] = builder
 
-    const result = await getRelatedEvents('wellness', 'evt-1')
+    const result = await getRelatedEvents('wellness-mindfulness', 'evt-1')
 
     expect(result).toEqual([])
   })

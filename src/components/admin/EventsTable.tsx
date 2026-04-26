@@ -8,7 +8,6 @@ import { cn } from '@/lib/utils/cn'
 import { formatDateCard } from '@/lib/utils/dates'
 import { formatPrice } from '@/lib/utils/currency'
 import { resolveEventImage } from '@/lib/utils/images'
-import { categoryLabel } from '@/types'
 import { softDeleteEvent } from '@/app/(admin)/admin/actions'
 import type { EventWithStats } from '@/types'
 
@@ -104,8 +103,9 @@ export default function EventsTable({ events }: EventsTableProps) {
                   {formatDateCard(event.date_time)}
                 </td>
                 <td className="py-3 pr-4 hidden lg:table-cell">
+                  {/* Primary-tag chip (F1b-app — was categoryLabel(event.category)) */}
                   <span className="text-xs font-medium px-2 py-0.5 rounded-full border border-gold/20 text-gold">
-                    {categoryLabel(event.category)}
+                    {event.primary_tag.label}
                   </span>
                 </td>
                 <td className="py-3 pr-4 text-text-secondary">
@@ -200,8 +200,9 @@ export default function EventsTable({ events }: EventsTableProps) {
                   <div className="flex items-center justify-between gap-3">
                     <dt className="text-text-tertiary">Category</dt>
                     <dd>
+                      {/* Primary-tag chip (F1b-app — was categoryLabel(event.category)) */}
                       <span className="text-xs font-medium px-2 py-0.5 rounded-full border border-gold/20 text-gold">
-                        {categoryLabel(event.category)}
+                        {event.primary_tag.label}
                       </span>
                     </dd>
                   </div>
