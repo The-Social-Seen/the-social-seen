@@ -232,68 +232,138 @@ that breaks future i18n would be premature.
 
 ### Decision 4 — Seed list for tags (canonical reconciliation)
 
-**Decision:** A single 16-tag canonical list. See "Canonical seed list"
-section below for the table.
+> **Revision note (2026-04-26):** the original 16-tag list was generic
+> taxonomy that didn't survive contact with reality. The product owner
+> mapped all 33 past events and the next 12 months of forward-planned
+> events to candidate categories; the result is the 15 primary-eligible
+> tags below, plus 8 interest-only tags preserved from the existing
+> `INTEREST_OPTIONS` list. This rewrite supersedes the earlier draft.
+
+**Decision:** A 23-row canonical taxonomy in `public.tags` — **15
+primary-eligible** (admin can use as an event's primary tag) and **8
+interest-only** (members can select as an interest but no event can use as
+primary).
 
 The reconciliation work:
 
 | Source list | Members |
 |---|---|
-| `event_category` enum | 9 values |
-| `INTEREST_OPTIONS` (free text) | 14 values |
-| **Canonical tags** | **16 values** |
+| `event_category` enum (legacy, to be dropped per Decision 5) | 9 values |
+| `INTEREST_OPTIONS` (legacy free text in `src/lib/constants.ts`) | 14 values |
+| **Canonical tags — primary-eligible** | **15 values** |
+| **Canonical tags — interest-only** | **8 values** |
+| **Total tags row count** | **23** |
 
-Two of the 14 interest values map cleanly to existing event categories
-(`Networking` → category `networking`; sort of `Yoga & Wellness` → category
-`wellness`, but see Reconciliation Map for the nuance). The rest don't have
-1:1 event peers; the spec keeps them all because:
+The new list comes from a 33-event audit. The product owner walked every
+shipped event and every forward-planned event into one of the 15
+primary-eligible tags; categories that didn't earn a single event were
+dropped, categories that span multiple distinct vibes were split.
 
-- They're already chosen by members in the seed and live behaviour — dropping
-  them silently would erase user signal.
-- They're plausible future event categories ("Photography" walks, "Travel"
-  trip-planning meetups, "Books & Literature" supper club) — keeping them as
-  *interests-only* (`is_primary_eligible = false`) is the cheapest forward
-  path.
-
-**Canonical seed list:**
+**Canonical seed list — primary-eligible (15):**
 
 | slug | label | sort_order | is_primary_eligible | Notes |
 |---|---|---|---|---|
-| `drinks` | Drinks | 10 | yes | Direct from event enum + maps `Wine & Cocktails` interest |
-| `dining` | Dining | 20 | yes | Direct from event enum + maps `Fine Dining` interest |
-| `cultural` | Cultural | 30 | yes | Direct from event enum + maps `Art & Culture` interest |
-| `wellness` | Wellness | 40 | yes | Direct from event enum + maps `Yoga & Wellness` interest |
-| `sport` | Sport | 50 | yes | Direct from event enum + maps `Running & Sport` interest |
-| `workshops` | Workshops | 60 | yes | Direct from event enum |
-| `music` | Music | 70 | yes | Direct from event enum + maps `Jazz & Music` interest |
-| `networking` | Networking | 80 | yes | Direct from event enum + matches identical interest value |
-| `activity` | Activity | 90 | yes | Direct from event enum (added in `20260406000001`) |
-| `technology` | Technology | 100 | yes | Promoted from interest-only — admins regularly run tech-meetup events; making it primary-eligible unblocks that |
-| `entrepreneurship` | Entrepreneurship | 110 | yes | Same rationale as `technology` — there is a known pipeline of founder-circle events |
-| `photography` | Photography | 120 | no | Interest-only. No current event uses this; admins can promote later by flipping `is_primary_eligible` |
-| `travel` | Travel | 130 | no | Interest-only. Future trips/travel meetups would promote this |
-| `books-literature` | Books & Literature | 140 | no | Interest-only. Future supper clubs / book-club events could promote |
-| `sustainable-living` | Sustainable Living | 150 | no | Interest-only |
-| `film-cinema` | Film & Cinema | 160 | no | Interest-only |
+| `drinks-bars` | Drinks & Bars | 10 | yes | The platform's most-shipped category — 9 past + 1 future event. Replaces the old `drinks` enum value. |
+| `dining-supper-clubs` | Dining & Supper Clubs | 20 | yes | 5 past + 2 future. Replaces `dining`. |
+| `activities-social-games` | Activities & Social Games | 30 | yes | 4 past + 1 future. New tag — pulls in axe throwing, mini golf, Flight Club, Fairgame: events the old taxonomy mis-classified as `sport` or `drinks`. |
+| `nightlife-dancing` | Nightlife & Dancing | 40 | yes | 3 past + 2 future. New tag. Distinct vibe from drinks-bars (late-night, dance-floor, often themed). |
+| `live-music-gigs` | Live Music & Gigs | 50 | yes | 1 past so far. Sharper than the old `music` enum (which lumped concerts with club nights). |
+| `theatre-comedy` | Theatre & Comedy | 60 | yes | 2 past + 1 future. New tag. Carved out of the over-broad `cultural` bucket. |
+| `galleries-museums` | Galleries & Museums | 70 | yes | 1 past. New tag. Also carved out of `cultural`. |
+| `festivals-seasonal` | Festivals & Seasonal | 80 | yes | 2 past + 4 future. **High-volume forward category** — Polo in the Park, Diwali, Winter Wonderland etc. Cluster the seasonal calendar here. |
+| `sport-fitness` | Sport & Fitness | 90 | yes | 2 past + 1 future. Replaces the old `sport` enum but with a narrower scope (genuine sport/fitness, not "any active activity"). |
+| `outdoor-picnics` | Outdoor & Picnics | 100 | yes | 1 past + 2 future. New tag. Picnics, garden parties, daytime open-air events. |
+| `weekends-travel` | Weekends & Travel | 110 | yes | 2 past + 2 future. New tag. Multi-day getaways (Cotswolds, Snowdonia, St Moritz, Lake District). Often multi-tagged with `sport-fitness`. |
+| `themed-socials` | Themed Socials | 120 | yes | 2 past + 2 future. New tag — Black Tie, Valentine's Singles, costume parties. Distinct from generic drinks/dining. |
+| `charity-volunteering` | Charity & Volunteering | 130 | yes | 2 past. New tag — preserves the Crisis volunteering and 80s/90s charity night as a first-class category. |
+| `wellness-mindfulness` | Wellness & Mindfulness | 140 | yes | 0 past + 0 future. **Forward-looking** — placeholder for the wellness programme the product owner intends to seed. Replaces `wellness`. |
+| `workshops-masterclasses` | Workshops & Masterclasses | 150 | yes | 0 past + 2 future (wine tastings). Replaces `workshops`. Also the home for tech-meetups and founder circles (see "interest-only" below). |
 
-**Items dropped or merged:**
+**Canonical seed list — interest-only (8):**
 
-- None dropped. All 9 event categories survive (with the two-letter merges
-  noted in §10 Reconciliation Map). All 14 interest values survive (some as
-  primary-eligible promotions, the rest as interest-only).
+These rows live in the same `tags` table so member interests can FK into a
+single source of truth, but they are NOT in `PRIMARY_ELIGIBLE_TAG_SLUGS`
+(see Type-system surface). Admins cannot select them as an event's primary
+tag. They preserve member-selected signal that doesn't (yet) match a
+shipping event category.
 
-**Note on `is_primary_eligible`:** this is a **business rule encoded in
-seed/admin UI**, not a column on the `tags` table. Adding it as a column
-would couple the taxonomy table to the events use case (interest-only members
-also need this list — they don't care about primary-eligibility). The column
-is documented as a **constant** in `src/lib/constants.ts` and read by the
-admin event-creation form; the DB enforces "exactly one primary per event"
-via Decision 6. If future use expands (e.g. user-facing tag picker also wants
-to filter by "events bookable in this tag"), the column is one ALTER away.
+Sort orders begin at 200 to leave room for primary-eligible insertions.
 
-**This is item 1 in §"Questions for the product owner"** — the
-primary-eligibility column for `technology` and `entrepreneurship` was a
-judgment call.
+| slug | label | sort_order | is_primary_eligible | Notes |
+|---|---|---|---|---|
+| `interest-technology` | Technology | 200 | no | Demoted from primary-eligible after audit. Tech-meetup events go under `workshops-masterclasses` as primary; this stays as an interest signal so members get the right invite mix. |
+| `interest-entrepreneurship` | Entrepreneurship | 210 | no | Same as Technology — founder-circle events run under `workshops-masterclasses` primary. |
+| `interest-networking` | Networking | 220 | no | Zero networking events have ever shipped (despite the legacy `networking` enum value). Tag dropped from primary list, but kept here so the existing user-interest data isn't silently destroyed. |
+| `interest-photography` | Photography | 230 | no | Future photography walks would run under `workshops-masterclasses`. Stays as interest signal. |
+| `interest-travel` | Travel | 240 | no | **Deliberately distinct from `weekends-travel`.** "Travel" the interest = "I like travel-flavoured everything"; "Weekends & Travel" the primary tag = "this specific event is a multi-day getaway." Single-label "Travel" stays so members can keep the granularity. |
+| `interest-books-literature` | Books & Literature | 250 | no | Future supper-club/book-club events would run under `dining-supper-clubs` or `workshops-masterclasses` primary. |
+| `interest-sustainable-living` | Sustainable Living | 260 | no | Aspirational interest; no current event peer. |
+| `interest-film-cinema` | Film & Cinema | 270 | no | Future events would run under `theatre-comedy` or as themed-socials primary. |
+
+**`interest-` prefix on slugs:** disambiguates from primary tags. A future
+admin who reads `tags.slug` as `interest-photography` immediately knows the
+shape (interest signal, not an event category). When/if any of these get
+promoted to primary-eligible, the migration is: insert a new tag row with
+the un-prefixed slug (e.g. `photography`), repoint user_interests rows from
+the old slug to the new, set `is_active = false` on the old.
+
+**Items dropped from the previous draft (16 → 15 primary-eligible) and why:**
+
+| Dropped | Replaced by | Reason |
+|---|---|---|
+| `activity` | `activities-social-games` (renamed/sharpened) | Meaningless label; zero of 33 past events used the enum value. Confirmed dead. |
+| `cultural` | `theatre-comedy`, `galleries-museums`, `festivals-seasonal`, `outdoor-picnics`, `charity-volunteering`, `weekends-travel` | Too broad. The 8 past `cultural` events spanned six distinct real vibes. The split below preserves every single one with a sharper home. |
+| `sport` (single, broad) | `sport-fitness` (narrowed) | The original `sport` enum mixed spectator events (Polo in the Park) with active outdoor (hiking) with games (axe throwing). Now: spectator → `festivals-seasonal`; hiking → `weekends-travel` + `sport-fitness`; games → `activities-social-games`. |
+| `technology` (as primary) | `workshops-masterclasses` (for events) + `interest-technology` (for member signal) | Tech-meetup events fit cleanly under workshops; promoting `technology` as a primary tag would create a parallel home for the same events. Tag stays in DB as interest-only. |
+| `entrepreneurship` (as primary) | Same as `technology` | Same logic. |
+| `networking` | `interest-networking` (interest-only) | Zero events of this category have ever run. Removing from primary list reflects reality; keeping as interest preserves member signal. |
+| `photography` (as primary) | `workshops-masterclasses` (for events) + `interest-photography` | Same pattern — events fit elsewhere; interest preserved. |
+
+**Validation: distribution against actual events**
+
+Product-owner-supplied counts (33 past + 12 forward-planned = 45 mapped events):
+
+| Tag | Past | Future | Total |
+|---|---:|---:|---:|
+| Drinks & Bars | 9 | 1 | 10 |
+| Dining & Supper Clubs | 5 | 2 | 7 |
+| Activities & Social Games | 4 | 1 | 5 |
+| Nightlife & Dancing | 3 | 2 | 5 |
+| Festivals & Seasonal | 2 | 4 | 6 |
+| Theatre & Comedy | 2 | 1 | 3 |
+| Outdoor & Picnics | 1 | 2 | 3 |
+| Weekends & Travel | 2 | 2 | 4 |
+| Sport & Fitness | 2 | 1 | 3 |
+| Charity & Volunteering | 2 | 0 | 2 |
+| Themed Socials | 2 | 2 | 4 |
+| Live Music & Gigs | 1 | 0 | 1 |
+| Galleries & Museums | 1 | 0 | 1 |
+| Wellness & Mindfulness | 0 | 0 | 0 (forward-looking) |
+| Workshops & Masterclasses | 0 | 2 | 2 |
+
+(Counts are by **primary** tag. Roughly half the future events get
+secondary tags too — see "Multi-tagging" note below.)
+
+**Multi-tagging earns its keep.** The 33-event audit produced ~22 events
+that benefit from secondary tags — Halloween at Cubanista is `nightlife-
+dancing` primary plus `festivals-seasonal` and `themed-socials`
+secondaries; Hiking in Snowdonia is `weekends-travel` primary plus
+`sport-fitness` secondary. Without secondaries, the canonical taxonomy
+wouldn't fit the real event mix without forcing arbitrary single-tag
+choices. The `event_tags` join table supports this from day one (per
+§Decision 6's partial unique index, which is `WHERE is_primary = true` —
+secondaries can have any count).
+
+**Note on `is_primary_eligible`:** this is a **business rule encoded as a
+constant in `src/lib/constants.ts`**, not a column on the `tags` table.
+Adding it as a column would couple the taxonomy table to the events use
+case (member interest pickers also need to enumerate the table — they
+don't care about primary-eligibility). The constant
+`PRIMARY_ELIGIBLE_TAG_SLUGS` (Type-system surface) is what the admin
+event-creation form reads; the DB enforces "exactly one primary per
+event" via Decision 6. If future use expands (e.g. user-facing tag
+picker filters by "events bookable in this tag"), the column is one
+ALTER away.
 
 ---
 
@@ -354,16 +424,36 @@ no consumer reads `events.category`. The migration drops the trigger first
 (so writes don't try to propagate to a column being removed), then `ALTER
 TABLE events DROP COLUMN category`, then `DROP TYPE event_category`.
 
-**Caveat for the backend developer:** the trigger that keeps `events.category`
-and `event_tags` in sync needs to handle the case where a primary tag's slug
-doesn't exist as an enum value. Migration 2's seed list deliberately keeps
-the enum-mapped slugs (`drinks`, `dining`, etc.) identical to the enum's
-existing values. New tags promoted to `is_primary_eligible = true` after
-migration 2 (e.g. `technology`, `entrepreneurship`) need to be added to the
-`event_category` enum *first* (one-statement enum add, no rewrite), or the
-trigger raises. The cleanest sequencing: migration 2 also adds `technology`
-and `entrepreneurship` to the enum so the seed `event_tags` backfill
-doesn't need a special case.
+**Caveat for the backend developer (revised 2026-04-26):** the original
+draft assumed the new tag slugs would match the existing `event_category`
+enum values 1:1 (e.g. tag `drinks` ↔ enum `'drinks'`). After the Decision 4
+rewrite, that assumption no longer holds — the 15 new primary slugs
+(`drinks-bars`, `dining-supper-clubs`, `nightlife-dancing`, …) are entirely
+new vocabulary. The 9-value `event_category` enum stays as-is (we are NOT
+adding new values), and the bidirectional trigger needs a **static
+slug→enum lookup** baked into the trigger functions.
+
+The mapping is **lossy** (15 → 9, many-to-one), and that is acceptable
+because:
+
+- The dual-write window is transient (Migration 4 drops `events.category`
+  entirely).
+- During the window, `events.category` is a "best-effort legacy display
+  value." It exists so old read paths (filters page, JSON-LD `keywords`,
+  list-page filter dropdown) keep working until the application code
+  migrates to read tags directly.
+- Many-to-one collapse means changing the primary tag to a different slug
+  that maps to the same legacy enum value is a no-op for `events.category`
+  (e.g. flipping primary from `theatre-comedy` to `galleries-museums` keeps
+  category at `cultural`). This is fine — the legacy column is never the
+  source of truth post-Migration 2.
+
+The slug→enum mapping table is given concretely in the SQL fragments
+section (see "Bidirectional sync trigger"). Backend-developer note: if a
+future tag is added with `is_primary_eligible = true` and no entry in the
+mapping function, the trigger should raise an explicit error (`'no enum
+mapping for slug %'`) — fail loud rather than silently writing a
+stale/wrong category. After Migration 4 ships, this concern evaporates.
 
 ---
 
@@ -678,52 +768,69 @@ through a public-readable table, no policy change required.
 
 - **Intent:** Create `tags` table with full schema (including `parent_id`
   nullable). Create `event_tags(event_id, tag_id, is_primary)` join with
-  partial unique index for primary uniqueness. Add `technology` +
-  `entrepreneurship` values to the existing `event_category` enum so the
-  trigger doesn't fail when those slugs become primary. Seed `tags` with the
-  16-row canonical list. Backfill `event_tags` with one primary row per
-  existing event (mapping from `events.category`). Install the
-  bidirectional sync trigger between `events.category` and primary
-  `event_tags`. RLS policies + GRANTs as Decision 7.
+  partial unique index for primary uniqueness. Seed `tags` with the
+  23-row canonical list (15 primary-eligible + 8 interest-only — see
+  Decision 4). Backfill `event_tags` with primary + secondary rows per
+  existing event using the per-event manual lookup (see Event-tags
+  backfill SQL fragment), reflecting the product owner's audit of all 33
+  past events. Install the bidirectional sync trigger between
+  `events.category` and primary `event_tags`, including the static
+  slug→enum mapping function (see Decision 5 caveat + SQL fragments). RLS
+  policies + GRANTs as Decision 7.
+- **No new enum values added.** The `event_category` enum stays at its
+  current 9 values. The taxonomy revision (15 new primary slugs, none
+  matching the old enum) means there's no benefit to adding enum values
+  that are about to be dropped in Migration 4. The slug→enum mapping in
+  the trigger collapses 15 → 9 (lossy but transient).
 - **Safety:**
   - Creating `tags` and `event_tags` is additive — zero impact on any
     existing query.
-  - Adding enum values: `ALTER TYPE … ADD VALUE` is a single-row catalog
-    change. **Caveat:** in Postgres < 12, ADD VALUE inside a transaction
-    is restricted; in Supabase (current Postgres 15+) the restriction is
-    lifted, but the ADD VALUE statement still cannot be rolled back inside
-    the same transaction as a use of the new value. Backend-developer
-    note: run the ADD VALUE statements as their own statements (not in a
-    DO block with the seed insert). The migration file structure is:
-    `(1) ADD VALUE` → `(2) INSERT into tags` → `(3) INSERT into
-    event_tags` → `(4) CREATE TRIGGER`.
-  - Backfilling `event_tags`: one INSERT per event with a SELECT join to
-    `tags` on slug. With ~50 events this is fast; even at 50K it's seconds.
-    The partial unique index is created *after* the backfill (or as the
-    last step before sync trigger install) so the backfill's "exactly one
-    primary per event" property is verifiable.
+  - Backfilling `event_tags` is **multi-tag per event**: ~22 of 33 past
+    events get a primary plus 1–2 secondaries. The partial unique index
+    `WHERE is_primary = true` enforces exactly-one-primary while allowing
+    any number of secondary rows per event_id (verified — see Risk
+    register entry on multi-tag backfill).
+  - The backfill uses a per-event UUID-keyed CASE statement for the 22
+    audited events, plus a default-mapping CASE for the remaining 11
+    drinks/dining events that didn't need re-classification. With ~50
+    events, this runs in well under a second; at 50K events the
+    UUID-keyed CASE would still be fine but the default-mapping path
+    would dominate (the per-event overrides are a one-time backfill
+    artefact, not a steady-state mechanism).
+  - The partial unique index is created **after** the backfill, so the
+    backfill's "exactly one primary per event" property is verifiable
+    against the index creation. If the backfill accidentally produced
+    two primary rows for one event_id, the index creation fails loudly.
   - The bidirectional trigger needs to be **idempotent and re-entry-safe** —
     if updating `events.category` fires the events-side trigger which
     writes to `event_tags` which fires the event_tags-side trigger which
     writes back to `events.category`, you have an infinite loop. The
     backend-developer must implement a `pg_trigger_depth()` check or set a
     session-local guard variable to break the cycle.
+  - The trigger's slug→enum lookup function must include every primary-
+    eligible slug. If a primary slug has no mapping, the trigger raises.
+    See SQL fragments for the full mapping table.
   - Default values: `event_tags.is_primary` defaults to `false`. The
-    backfill explicitly sets `is_primary = true` for every event.
+    backfill explicitly sets `is_primary = true` only for the primary
+    row per event; secondary rows leave it at the default.
   - RLS enabled before any INSERT (Postgres allows INSERTs during
     migrations as the `postgres` role which bypasses RLS, so the seed
     inserts work; but the policies are in place before any session
     operates on the tables).
 - **Application-side coupling:** none required immediately — the
   bidirectional trigger means existing `events.category` queries continue
-  to work. The frontend-developer adds a tag picker to the admin event form
-  in a separate batch; until then, admins still set `category` via the
-  current dropdown and the trigger updates `event_tags`.
-- **Rollback:** drop the trigger first, drop `event_tags`, drop `tags`,
-  remove the two enum values (NB: removing enum values requires CREATE TYPE
-  + ALTER COLUMN dance — practically irreversible for a migration that's
-  shipped). Realistically, "rollback" of migration 2 is a forward fix, not
-  a revert. Backend-developer should treat the enum additions as one-way.
+  to work (with the lossy-collapse caveat from Decision 5). The
+  frontend-developer adds a tag picker (with secondary-tag support) to
+  the admin event form in a separate batch; until then, admins still set
+  `category` via the current dropdown and the trigger updates only the
+  primary `event_tags` row (secondaries cannot be edited via the legacy
+  form — that's accepted because secondaries on new events will be
+  added through the new admin UI).
+- **Rollback:** drop the trigger first, drop the slug→enum mapping
+  function, drop `event_tags`, drop `tags`. No enum changes to reverse.
+  Realistically still "forward fix" rather than revert, but the absence
+  of enum modifications makes this much cleaner than the original
+  draft's plan.
 
 **Migration 3 — `migrate_user_interests_to_tag_id`**
 
@@ -775,8 +882,12 @@ through a public-readable table, no policy change required.
 
 **Migration 4 (deferrable) — `drop_events_category_enum`**
 
-- **Intent:** Drop the bidirectional sync trigger. Drop the `category`
-  column on `events`. Drop the `event_category` enum.
+- **Intent:** Drop the bidirectional sync triggers
+  (`trg_sync_primary_tag_from_category` and
+  `trg_sync_category_from_primary_tag`). Drop the trigger functions
+  (`_sync_primary_tag_from_category`, `_sync_category_from_primary_tag`)
+  and the slug→enum mapping function (`_tag_slug_to_legacy_category`).
+  Drop the `category` column on `events`. Drop the `event_category` enum.
 - **Prerequisites:** every consumer of `events.category` has migrated to
   query `event_tags` for the primary tag's slug. The Phase 3 follow-up
   release that includes:
@@ -803,60 +914,118 @@ through a public-readable table, no policy change required.
 
 ### Decision 9 — Reconciliation map for `user_interests.interest` → `tag_id`
 
-For each of the 14 existing `INTEREST_OPTIONS` values, the canonical tag it
-maps to:
+> **Revision note (2026-04-26):** rewritten to match the new 23-tag
+> taxonomy (Decision 4 revision). Every existing INTEREST_OPTIONS value
+> is preserved — six remap to a primary-eligible tag (sharing the home
+> with future events), eight remap to a dedicated `interest-…` slug
+> (signal preserved, no event peer required).
 
-| Source `interest` text | → Canonical tag slug | Source category | Notes |
+The 14 existing values in `INTEREST_OPTIONS` (`src/lib/constants.ts`)
+break into two groups under the new taxonomy:
+
+**Group A — remap to a primary-eligible tag** (6 of 14)
+
+These interest values describe a member preference for a category that
+the platform actively runs events under. Pointing the `tag_id` at the
+primary-eligible tag means a member who selected this interest will
+naturally surface in any future "members interested in X events" query
+that the recommendation engine builds.
+
+| Source `interest` text | → Canonical tag slug | is_primary_eligible | Reason |
 |---|---|---|---|
-| `Wine & Cocktails` | `drinks` | match | "Wine & Cocktails" was the interest-flavour label; `Drinks` is the broader event category. Reusing tag preserves overlap. |
-| `Fine Dining` | `dining` | match | Same logic — `Dining` is the broader version. |
-| `Art & Culture` | `cultural` | match | Same — `Cultural` is the event-category form. |
-| `Yoga & Wellness` | `wellness` | match | Same. |
-| `Running & Sport` | `sport` | match | Same. |
-| `Technology` | `technology` | new primary-eligible tag | Promoted from interest-only; a future tech-meetup event uses this as primary. |
-| `Entrepreneurship` | `entrepreneurship` | new primary-eligible tag | Same. |
-| `Jazz & Music` | `music` | match | `Music` is broader. |
-| `Networking` | `networking` | exact | Direct match. |
-| `Photography` | `photography` | interest-only | Kept; future events could promote. |
-| `Travel` | `travel` | interest-only | Kept; future events could promote. |
-| `Books & Literature` | `books-literature` | interest-only | Kept; future supper-club events could promote. |
-| `Sustainable Living` | `sustainable-living` | interest-only | Kept; future events could promote. |
-| `Film & Cinema` | `film-cinema` | interest-only | Kept; future events could promote. |
+| `Wine & Cocktails` | `drinks-bars` | yes | The interest is a flavour of the broader category. Member who picked "Wine & Cocktails" will see drinks-bars events highlighted. |
+| `Fine Dining` | `dining-supper-clubs` | yes | Same logic — interest is a flavour of the category. |
+| `Art & Culture` | `galleries-museums` | yes | The closest single primary tag from the old broad `cultural`. (Members who selected "Art & Culture" might also want theatre-comedy; they can re-pick later if needed — this is a one-time best-effort remap.) |
+| `Yoga & Wellness` | `wellness-mindfulness` | yes | Direct semantic match. |
+| `Running & Sport` | `sport-fitness` | yes | Same — exact category match. |
+| `Jazz & Music` | `live-music-gigs` | yes | "Jazz & Music" interest gets the live-music-gigs primary; if "Jazz" specifically becomes a tag later, members can re-pick. |
 
-**No drops, no merges of source values.** The five "interest-only" tags
-(`photography`, `travel`, `books-literature`, `sustainable-living`,
-`film-cinema`) preserve member signal that the current event categories
-can't represent. Promoting them later is a one-row UPDATE to flip
-`is_primary_eligible` (constant in code) and an enum ADD VALUE if migration
-4 hasn't shipped.
+**Group B — remap to interest-only tag** (8 of 14)
+
+These are member-selected signals that don't currently align to a primary
+event category. The dedicated `interest-…` slugs preserve every signal
+without polluting the admin event-creation tag picker.
+
+| Source `interest` text | → Canonical tag slug | is_primary_eligible | Reason |
+|---|---|---|---|
+| `Technology` | `interest-technology` | no | Demoted from the original primary list per the audit. Tech-meetup events will run under `workshops-masterclasses` primary; members tagged with the interest get the right invite mix. |
+| `Entrepreneurship` | `interest-entrepreneurship` | no | Same as Technology. |
+| `Networking` | `interest-networking` | no | Tag dropped from primary list (zero events ever ran). Existing user_interests rows preserved here so member signal isn't silently lost. |
+| `Photography` | `interest-photography` | no | Future photography walks/workshops would run under `workshops-masterclasses` primary. |
+| `Travel` | `interest-travel` | no | **Deliberately distinct from `weekends-travel`.** The interest is broader (travel-flavoured everything); the primary tag is narrow (multi-day getaway events). Single-label "Travel" stays so members keep the granularity. |
+| `Books & Literature` | `interest-books-literature` | no | No event peer; interest preserved. |
+| `Sustainable Living` | `interest-sustainable-living` | no | No event peer; interest preserved. |
+| `Film & Cinema` | `interest-film-cinema` | no | Future events would run under `theatre-comedy` or themed-socials primary. |
+
+**No drops, no merges of source values.** All 14 INTEREST_OPTIONS values
+are preserved in the migrated `user_interests` rows. Six get the upgrade
+to a primary-eligible tag (richer downstream queries), eight stay as
+dedicated interest-only signals.
+
+**Defensive case — values not in the 14:**
+The current schema has UNIQUE(user_id, interest) but no CHECK constraint
+restricting `interest` to the 14 INTEREST_OPTIONS values — the
+constants-list enforcement is application-side. In practice all rows in
+the seed and live data come from the form (constrained), but the
+migration must defend against an off-list value (e.g. a stale row from
+a pre-tightening release). The CASE expression below maps unknown values
+to NULL; the verification step (existing in §SQL fragments — Migration
+3) raises if any NULLs remain. Backend-developer handles each surfaced
+unknown by **either** (a) adding a new mapping to the migration, **or**
+(b) explicitly deleting the orphan row with a comment in the migration
+header explaining what was deleted and why. Don't silently drop.
 
 **SQL fragment for the backfill** (illustrative — backend-developer
-implements):
+implements; the actual migration uses a transaction and the full
+verification block from §SQL fragments → user_interests schema change):
 
 ```sql
 UPDATE public.user_interests ui
 SET tag_id = t.id
 FROM public.tags t
 WHERE t.slug = CASE ui.interest
-  WHEN 'Wine & Cocktails'   THEN 'drinks'
-  WHEN 'Fine Dining'        THEN 'dining'
-  WHEN 'Art & Culture'      THEN 'cultural'
-  WHEN 'Yoga & Wellness'    THEN 'wellness'
-  WHEN 'Running & Sport'    THEN 'sport'
-  WHEN 'Technology'         THEN 'technology'
-  WHEN 'Entrepreneurship'   THEN 'entrepreneurship'
-  WHEN 'Jazz & Music'       THEN 'music'
-  WHEN 'Networking'         THEN 'networking'
-  WHEN 'Photography'        THEN 'photography'
-  WHEN 'Travel'             THEN 'travel'
-  WHEN 'Books & Literature' THEN 'books-literature'
-  WHEN 'Sustainable Living' THEN 'sustainable-living'
-  WHEN 'Film & Cinema'      THEN 'film-cinema'
+  -- Group A: primary-eligible remaps
+  WHEN 'Wine & Cocktails'   THEN 'drinks-bars'
+  WHEN 'Fine Dining'        THEN 'dining-supper-clubs'
+  WHEN 'Art & Culture'      THEN 'galleries-museums'
+  WHEN 'Yoga & Wellness'    THEN 'wellness-mindfulness'
+  WHEN 'Running & Sport'    THEN 'sport-fitness'
+  WHEN 'Jazz & Music'       THEN 'live-music-gigs'
+  -- Group B: interest-only remaps (note the 'interest-' prefix on slugs)
+  WHEN 'Technology'         THEN 'interest-technology'
+  WHEN 'Entrepreneurship'   THEN 'interest-entrepreneurship'
+  WHEN 'Networking'         THEN 'interest-networking'
+  WHEN 'Photography'        THEN 'interest-photography'
+  WHEN 'Travel'             THEN 'interest-travel'
+  WHEN 'Books & Literature' THEN 'interest-books-literature'
+  WHEN 'Sustainable Living' THEN 'interest-sustainable-living'
+  WHEN 'Film & Cinema'      THEN 'interest-film-cinema'
+  -- Off-list values: leave tag_id NULL; verification step raises
+  ELSE NULL
 END;
 
--- Verification — must return 0
+-- Verification — must return 0. If non-zero, surface the unmapped values:
+--   SELECT interest, count(*) FROM public.user_interests
+--    WHERE tag_id IS NULL GROUP BY interest;
 SELECT count(*) FROM public.user_interests WHERE tag_id IS NULL;
 ```
+
+**Alternative implementation — temporary lookup table.** For larger
+fact-tables or for audit-trail reasons, the backend-developer may prefer
+to materialise the mapping as a temporary table joined into the UPDATE,
+rather than embedding the CASE expression. With 14 mappings the CASE is
+readable; if more remappings are added in future migrations, switching
+to a temp table becomes worthwhile.
+
+**Member UX note — out of scope for the architect, flagged for the
+UX-designer/product owner:** any member who selected `Art & Culture`,
+`Jazz & Music`, or `Wine & Cocktails` gets remapped to a single more-
+specific primary tag. The remap is best-effort — a member who is into
+"culture" generally (theatre + galleries + festivals) gets only
+`galleries-museums` after the migration. A one-time post-migration
+prompt ("we updated our interest list — pick any extras you'd like to
+follow") would close that gap, but it's a frontend-developer task, not
+a data-layer one. See Q9 in §"Questions for the product owner".
 
 ---
 
@@ -1052,45 +1221,190 @@ this is the correct safety: admins retire tags, never delete them.
 
 ### Tag seed insert (Migration 2)
 
+23 rows: 15 primary-eligible (sort 10–150) followed by 8 interest-only
+(sort 200–270). The `is_primary_eligible` business rule is **not** stored
+in this table — it lives as the `PRIMARY_ELIGIBLE_TAG_SLUGS` constant in
+`src/lib/constants.ts` (see Type-system surface). The DB only stores the
+canonical taxonomy.
+
 ```sql
 INSERT INTO public.tags (slug, label, sort_order, is_active) VALUES
-  ('drinks',             'Drinks',              10,  true),
-  ('dining',             'Dining',              20,  true),
-  ('cultural',           'Cultural',            30,  true),
-  ('wellness',           'Wellness',            40,  true),
-  ('sport',              'Sport',               50,  true),
-  ('workshops',          'Workshops',           60,  true),
-  ('music',              'Music',               70,  true),
-  ('networking',         'Networking',          80,  true),
-  ('activity',           'Activity',            90,  true),
-  ('technology',         'Technology',         100,  true),
-  ('entrepreneurship',   'Entrepreneurship',   110,  true),
-  ('photography',        'Photography',        120,  true),
-  ('travel',             'Travel',             130,  true),
-  ('books-literature',   'Books & Literature', 140,  true),
-  ('sustainable-living', 'Sustainable Living', 150,  true),
-  ('film-cinema',        'Film & Cinema',      160,  true)
+  -- ── Primary-eligible (15) ─────────────────────────────────────────
+  ('drinks-bars',                 'Drinks & Bars',              10,  true),
+  ('dining-supper-clubs',         'Dining & Supper Clubs',      20,  true),
+  ('activities-social-games',     'Activities & Social Games',  30,  true),
+  ('nightlife-dancing',           'Nightlife & Dancing',        40,  true),
+  ('live-music-gigs',             'Live Music & Gigs',          50,  true),
+  ('theatre-comedy',              'Theatre & Comedy',           60,  true),
+  ('galleries-museums',           'Galleries & Museums',        70,  true),
+  ('festivals-seasonal',          'Festivals & Seasonal',       80,  true),
+  ('sport-fitness',               'Sport & Fitness',            90,  true),
+  ('outdoor-picnics',             'Outdoor & Picnics',         100,  true),
+  ('weekends-travel',             'Weekends & Travel',         110,  true),
+  ('themed-socials',              'Themed Socials',            120,  true),
+  ('charity-volunteering',        'Charity & Volunteering',    130,  true),
+  ('wellness-mindfulness',        'Wellness & Mindfulness',    140,  true),
+  ('workshops-masterclasses',     'Workshops & Masterclasses', 150,  true),
+  -- ── Interest-only (8) ─────────────────────────────────────────────
+  -- Slugs prefixed with 'interest-' to disambiguate from primary tags.
+  ('interest-technology',         'Technology',                200,  true),
+  ('interest-entrepreneurship',   'Entrepreneurship',          210,  true),
+  ('interest-networking',         'Networking',                220,  true),
+  ('interest-photography',        'Photography',               230,  true),
+  ('interest-travel',             'Travel',                    240,  true),
+  ('interest-books-literature',   'Books & Literature',        250,  true),
+  ('interest-sustainable-living', 'Sustainable Living',        260,  true),
+  ('interest-film-cinema',        'Film & Cinema',             270,  true)
 ON CONFLICT (slug) DO NOTHING;
 ```
 
 ### Event-tags backfill (Migration 2)
 
+The product owner's audit produced a per-event mapping for 22 of the 33
+seed events (every cultural/sport/music event plus four drinks/dining
+events that were misclassified). The remaining 11 events use a default
+mapping based on their current `events.category` value. ~22 events get
+secondary tags in addition to their primary.
+
+The backfill has three steps:
+
+1. **Primary tags — per-event override** for the 22 audited events.
+2. **Primary tags — default fallback** for the 11 events without an
+   explicit override (drinks → drinks-bars; dining → dining-supper-clubs;
+   wellness/workshops/networking/activity → respective replacements;
+   any future event added to the seed before Migration 2 ships gets the
+   default).
+3. **Secondary tags — per-event INSERT** for the events the audit gave
+   1–2 secondaries.
+
+The full per-event override comes from the product-owner-supplied
+mapping. Event UUIDs follow the seed's `e1000000-0000-0000-0000-
+0000000000NN` pattern — the UUID for "Event NN" is constructable from
+the two-digit number.
+
 ```sql
+-- ── Step 1: Primary tags for the 22 audited events ─────────────────
+INSERT INTO public.event_tags (event_id, tag_id, is_primary)
+SELECT
+  v.event_id::uuid,
+  t.id,
+  true
+FROM (VALUES
+  -- Cultural reclassifications (8)
+  ('e1000000-0000-0000-0000-000000000008', 'weekends-travel'),       -- Cotswolds Weekend
+  ('e1000000-0000-0000-0000-000000000012', 'festivals-seasonal'),    -- Fireworks Night, Totteridge
+  ('e1000000-0000-0000-0000-000000000013', 'theatre-comedy'),        -- Comedy & Dinner in Angel
+  ('e1000000-0000-0000-0000-000000000014', 'galleries-museums'),     -- Tate Late
+  ('e1000000-0000-0000-0000-000000000016', 'charity-volunteering'),  -- Christmas Eve Volunteering with Crisis
+  ('e1000000-0000-0000-0000-000000000023', 'theatre-comedy'),        -- Queen of Wands at Union Theatre
+  ('e1000000-0000-0000-0000-000000000026', 'outdoor-picnics'),       -- Picnic in Regent's Park
+  ('e1000000-0000-0000-0000-000000000030', 'festivals-seasonal'),    -- Winter Wonderland
+  -- Sport reclassifications (7)
+  ('e1000000-0000-0000-0000-000000000003', 'activities-social-games'), -- Axe Throwing & Drinks
+  ('e1000000-0000-0000-0000-000000000007', 'activities-social-games'), -- Flight Club + Little Scarlett Door
+  ('e1000000-0000-0000-0000-000000000010', 'weekends-travel'),         -- Hiking in Snowdonia
+  ('e1000000-0000-0000-0000-000000000020', 'weekends-travel'),         -- Skiing in St Moritz
+  ('e1000000-0000-0000-0000-000000000022', 'activities-social-games'), -- Mini Golf & Drinks
+  ('e1000000-0000-0000-0000-000000000024', 'weekends-travel'),         -- Hiking in the Lake District
+  ('e1000000-0000-0000-0000-000000000025', 'festivals-seasonal'),      -- Polo in the Park
+  -- Music reclassifications (3)
+  ('e1000000-0000-0000-0000-000000000021', 'live-music-gigs'),         -- Oliver Heldens at O2 Brixton
+  ('e1000000-0000-0000-0000-000000000028', 'nightlife-dancing'),       -- Halloween at Cubanista
+  ('e1000000-0000-0000-0000-000000000029', 'charity-volunteering'),    -- Charity 80s/90s Night
+  -- Drinks/dining reclassifications (4)
+  ('e1000000-0000-0000-0000-000000000001', 'activities-social-games'), -- Fairgame & Pizza
+  ('e1000000-0000-0000-0000-000000000011', 'themed-socials'),          -- Black Tie Evening, Pall Mall
+  ('e1000000-0000-0000-0000-000000000015', 'nightlife-dancing'),       -- Christmas Party at Tonteria
+  ('e1000000-0000-0000-0000-000000000018', 'themed-socials')           -- Valentine's Singles Evening
+) AS v(event_id, slug)
+JOIN public.tags t ON t.slug = v.slug
+WHERE EXISTS (
+  SELECT 1 FROM public.events e
+  WHERE e.id = v.event_id::uuid AND e.deleted_at IS NULL
+)
+ON CONFLICT (event_id, tag_id) DO NOTHING;
+
+-- ── Step 2: Primary tags via default mapping (the 11 unaudited events) ─
+-- For any event NOT covered by Step 1, map old enum value to new slug.
 INSERT INTO public.event_tags (event_id, tag_id, is_primary)
 SELECT
   e.id,
   t.id,
   true
 FROM public.events e
-JOIN public.tags t ON t.slug = e.category::text
+JOIN public.tags t ON t.slug = CASE e.category::text
+  WHEN 'drinks'     THEN 'drinks-bars'
+  WHEN 'dining'     THEN 'dining-supper-clubs'
+  WHEN 'wellness'   THEN 'wellness-mindfulness'
+  WHEN 'workshops'  THEN 'workshops-masterclasses'
+  WHEN 'networking' THEN 'workshops-masterclasses'  -- networking demoted to interest-only; closest event home
+  WHEN 'activity'   THEN 'activities-social-games'
+  WHEN 'sport'      THEN 'sport-fitness'   -- defensive; all current sport rows are in Step 1
+  WHEN 'cultural'   THEN 'galleries-museums'  -- defensive; all current cultural rows are in Step 1
+  WHEN 'music'      THEN 'live-music-gigs'  -- defensive; all current music rows are in Step 1
+END
 WHERE e.deleted_at IS NULL
+  -- Skip events already given a primary in Step 1
+  AND NOT EXISTS (
+    SELECT 1 FROM public.event_tags et
+    WHERE et.event_id = e.id AND et.is_primary = true
+  )
 ON CONFLICT (event_id, tag_id) DO NOTHING;
 
--- Verify
+-- ── Step 3: Secondary tags ──────────────────────────────────────────
+-- Per-event secondary inserts. is_primary defaults to false (column default).
+INSERT INTO public.event_tags (event_id, tag_id, is_primary)
+SELECT
+  v.event_id::uuid,
+  t.id,
+  false
+FROM (VALUES
+  -- Event 01 (Fairgame & Pizza) → drinks-bars + dining-supper-clubs
+  ('e1000000-0000-0000-0000-000000000001', 'drinks-bars'),
+  ('e1000000-0000-0000-0000-000000000001', 'dining-supper-clubs'),
+  -- Event 03 (Axe Throwing) → drinks-bars
+  ('e1000000-0000-0000-0000-000000000003', 'drinks-bars'),
+  -- Event 07 (Flight Club) → drinks-bars
+  ('e1000000-0000-0000-0000-000000000007', 'drinks-bars'),
+  -- Event 10 (Hiking Snowdonia) → sport-fitness
+  ('e1000000-0000-0000-0000-000000000010', 'sport-fitness'),
+  -- Event 11 (Black Tie Pall Mall) → dining-supper-clubs
+  ('e1000000-0000-0000-0000-000000000011', 'dining-supper-clubs'),
+  -- Event 13 (Comedy & Dinner Angel) → dining-supper-clubs
+  ('e1000000-0000-0000-0000-000000000013', 'dining-supper-clubs'),
+  -- Event 15 (Christmas Party Tonteria) → festivals-seasonal + drinks-bars
+  ('e1000000-0000-0000-0000-000000000015', 'festivals-seasonal'),
+  ('e1000000-0000-0000-0000-000000000015', 'drinks-bars'),
+  -- Event 18 (Valentine's Singles) → drinks-bars
+  ('e1000000-0000-0000-0000-000000000018', 'drinks-bars'),
+  -- Event 20 (Skiing St Moritz) → sport-fitness
+  ('e1000000-0000-0000-0000-000000000020', 'sport-fitness'),
+  -- Event 22 (Mini Golf & Drinks) → drinks-bars
+  ('e1000000-0000-0000-0000-000000000022', 'drinks-bars'),
+  -- Event 24 (Hiking Lake District) → sport-fitness
+  ('e1000000-0000-0000-0000-000000000024', 'sport-fitness'),
+  -- Event 25 (Polo in the Park) → outdoor-picnics
+  ('e1000000-0000-0000-0000-000000000025', 'outdoor-picnics'),
+  -- Event 28 (Halloween Cubanista) → festivals-seasonal + themed-socials
+  ('e1000000-0000-0000-0000-000000000028', 'festivals-seasonal'),
+  ('e1000000-0000-0000-0000-000000000028', 'themed-socials'),
+  -- Event 29 (Charity 80s/90s Night) → nightlife-dancing
+  ('e1000000-0000-0000-0000-000000000029', 'nightlife-dancing')
+) AS v(event_id, slug)
+JOIN public.tags t ON t.slug = v.slug
+WHERE EXISTS (
+  SELECT 1 FROM public.events e
+  WHERE e.id = v.event_id::uuid AND e.deleted_at IS NULL
+)
+ON CONFLICT (event_id, tag_id) DO NOTHING;
+
+-- ── Step 4: Verify exactly one primary per event ────────────────────
 DO $$
 DECLARE
   missing_count int;
+  duplicate_count int;
 BEGIN
+  -- Every event has at least one primary
   SELECT count(*) INTO missing_count
   FROM public.events e
   WHERE e.deleted_at IS NULL
@@ -1101,34 +1415,182 @@ BEGIN
   IF missing_count > 0 THEN
     RAISE EXCEPTION 'Backfill incomplete: % events without primary tag', missing_count;
   END IF;
+
+  -- No event has more than one primary (the partial unique index will
+  -- catch this too when created, but explicit verification gives a
+  -- clearer error message during backfill).
+  SELECT count(*) INTO duplicate_count
+  FROM (
+    SELECT event_id FROM public.event_tags WHERE is_primary = true
+    GROUP BY event_id HAVING count(*) > 1
+  ) AS dupes;
+  IF duplicate_count > 0 THEN
+    RAISE EXCEPTION 'Backfill produced % events with multiple primary tags', duplicate_count;
+  END IF;
 END $$;
 ```
 
-The cast `e.category::text` works because the enum's text representation
-matches the canonical slug for all current values. New enum values added in
-this migration (`technology`, `entrepreneurship`) follow the same pattern.
+**Counts after backfill:** 33 primary `event_tags` rows + ~16 secondary
+rows = ~49 total rows.
+
+**Per-event override approach vs single-CASE:** the override list is
+embedded as a `VALUES` clause for clarity (each event maps to one
+slug; the join to `tags` resolves the slug to a UUID). An alternative
+single-CASE on `event_id` would work but be harder to review. The
+backfill is one-shot — performance isn't a concern.
+
+**Future events added between spec sign-off and migration deploy:** if
+the product owner adds new seed events that aren't in the override
+list, they fall through to Step 2's default mapping. If those events
+need a more specific primary, the override list above must be updated
+before the migration runs.
 
 ### Bidirectional sync trigger (Migration 2)
 
-The mechanics are documented in §Decision 5; the backend-developer should
-treat the implementation as: two trigger functions, one on each side, each
-guarded by a `pg_trigger_depth()` check or a session-local `set_config`
-flag to prevent cycles. Pseudocode:
+The mechanics are documented in §Decision 5. After the Decision 4 rewrite,
+the new primary-tag slugs no longer match `event_category` enum values
+1:1, so the trigger needs a **static slug→enum mapping function** that
+collapses 15 primary slugs into the 9 existing enum values. The mapping is
+lossy (many-to-one) but acceptable because `events.category` is doomed in
+Migration 4 — its purpose during the dual-write window is "best-effort
+legacy display value" only.
+
+#### Slug → enum mapping function
 
 ```sql
--- After UPDATE on events (only when category changed):
---   if pg_trigger_depth() > 1: return  -- we're in the cycle
---   UPDATE event_tags SET tag_id = (SELECT id FROM tags WHERE slug = NEW.category::text)
---   WHERE event_id = NEW.id AND is_primary = true
-
--- After UPDATE/INSERT on event_tags (only when is_primary = true):
---   if pg_trigger_depth() > 1: return
---   UPDATE events SET category = (SELECT slug FROM tags WHERE id = NEW.tag_id)::event_category
---   WHERE id = NEW.event_id
+-- Static mapping: new primary tag slug → existing event_category enum.
+-- Lossy (15 → 9). Used only during the dual-write window (Migrations 2–3);
+-- becomes dead code after Migration 4 drops events.category.
+CREATE OR REPLACE FUNCTION public._tag_slug_to_legacy_category(p_slug text)
+RETURNS public.event_category
+LANGUAGE plpgsql IMMUTABLE SET search_path = public AS $$
+BEGIN
+  RETURN CASE p_slug
+    WHEN 'drinks-bars'              THEN 'drinks'::event_category
+    WHEN 'dining-supper-clubs'      THEN 'dining'::event_category
+    WHEN 'activities-social-games'  THEN 'activity'::event_category
+    WHEN 'nightlife-dancing'        THEN 'drinks'::event_category   -- closest existing enum
+    WHEN 'live-music-gigs'          THEN 'music'::event_category
+    WHEN 'theatre-comedy'           THEN 'cultural'::event_category
+    WHEN 'galleries-museums'        THEN 'cultural'::event_category
+    WHEN 'festivals-seasonal'       THEN 'cultural'::event_category
+    WHEN 'sport-fitness'            THEN 'sport'::event_category
+    WHEN 'outdoor-picnics'          THEN 'activity'::event_category
+    WHEN 'weekends-travel'          THEN 'activity'::event_category
+    WHEN 'themed-socials'           THEN 'drinks'::event_category   -- themed parties are typically drinks-led
+    WHEN 'charity-volunteering'     THEN 'cultural'::event_category
+    WHEN 'wellness-mindfulness'     THEN 'wellness'::event_category
+    WHEN 'workshops-masterclasses'  THEN 'workshops'::event_category
+    -- Interest-only slugs (interest-…) should never be set as primary,
+    -- but defensively raise rather than coerce to a wrong enum value.
+    ELSE NULL
+  END;
+END;
+$$;
 ```
 
-Both triggers fire AFTER the row is committed-to-the-statement; both are
-idempotent under `pg_trigger_depth()` guard.
+If the function returns NULL (i.e. the primary slug isn't in the mapping),
+the event_tags-side trigger should raise rather than write a NULL category.
+
+Note: the reverse direction (enum → slug) doesn't need a static map. The
+events-side trigger picks **one canonical primary slug per enum value**
+(e.g. `drinks` → `drinks-bars`); admins who want a different primary
+(e.g. `nightlife-dancing` for a drinks event that's really a club night)
+must set it via the new tag picker. The legacy `category` dropdown is
+therefore a "coarse-grained set the rough type" tool, not a precise
+re-tag tool — acceptable for the transient legacy admin path.
+
+#### Trigger functions (pseudocode — backend-developer implements)
+
+```sql
+-- Side A: events.category UPDATE → write through to primary event_tags row.
+-- Fires on UPDATE OF category.
+CREATE OR REPLACE FUNCTION public._sync_primary_tag_from_category()
+RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$
+DECLARE
+  v_canonical_slug text;
+  v_tag_id uuid;
+BEGIN
+  IF pg_trigger_depth() > 1 THEN
+    RETURN NEW;  -- cycle guard
+  END IF;
+  IF NEW.category = OLD.category THEN
+    RETURN NEW;  -- no-op
+  END IF;
+
+  -- Pick the canonical primary slug for the new enum value.
+  v_canonical_slug := CASE NEW.category::text
+    WHEN 'drinks'     THEN 'drinks-bars'
+    WHEN 'dining'     THEN 'dining-supper-clubs'
+    WHEN 'wellness'   THEN 'wellness-mindfulness'
+    WHEN 'workshops'  THEN 'workshops-masterclasses'
+    WHEN 'networking' THEN 'workshops-masterclasses'  -- networking demoted; closest event home
+    WHEN 'activity'   THEN 'activities-social-games'
+    WHEN 'sport'      THEN 'sport-fitness'
+    WHEN 'cultural'   THEN 'galleries-museums'  -- one canonical pick — admin can re-tag if wrong
+    WHEN 'music'      THEN 'live-music-gigs'
+  END;
+  IF v_canonical_slug IS NULL THEN
+    RAISE EXCEPTION 'unknown legacy category value: %', NEW.category;
+  END IF;
+
+  SELECT id INTO v_tag_id FROM public.tags WHERE slug = v_canonical_slug;
+  -- Replace existing primary tag for this event.
+  UPDATE public.event_tags
+     SET tag_id = v_tag_id
+   WHERE event_id = NEW.id AND is_primary = true;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_sync_primary_tag_from_category
+  AFTER UPDATE OF category ON public.events
+  FOR EACH ROW EXECUTE FUNCTION public._sync_primary_tag_from_category();
+
+-- Side B: event_tags primary INSERT/UPDATE → write back to events.category.
+-- Fires on INSERT or UPDATE WHERE is_primary = true.
+CREATE OR REPLACE FUNCTION public._sync_category_from_primary_tag()
+RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$
+DECLARE
+  v_slug text;
+  v_legacy_cat public.event_category;
+BEGIN
+  IF pg_trigger_depth() > 1 THEN
+    RETURN NEW;  -- cycle guard
+  END IF;
+  IF NEW.is_primary IS NOT TRUE THEN
+    RETURN NEW;  -- only primary changes propagate
+  END IF;
+
+  SELECT slug INTO v_slug FROM public.tags WHERE id = NEW.tag_id;
+  v_legacy_cat := public._tag_slug_to_legacy_category(v_slug);
+  IF v_legacy_cat IS NULL THEN
+    RAISE EXCEPTION 'no legacy enum mapping for primary tag slug: %', v_slug;
+  END IF;
+
+  UPDATE public.events
+     SET category = v_legacy_cat
+   WHERE id = NEW.event_id AND category IS DISTINCT FROM v_legacy_cat;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_sync_category_from_primary_tag
+  AFTER INSERT OR UPDATE ON public.event_tags
+  FOR EACH ROW EXECUTE FUNCTION public._sync_category_from_primary_tag();
+```
+
+Both triggers fire AFTER the row change is applied to the row; both
+short-circuit on `pg_trigger_depth() > 1` to break the cycle. The
+`IS DISTINCT FROM` guard on Side B prevents a no-op write (and therefore
+prevents needless trigger re-entry).
+
+**Migration 4 cleanup:** `DROP TRIGGER … ON public.events`, `DROP TRIGGER
+… ON public.event_tags`, `DROP FUNCTION public._sync_*`, `DROP FUNCTION
+public._tag_slug_to_legacy_category`. Then drop `events.category` and
+the `event_category` enum.
 
 ### user_interests schema change (Migration 3)
 
@@ -1214,13 +1676,34 @@ export interface UserInterest {
 }
 ```
 
-A constant for `is_primary_eligible` lives in `src/lib/constants.ts`:
+A constant for `is_primary_eligible` lives in `src/lib/constants.ts`. The
+admin event-creation form reads this to populate the primary-tag picker;
+the member interest picker reads the full `tags` table (active rows
+only):
 
 ```ts
 export const PRIMARY_ELIGIBLE_TAG_SLUGS = new Set<string>([
-  'drinks', 'dining', 'cultural', 'wellness', 'sport', 'workshops',
-  'music', 'networking', 'activity', 'technology', 'entrepreneurship',
+  'drinks-bars',
+  'dining-supper-clubs',
+  'activities-social-games',
+  'nightlife-dancing',
+  'live-music-gigs',
+  'theatre-comedy',
+  'galleries-museums',
+  'festivals-seasonal',
+  'sport-fitness',
+  'outdoor-picnics',
+  'weekends-travel',
+  'themed-socials',
+  'charity-volunteering',
+  'wellness-mindfulness',
+  'workshops-masterclasses',
 ])
+// 8 interest-only slugs — interest-technology, interest-entrepreneurship,
+// interest-networking, interest-photography, interest-travel,
+// interest-books-literature, interest-sustainable-living, interest-film-cinema —
+// are deliberately omitted. They live in the tags table but aren't
+// selectable as an event's primary tag.
 ```
 
 ---
@@ -1231,33 +1714,28 @@ export const PRIMARY_ELIGIBLE_TAG_SLUGS = new Set<string>([
 |---|---|---|
 | `authenticated` GRANT narrowing breaks an unrelated query | Medium | Backend-developer enumerates the full current column set before REVOKE; tester runs the existing profile/auth suite against the new GRANT. |
 | Bidirectional sync trigger causes infinite loops | Medium | `pg_trigger_depth()` guard on both sides; tester writes a Vitest case that updates both sides and asserts no recursion. |
-| Backfill of `user_interests.tag_id` leaves NULLs | Low | Migration verification step (DO $$ … RAISE EXCEPTION) fails the migration, surfacing unmapped rows immediately. |
-| Adding enum values then trying to use them in same migration | Medium | Backend-developer splits ADD VALUE into its own statement, separate from the seed insert. |
+| Backfill of `user_interests.tag_id` leaves NULLs | Low | Migration verification step (DO $$ … RAISE EXCEPTION) fails the migration, surfacing unmapped rows immediately. The CASE expression covers all 14 INTEREST_OPTIONS values; off-list values (defensive) trigger the verification failure. |
+| Multi-tag backfill produces multiple primary rows for one event | Low | Backfill verification step (Step 4 in Event-tags backfill SQL) explicitly counts events with >1 primary and raises before the partial unique index is created. The unique index then provides a permanent storage-layer guarantee. |
+| Slug→enum mapping lossy collapse causes admin confusion | Low–Medium | Documented in Decision 5 caveat. Lossy by design (15 → 9, transient state); admin UI should show the new tag picker as primary, with the legacy category dropdown clearly marked "legacy — coarse-grained" or hidden entirely once the new picker ships. Disappears when Migration 4 drops `events.category`. |
+| New primary-eligible tag added in future without slug→enum mapping update | Medium | Trigger raises explicit error: `'no legacy enum mapping for primary tag slug: …'`. Backend-developer must update `_tag_slug_to_legacy_category()` whenever `PRIMARY_ELIGIBLE_TAG_SLUGS` is extended (until Migration 4 ships). Tester adds a check that every entry in the constant has a non-NULL function return. |
+| Per-event override list drifts as new seed events are added pre-deploy | Low | The override list (Step 1 of Event-tags backfill) is event-UUID-keyed. Any new seed event added between spec sign-off and migration deploy falls through to Step 2's default mapping. Backend-developer reviews the event list at migration write time and extends the override if needed. |
 | Member discovers other-member demographics via REST | High before Migration 1; mitigated by Option A | Decision 7 Option A narrows `authenticated` GRANT in the same migration that adds the columns. |
 | Privacy policy update lags the column visibility | Low (operational) | Frontend-developer ships the privacy text update in the same release as the demographics banner. Don't deploy the banner without the privacy change. |
 | Gender/age forms feel intrusive — sign-up drop-off | Out of data-layer scope | UX-designer + product-owner own the banner copy. Spec recommends the post-signup banner over signup form (per PHASE-3-BACKLOG.md). |
-| Two-stage drop of `events.category` (Migration 2 trigger → Migration 4 drop) leaves dual writes longer than expected | Low | Acceptable. The bidirectional trigger is cheap; if Migration 4 slips, nothing breaks. |
+| Two-stage drop of `events.category` (Migration 2 trigger → Migration 4 drop) leaves dual writes longer than expected | Low | Acceptable. The bidirectional trigger is cheap; if Migration 4 slips, the lossy slug→enum collapse persists but `events.category` reads remain coherent. |
 | `event_tags` SELECT policy subquery hot-path performance regression on `/events` listing | Low | The `idx_events_published` partial index covers the join's filter. Tester adds an EXPLAIN check on the events listing query post-migration. |
+| Members lose interest specificity after `Art & Culture`/`Jazz & Music`/`Wine & Cocktails` remap | Low (UX) | Each of these maps to a single primary tag (Decision 9 Group A). A post-migration "we updated our interest list" prompt closes the gap. Frontend-developer task; flagged in §"Questions for the product owner" (Q9). |
 
 ---
 
 ## Questions for the product owner
 
 These are decisions where the data-layer architect can recommend a default,
-but the call genuinely belongs to the product owner:
+but the call genuinely belongs to the product owner. **The earlier Q1
+(promote `technology`/`entrepreneurship` to primary-eligible) is now
+resolved by the Decision 4 revision — both demoted to interest-only.**
 
-1. **`technology` and `entrepreneurship` as primary-eligible tags.** Spec
-   default: yes (recommended). These promote two interest values to
-   first-class event categories, opening the door to founder-circle and
-   tech-meetup events as a first-tag-bearing category. The alternative is
-   to keep them interest-only for now (matching the current state) and
-   promote later via a flip of `is_primary_eligible` when the first such
-   event is scheduled. The cost of including now is two enum ADD VALUE
-   statements and adding both slugs to `PRIMARY_ELIGIBLE_TAG_SLUGS`. **No
-   downside to deferring; small upside to including now.** Product owner
-   call.
-
-2. **Decision 7 Option A vs Option B for `authenticated` GRANT narrowing.**
+1. **Decision 7 Option A vs Option B for `authenticated` GRANT narrowing.**
    Spec default: Option A (narrow the GRANT in the same migration). Option
    B (rely on application-layer gating) is the path the codebase uses
    today for `phone_number`, with a known follow-up risk flagged in the
@@ -1265,7 +1743,7 @@ but the call genuinely belongs to the product owner:
    risk class entirely. Product owner call: are we comfortable that
    demographic data is sensitive enough to warrant the stricter gate?
 
-3. **Whether to expose member-set demographics in the member's own profile
+2. **Whether to expose member-set demographics in the member's own profile
    edit form, or **only** via the post-signup banner.** Spec assumes the
    profile edit form (and "Your data & privacy" download) gets the new
    fields, so members can edit later. Product owner call: are these
@@ -1276,7 +1754,7 @@ but the call genuinely belongs to the product owner:
    admin-only visibility argument is about who *reads* the data, not
    who *writes* it.
 
-4. **Retention rule for demographics on account deletion.** The existing
+3. **Retention rule for demographics on account deletion.** The existing
    account-deletion flow (`privacy-actions.ts`) anonymises the profile
    and hard-deletes after 30 days. The two new columns are PII and
    should be anonymised along with everything else. Spec assumes the
@@ -1285,24 +1763,79 @@ but the call genuinely belongs to the product owner:
    simply returns NULL for soft-deleted profiles). Product owner sign-off:
    confirm the same retention as other PII.
 
-5. **Tag retirement vs deletion.** `is_active = false` is the soft-retire
+4. **Tag retirement vs deletion.** `is_active = false` is the soft-retire
    path; there's no hard-delete UI proposed here. Product owner call: do
    admins ever need a "permanently delete this tag" path, or is "make
    it inactive and forget it" sufficient? Spec assumes the latter.
 
-6. **The 16th tag is a lot for a member-facing interest picker.** The
-   current registration Step 2 shows 14 options as a chip grid. Adding
-   `activity` (currently event-only) brings this to 15; promoting
-   `technology` + `entrepreneurship` for events (already interest values)
-   is neutral. Product owner: comfortable showing all 16 in the
-   registration interest picker, or should the picker filter to a curated
-   subset?
+5. **Member-facing interest picker — 23 tags is more than the current 14.**
+   The registration Step 2 today shows 14 options as a chip grid.
+   Post-migration, the canonical `tags` table contains 23 rows (15
+   primary + 8 interest-only). The interest picker should show ALL of
+   them so members can express preferences for primary-eligible
+   categories AND interest-only signals. **Default recommendation:** show
+   all 23 active tags (sorted by `sort_order`) — the chip grid scales
+   fine, and members benefit from finer granularity. Product owner: confirm
+   showing all 23, or want a curated subset?
 
-7. **Migration 4 timing.** Spec recommends "after one stable release of
+6. **Migration 4 timing.** Spec recommends "after one stable release of
    Migration 3." Product owner: any preference for cadence — bundle all
    four in one PR for the data team to review together, or stage them
    across two PRs (Migrations 1+2+3 → release → Migration 4 in a
-   follow-up)?
+   follow-up)? **Note:** with the new 15-slug primary set diverging
+   from the 9-value enum, the dual-write window relies on the lossy
+   slug→enum mapping function. There's mild appeal to shortening the
+   window (i.e. ship Migration 4 sooner) — but only after the
+   application code has fully migrated to read tags directly.
+
+7. **Per-event override list completeness.** The Migration 2 backfill
+   embeds 22 event-UUID overrides (every cultural/sport/music event
+   plus four mis-classified drinks/dining events). The remaining 11
+   events fall through to a default mapping (drinks→drinks-bars,
+   dining→dining-supper-clubs, etc.). Product owner: confirm that the
+   audit produced exactly the 22 overrides listed, and that the 11
+   default-mapped events are correctly classified (i.e. all 7
+   default-mapped drinks events really do belong as `drinks-bars`
+   primary; all 4 default-mapped dining events really do belong as
+   `dining-supper-clubs`). If any of those 11 should also be
+   reclassified, add them to the override list before the migration
+   ships.
+
+8. **Forward-planned event mapping.** The Decision 4 distribution table
+   includes 12 forward-planned events. The backfill SQL only touches
+   currently-seeded rows (events that exist in `public.events` at
+   migration time). For forward-planned events that haven't been
+   inserted yet, the admin will use the new tag picker when they
+   create the event. Product owner: confirm we don't need to pre-seed
+   placeholder rows — admins create future events as normal once the
+   admin form has the new picker.
+
+9. **Post-migration "your interests have been updated" prompt for
+   members.** The Decision 9 remap is best-effort:
+   - 6 of 14 interest values get remapped to primary-eligible tags (a
+     loss of granularity for members who picked "Art & Culture" — they
+     now point at `galleries-museums` only, not at theatre-comedy too).
+   - 8 of 14 stay as interest-only (no UX change).
+   A one-time post-migration prompt — "we've sharpened our interest
+   categories; here are your current picks, want to add more?" — would
+   close the gap for the affected members. Product owner call:
+   - **Option A:** ship the prompt with the migration (more frontend
+     work, better member experience).
+   - **Option B:** don't prompt; rely on the next time the member edits
+     their profile to surface the new options.
+   - **Option C:** don't prompt and don't surface — accept the
+     remap-loss as the migration cost.
+   Spec recommendation: Option A. Cost ~half a frontend-developer day;
+   benefit is members feel cared for during the change. Belongs to
+   UX-designer + frontend-developer.
+
+10. **Wellness & Mindfulness has zero past or future events.** It exists
+    in the seed list per the product owner's "forward-looking" call.
+    Confirm we want it active (`is_active = true`) on Day 1, or should
+    it ship `is_active = false` until the first event is scheduled?
+    Spec default: active — it gives admins a tag to attach to draft
+    events as the wellness programme spins up. No member-facing harm
+    from an empty-results-for-now category.
 
 ---
 
@@ -1331,14 +1864,14 @@ Restating from §0, with one-line reasons each:
 ## HANDOVER
 
 - **Agent:** architect
-- **Task:** Member-data layer schema spec — gender + age_range on profiles, canonical tag taxonomy replacing dual `events.category` + `user_interests.interest` vocabulary
-- **Files changed:** `docs/member-data-layer-spec.md` (new file, this document)
+- **Task:** Member-data layer schema spec — gender + age_range on profiles, canonical 23-tag taxonomy (15 primary-eligible + 8 interest-only) replacing dual `events.category` + `user_interests.interest` vocabulary. Revised 2026-04-26 to ground the seed list in a 33-event audit + 12 forward-planned events.
+- **Files changed:** `docs/member-data-layer-spec.md` (revised — Decisions 4 + 5 caveat + 8 Migration 2 intent + 9 + SQL fragments tag seed/event-tags backfill/bidirectional trigger + Type-system surface + Risk register + Questions for the product owner + this HANDOVER)
 - **Migrations planned:**
   1. `add_profile_demographics` — gender + age_range enums + columns; narrow `authenticated` GRANT; SECURITY DEFINER demographics functions (Migration 1)
-  2. `create_tags_and_event_tags` — tags + event_tags tables; ADD VALUE 'technology' and 'entrepreneurship' to event_category; seed 16 tags; backfill event_tags primary rows; install bidirectional sync trigger (Migration 2)
-  3. `migrate_user_interests_to_tag_id` — add tag_id FK, backfill from text, swap unique constraint, keep text column for one release (Migration 3)
+  2. `create_tags_and_event_tags` — tags + event_tags tables; **no enum ADD VALUE** (revised — slug→enum is now lossy and transient); seed 23 tags (15 primary + 8 interest-only); backfill event_tags using product-owner per-event override map (22 events) + default fallback (11 events) + ~16 secondary-tag rows; install bidirectional sync trigger with static slug→enum mapping function (Migration 2)
+  3. `migrate_user_interests_to_tag_id` — add tag_id FK, backfill from text via the 14-value reconciliation map (6 to primary-eligible slugs, 8 to interest-only slugs), swap unique constraint, keep text column for one release (Migration 3)
   4. `drop_user_interests_interest_text` — follow-up after application code migrated (post-Migration 3)
-  5. `drop_events_category_enum` — follow-up after application code migrated; drop sync trigger, drop column, drop enum (Migration 4)
+  5. `drop_events_category_enum` — follow-up after application code migrated; drop sync trigger + slug→enum mapping function, drop column, drop enum (Migration 4)
 - **Tests added:** none (architect doesn't write tests)
-- **Next agent:** product owner (review the 7 questions in §"Questions for the product owner") → planner (sequence backend-developer → tester → frontend-developer for the implementation phase)
-- **Risks / open questions:** the 7 product-owner questions in the dedicated section. Two are operationally meaningful enough to block migration writing (Q1: include `technology`/`entrepreneurship` as primary-eligible; Q2: GRANT narrowing approach). Q3–Q7 can be resolved in parallel with backend-developer drafting Migrations 1–3.
+- **Next agent:** product owner (review the 10 questions in §"Questions for the product owner") → planner (sequence backend-developer → tester → frontend-developer for the implementation phase)
+- **Risks / open questions:** the 10 product-owner questions in the dedicated section. The earlier Q1 (technology/entrepreneurship promotion) is resolved by the Decision 4 rewrite. Q1 (was Q2 — GRANT narrowing approach) remains the only migration-blocking question; Q2–Q10 can be resolved in parallel with backend-developer drafting Migrations 1–3. New Q9 (post-migration member prompt for interest re-pick) is a UX/frontend follow-up, not data-layer work.
