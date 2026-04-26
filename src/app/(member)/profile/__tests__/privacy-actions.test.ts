@@ -108,8 +108,15 @@ describe('exportMyData', () => {
         error: null,
       })
     })
-    // get_my_phone() RPC — returns the scalar phone string (or null).
-    mockRpc.mockResolvedValue({ data: '+447700900000', error: null })
+    // RPC mock returns one canned response per call, in order:
+    //   1. get_my_phone()         -> scalar phone string
+    //   2. get_my_demographics()  -> array of one row (RETURNS TABLE)
+    mockRpc
+      .mockResolvedValueOnce({ data: '+447700900000', error: null })
+      .mockResolvedValueOnce({
+        data: [{ gender: 'prefer_not_to_say', age_range: '35-39' }],
+        error: null,
+      })
 
     const result = await exportMyData()
     const parsed = JSON.parse(result)
@@ -121,7 +128,27 @@ describe('exportMyData', () => {
     expect(parsed).toHaveProperty('reviews')
     expect(parsed).toHaveProperty('interests')
     expect(mockRpc).toHaveBeenCalledWith('get_my_phone')
+    expect(mockRpc).toHaveBeenCalledWith('get_my_demographics')
     expect(parsed.profile.phone_number).toBe('+447700900000')
+    expect(parsed.profile.gender).toBe('prefer_not_to_say')
+    expect(parsed.profile.age_range).toBe('35-39')
+  })
+
+  it('includes gender + age_range as null when the demographics RPC returns no rows', async () => {
+    authenticate('user-1')
+    mockFrom.mockImplementation(() =>
+      mockChain({ data: { hello: 'world' }, error: null }),
+    )
+    mockRpc
+      .mockResolvedValueOnce({ data: null, error: null })
+      .mockResolvedValueOnce({ data: [], error: null })
+
+    const result = await exportMyData()
+    const parsed = JSON.parse(result)
+
+    expect(parsed.profile.phone_number).toBeNull()
+    expect(parsed.profile.gender).toBeNull()
+    expect(parsed.profile.age_range).toBeNull()
   })
 
   it('includes a human-readable note about what is and isn\u2019t included', async () => {

@@ -66,10 +66,15 @@ export async function exportMyData(): Promise<string> {
   // try to read columns the role can no longer see (`phone_number`,
   // `gender`, `age_range`, plus already-revoked `stripe_customer_id`
   // and `profile_nudge_email_sent_at`) and fail with `42501`.
-  // `phone_number` is sourced via the `get_my_phone()` SECURITY DEFINER
-  // RPC and merged into the export below — preserves the prior
-  // GDPR-portability shape.
-  const [profileRes, phoneRes, bookingsRes, reviewsRes, interestsRes] =
+  //
+  // The three GRANT-narrowed columns the member is entitled to in their
+  // own export are sourced via SECURITY DEFINER RPCs:
+  //   • `get_my_phone()` returns text  → merged as profile.phone_number
+  //   • `get_my_demographics()` returns TABLE(gender, age_range) →
+  //      merged as profile.gender + profile.age_range
+  // Skipping these would silently drop fields the member has a GDPR
+  // portability right to receive.
+  const [profileRes, phoneRes, demographicsRes, bookingsRes, reviewsRes, interestsRes] =
     await Promise.all([
       supabase
         .from('profiles')
@@ -79,6 +84,7 @@ export async function exportMyData(): Promise<string> {
         .eq('id', user.id)
         .single(),
       supabase.rpc('get_my_phone'),
+      supabase.rpc('get_my_demographics'),
       supabase
         .from('bookings')
         .select(
@@ -99,6 +105,15 @@ export async function exportMyData(): Promise<string> {
     ? null
     : ((phoneRes.data as string | null) ?? null)
 
+  // get_my_demographics() RETURNS TABLE — RPC resolves to an array of
+  // rows. auth.uid() filter guarantees ≤1 row; empty array means no
+  // matching profile (shouldn't happen post-auth, but defensive).
+  const demographicsRow = !demographicsRes.error && Array.isArray(demographicsRes.data)
+    ? (demographicsRes.data[0] as { gender: string | null; age_range: string | null } | undefined)
+    : undefined
+  const gender = demographicsRow?.gender ?? null
+  const ageRange = demographicsRow?.age_range ?? null
+
   const exported = {
     export_metadata: {
       exported_at: new Date().toISOString(),
@@ -107,7 +122,12 @@ export async function exportMyData(): Promise<string> {
         'Contains all data The Social Seen holds about your account. Data about other members (their bookings, profile info, etc.) is NOT included (it is not your data to export).',
     },
     profile: profileRes.data
-      ? { ...profileRes.data, phone_number: phoneNumber }
+      ? {
+          ...profileRes.data,
+          phone_number: phoneNumber,
+          gender,
+          age_range: ageRange,
+        }
       : null,
     bookings: bookingsRes.data ?? [],
     reviews: reviewsRes.data ?? [],
