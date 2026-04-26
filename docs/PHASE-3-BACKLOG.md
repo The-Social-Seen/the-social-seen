@@ -112,12 +112,6 @@ The data layer is the unblock; the engines that consume it are independent.
 **Action:** Cross-check `phone_number` + `email` domain against `profiles` where `status='banned'` at signup. Tricky UX (what do you show a banned-then-banned user?) — product call.
 **Priority:** Launch-scale issue; not a demo blocker.
 
-### Per-owner column grants on `phone_number`
-**Source:** Phase 2.5 context.
-**Rationale:** If we ever let authenticated non-admin members browse other members' profiles, `phone_number` should be visible only to row owner + admins. Requires a security-definer function or view; current state is authenticated retains full SELECT (OK today because there's no member-facing profile browser).
-**Action:** When profile-browser feature lands, add `get_profile_public(uuid)` SECURITY DEFINER that strips phone_number for non-owner callers.
-**Priority:** Blocks the profile-browser feature if / when it ships.
-
 ### Email as hidden anon column
 **Source:** Phase 2.5 Batch 1.
 **Rationale:** Batch 1 tightened anon GRANT to remove email. Worth monitoring if any anon-facing code regresses this (e.g. a future event-detail page exposes host.email).
