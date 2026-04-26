@@ -96,7 +96,8 @@ function makeEventFormData(overrides: Record<string, string> = {}): FormData {
     end_time: '2026-06-15T22:00:00.000Z',
     venue_name: 'Wine Cellar',
     venue_address: '1 Bank End, London SE1 9BU',
-    category: 'drinks',
+    // Phase 3 W5 — replaces the legacy `category` field.
+    primary_tag_slug: 'drinks-bars',
     price: '35',
     capacity: '20',
     image_url: '',

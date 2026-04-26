@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const mockGetUser = vi.fn()
 const mockFrom = vi.fn()
 const mockStorageFrom = vi.fn()
+const mockRpc = vi.fn()
 
 vi.mock('@/lib/supabase/server', () => ({
   createServerClient: vi.fn(() =>
@@ -12,6 +13,7 @@ vi.mock('@/lib/supabase/server', () => ({
       auth: { getUser: mockGetUser },
       from: mockFrom,
       storage: { from: mockStorageFrom },
+      rpc: mockRpc,
     }),
   ),
 }))
@@ -20,7 +22,12 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }))
 
-import { updateProfile, updateAvatar, updateInterests } from '../actions'
+import {
+  updateProfile,
+  updateAvatar,
+  updateInterests,
+  updateMyDemographics,
+} from '../actions'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -313,5 +320,102 @@ describe('updateInterests', () => {
         tag_id: 'tag-uuid-interest-technology',
       },
     ])
+  })
+})
+
+// ── updateMyDemographics ────────────────────────────────────────────────────
+//
+// Wraps the SECURITY DEFINER `set_my_demographics()` RPC. Tests cover
+// validation, the RPC payload shape, auth boundary, and error surfacing.
+// The RPC itself is exercised by the W4 DB-integration suite once a
+// Docker stack is reachable.
+
+describe('updateMyDemographics', () => {
+  it('rejects when user is not authenticated', async () => {
+    unauthenticateUser()
+    const result = await updateMyDemographics({
+      gender: 'female',
+      age_range: '30-34',
+    })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Authentication required')
+  })
+
+  it('rejects an invalid gender value with a clear error', async () => {
+    authenticateUser()
+    const result = await updateMyDemographics({
+      gender: 'fluid' as unknown as 'female',
+      age_range: null,
+    })
+    expect(result.success).toBe(false)
+    expect(result.error).toBeDefined()
+  })
+
+  it('rejects an invalid age_range value with a clear error', async () => {
+    authenticateUser()
+    const result = await updateMyDemographics({
+      gender: null,
+      age_range: '15-17' as unknown as '18-24',
+    })
+    expect(result.success).toBe(false)
+    expect(result.error).toBeDefined()
+  })
+
+  it('calls set_my_demographics RPC with the validated payload', async () => {
+    authenticateUser()
+    mockRpc.mockResolvedValue({ data: null, error: null })
+
+    const result = await updateMyDemographics({
+      gender: 'non_binary',
+      age_range: '35-39',
+    })
+
+    expect(result).toEqual({ success: true })
+    expect(mockRpc).toHaveBeenCalledTimes(1)
+    expect(mockRpc).toHaveBeenCalledWith('set_my_demographics', {
+      p_gender: 'non_binary',
+      p_age_range: '35-39',
+    })
+  })
+
+  it('passes nulls through when the user clears one or both fields', async () => {
+    authenticateUser()
+    mockRpc.mockResolvedValue({ data: null, error: null })
+
+    await updateMyDemographics({ gender: null, age_range: null })
+
+    expect(mockRpc).toHaveBeenCalledWith('set_my_demographics', {
+      p_gender: null,
+      p_age_range: null,
+    })
+  })
+
+  it('returns a generic "Failed to save" error when the RPC fails', async () => {
+    authenticateUser()
+    mockRpc.mockResolvedValue({
+      data: null,
+      error: { message: 'permission denied' },
+    })
+
+    const result = await updateMyDemographics({
+      gender: 'female',
+      age_range: '40-44',
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Failed to save')
+  })
+
+  it('does NOT call from() — writes go through the RPC, never raw UPDATE', async () => {
+    // Decision 7 — Option A: the `authenticated` GRANT excludes gender +
+    // age_range. A regression that switched to `from('profiles').update`
+    // would silently fail with `42501`. This test guards against that
+    // refactor.
+    authenticateUser()
+    mockRpc.mockResolvedValue({ data: null, error: null })
+
+    await updateMyDemographics({ gender: 'male', age_range: '25-29' })
+
+    expect(mockFrom).not.toHaveBeenCalled()
   })
 })
