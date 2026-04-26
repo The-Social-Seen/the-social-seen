@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockGetUser = vi.fn()
 const mockFrom = vi.fn()
+const mockRpc = vi.fn()
 const mockAdminFrom = vi.fn()
 const mockAdminRpc = vi.fn()
 const mockSignOut = vi.fn()
@@ -13,6 +14,7 @@ vi.mock('@/lib/supabase/server', () => ({
     Promise.resolve({
       auth: { getUser: mockGetUser, signOut: mockSignOut },
       from: mockFrom,
+      rpc: mockRpc,
     }),
   ),
 }))
@@ -96,7 +98,7 @@ describe('exportMyData', () => {
 
   it('returns a JSON string containing profile + bookings + reviews + interests', async () => {
     authenticate('user-1')
-    // 4 parallel queries — each resolves to a canned row.
+    // 4 parallel from() queries — each resolves to a canned row.
     mockFrom.mockImplementation(() => {
       // All four Promise.all branches share the same mock response
       // shape; the Server Action unpacks by `res.data`. Returning a
@@ -106,6 +108,8 @@ describe('exportMyData', () => {
         error: null,
       })
     })
+    // get_my_phone() RPC — returns the scalar phone string (or null).
+    mockRpc.mockResolvedValue({ data: '+447700900000', error: null })
 
     const result = await exportMyData()
     const parsed = JSON.parse(result)
@@ -116,11 +120,14 @@ describe('exportMyData', () => {
     expect(parsed).toHaveProperty('bookings')
     expect(parsed).toHaveProperty('reviews')
     expect(parsed).toHaveProperty('interests')
+    expect(mockRpc).toHaveBeenCalledWith('get_my_phone')
+    expect(parsed.profile.phone_number).toBe('+447700900000')
   })
 
   it('includes a human-readable note about what is and isn\u2019t included', async () => {
     authenticate('user-1')
     mockFrom.mockImplementation(() => mockChain({ data: [], error: null }))
+    mockRpc.mockResolvedValue({ data: null, error: null })
     const result = await exportMyData()
     expect(result).toMatch(/not included/i)
   })

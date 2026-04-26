@@ -105,18 +105,28 @@ export async function getMySmsPreferences(): Promise<SmsPreferences | null> {
   } = await supabase.auth.getUser()
   if (!user) return null
 
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('sms_consent, phone_number')
-    .eq('id', user.id)
-    .maybeSingle()
+  // `sms_consent` is on the authenticated allow-list; `phone_number` was
+  // removed by 20260503000002_narrow_phone_number_grant. Source the
+  // phone via the `get_my_phone()` SECURITY DEFINER RPC instead of a
+  // direct SELECT.
+  const [consentRes, phoneRes] = await Promise.all([
+    supabase
+      .from('profiles')
+      .select('sms_consent')
+      .eq('id', user.id)
+      .maybeSingle(),
+    supabase.rpc('get_my_phone'),
+  ])
 
-  if (error || !data) {
+  if (consentRes.error || !consentRes.data) {
     return { sms_consent: false, phone_number: null }
   }
   return {
-    sms_consent: (data as { sms_consent: boolean }).sms_consent ?? false,
-    phone_number: (data as { phone_number: string | null }).phone_number ?? null,
+    sms_consent:
+      (consentRes.data as { sms_consent: boolean }).sms_consent ?? false,
+    phone_number: phoneRes.error
+      ? null
+      : ((phoneRes.data as string | null) ?? null),
   }
 }
 

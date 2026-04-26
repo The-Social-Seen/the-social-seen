@@ -61,23 +61,43 @@ export async function exportMyData(): Promise<string> {
     throw new Error('Authentication required')
   }
 
-  const [profileRes, bookingsRes, reviewsRes, interestsRes] = await Promise.all([
-    supabase.from('profiles').select('*').eq('id', user.id).single(),
-    supabase
-      .from('bookings')
-      .select(
-        'id, event_id, status, waitlist_position, price_at_booking, booked_at, cancelled_at, refunded_amount_pence, refunded_at, created_at, updated_at',
-      )
-      .eq('user_id', user.id),
-    supabase
-      .from('event_reviews')
-      .select('id, event_id, rating, review_text, is_visible, created_at, updated_at')
-      .eq('user_id', user.id),
-    supabase
-      .from('user_interests')
-      .select('id, interest, created_at')
-      .eq('user_id', user.id),
-  ])
+  // Columns enumerated explicitly because Phase 3 W1 narrowed the
+  // `authenticated` GRANT on `public.profiles`. `select('*')` would now
+  // try to read columns the role can no longer see (`phone_number`,
+  // `gender`, `age_range`, plus already-revoked `stripe_customer_id`
+  // and `profile_nudge_email_sent_at`) and fail with `42501`.
+  // `phone_number` is sourced via the `get_my_phone()` SECURITY DEFINER
+  // RPC and merged into the export below — preserves the prior
+  // GDPR-portability shape.
+  const [profileRes, phoneRes, bookingsRes, reviewsRes, interestsRes] =
+    await Promise.all([
+      supabase
+        .from('profiles')
+        .select(
+          'id, email, full_name, avatar_url, job_title, company, industry, bio, linkedin_url, role, onboarding_complete, referral_source, status, email_consent, email_verified, sms_consent, moderation_reason, moderation_at, moderation_by, created_at, updated_at, deleted_at',
+        )
+        .eq('id', user.id)
+        .single(),
+      supabase.rpc('get_my_phone'),
+      supabase
+        .from('bookings')
+        .select(
+          'id, event_id, status, waitlist_position, price_at_booking, booked_at, cancelled_at, refunded_amount_pence, refunded_at, created_at, updated_at',
+        )
+        .eq('user_id', user.id),
+      supabase
+        .from('event_reviews')
+        .select('id, event_id, rating, review_text, is_visible, created_at, updated_at')
+        .eq('user_id', user.id),
+      supabase
+        .from('user_interests')
+        .select('id, interest, created_at')
+        .eq('user_id', user.id),
+    ])
+
+  const phoneNumber = phoneRes.error
+    ? null
+    : ((phoneRes.data as string | null) ?? null)
 
   const exported = {
     export_metadata: {
@@ -86,7 +106,9 @@ export async function exportMyData(): Promise<string> {
       note:
         'Contains all data The Social Seen holds about your account. Data about other members (their bookings, profile info, etc.) is NOT included (it is not your data to export).',
     },
-    profile: profileRes.data ?? null,
+    profile: profileRes.data
+      ? { ...profileRes.data, phone_number: phoneNumber }
+      : null,
     bookings: bookingsRes.data ?? [],
     reviews: reviewsRes.data ?? [],
     interests: interestsRes.data ?? [],

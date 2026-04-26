@@ -7,7 +7,7 @@ export {
   getUserBookingForEvent,
 } from './events'
 
-export { getProfile, getMyBookings } from './profile'
+export { getProfile, getMyBookings, getMyPhone } from './profile'
 
 export { getReviewableEvents } from './reviews'
 
