@@ -56,7 +56,7 @@ function mockSupabaseChain(response: { data?: unknown; error?: unknown }) {
   // Every method returns the chain itself, and the chain is also a thenable
   // so it resolves when awaited at any point in the chain.
   const chain: Record<string, ReturnType<typeof vi.fn>> = {}
-  const methods = ['select', 'insert', 'update', 'delete', 'eq', 'single']
+  const methods = ['select', 'insert', 'update', 'delete', 'eq', 'in', 'single']
   for (const m of methods) {
     chain[m] = vi.fn().mockReturnValue(chain)
   }
@@ -64,6 +64,34 @@ function mockSupabaseChain(response: { data?: unknown; error?: unknown }) {
   chain.then = vi.fn((resolve: (v: unknown) => void) => resolve(response))
   mockFrom.mockReturnValue(chain)
   return chain
+}
+
+/**
+ * Per-table mock — supports multiple from() calls in the same Server Action
+ * dispatching to different chains. saveInterests now does:
+ *   from('tags').select('id, slug').in(...)        → resolves tag rows
+ *   from('user_interests').delete().eq(...)         → cleanup
+ *   from('user_interests').insert(rows)             → write new rows
+ *
+ * Each table maps to its own chain object so assertions like
+ * `tagsChain.in.toHaveBeenCalledWith(...)` can be made independently of
+ * `interestsChain.insert.toHaveBeenCalledWith(...)`.
+ */
+function mockSupabaseTables(
+  responses: Record<string, { data?: unknown; error?: unknown }>,
+): Record<string, Record<string, ReturnType<typeof vi.fn>>> {
+  const chains: Record<string, Record<string, ReturnType<typeof vi.fn>>> = {}
+  for (const [table, response] of Object.entries(responses)) {
+    const chain: Record<string, ReturnType<typeof vi.fn>> = {}
+    const methods = ['select', 'insert', 'update', 'delete', 'eq', 'in', 'single']
+    for (const m of methods) {
+      chain[m] = vi.fn().mockReturnValue(chain)
+    }
+    chain.then = vi.fn((resolve: (v: unknown) => void) => resolve(response))
+    chains[table] = chain
+  }
+  mockFrom.mockImplementation((table: string) => chains[table])
+  return chains
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -449,23 +477,49 @@ describe('saveInterests', () => {
     }
   })
 
-  it('saves interests for authenticated user', async () => {
+  it('saves interests for authenticated user (resolves tag_id alongside interest)', async () => {
     mockGetUser.mockResolvedValue({
       data: { user: { id: 'user-1' } },
       error: null,
     })
 
-    const chain = mockSupabaseChain({ data: null, error: null })
+    // After Migration 3, saveInterests must resolve each interest's
+    // canonical tag slug, look up the matching tag UUIDs, and INSERT
+    // (user_id, interest, tag_id). The mock returns two tag rows
+    // matching the slugs in src/lib/constants.ts INTEREST_OPTIONS.
+    const chains = mockSupabaseTables({
+      tags: {
+        data: [
+          { id: 'tag-uuid-drinks-bars', slug: 'drinks-bars' },
+          { id: 'tag-uuid-dining-supper-clubs', slug: 'dining-supper-clubs' },
+        ],
+        error: null,
+      },
+      user_interests: { data: null, error: null },
+    })
 
     const result = await saveInterests({
       interests: ['Wine & Cocktails', 'Fine Dining'],
     })
 
     expect(result).toEqual({ success: true })
+    expect(mockFrom).toHaveBeenCalledWith('tags')
     expect(mockFrom).toHaveBeenCalledWith('user_interests')
-    expect(chain.insert).toHaveBeenCalledWith([
-      { user_id: 'user-1', interest: 'Wine & Cocktails' },
-      { user_id: 'user-1', interest: 'Fine Dining' },
+    expect(chains.tags.in).toHaveBeenCalledWith(
+      'slug',
+      expect.arrayContaining(['drinks-bars', 'dining-supper-clubs']),
+    )
+    expect(chains.user_interests.insert).toHaveBeenCalledWith([
+      {
+        user_id: 'user-1',
+        interest: 'Wine & Cocktails',
+        tag_id: 'tag-uuid-drinks-bars',
+      },
+      {
+        user_id: 'user-1',
+        interest: 'Fine Dining',
+        tag_id: 'tag-uuid-dining-supper-clubs',
+      },
     ])
   })
 
@@ -475,12 +529,18 @@ describe('saveInterests', () => {
       error: null,
     })
 
-    const chain = mockSupabaseChain({ data: null, error: null })
+    const chains = mockSupabaseTables({
+      tags: {
+        data: [{ id: 'tag-uuid-interest-technology', slug: 'interest-technology' }],
+        error: null,
+      },
+      user_interests: { data: null, error: null },
+    })
 
     await saveInterests({ interests: ['Technology'] })
 
-    expect(chain.delete).toHaveBeenCalled()
-    expect(chain.eq).toHaveBeenCalledWith('user_id', 'user-1')
+    expect(chains.user_interests.delete).toHaveBeenCalled()
+    expect(chains.user_interests.eq).toHaveBeenCalledWith('user_id', 'user-1')
   })
 })
 

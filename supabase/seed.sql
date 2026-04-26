@@ -223,8 +223,32 @@ UPDATE public.profiles SET
 WHERE id = 'a0000000-0000-0000-0000-000000000007';
 
 -- ── Step 3: User Interests ───────────────────────────────────────────────────
+--
+-- After Migration 3 (20260504000002_migrate_user_interests_to_tag_id.sql),
+-- public.user_interests.tag_id is NOT NULL. The seed's existing interest
+-- values are mapped to canonical tag slugs via the same CASE used by
+-- Migration 3's reconciliation backfill.
+--
+-- ⚠️ Lockstep with Migration 3: the WHEN → THEN map below MUST stay
+-- identical to the CASE in Migration 3's backfill UPDATE. If you add a
+-- new INTEREST_OPTIONS value, update both:
+--   • supabase/migrations/20260504000002_migrate_user_interests_to_tag_id.sql
+--   • this file (the JOIN CASE below)
+-- And also extend Migration 3's reconciliation map first if needed
+-- (its verification block raises if any seed row falls through to NULL).
+--
+-- Pattern: INSERT … SELECT … FROM (VALUES …) JOIN tags ON t.slug = CASE …
+-- The JOIN's nature ensures no row is inserted without a resolved tag_id;
+-- a typo in the interest label produces zero rows for that pair (NOT a
+-- NULL violation), so it would surface as a missing-row test failure
+-- rather than an apply-time NOT NULL crash.
 
-INSERT INTO public.user_interests (user_id, interest) VALUES
+INSERT INTO public.user_interests (user_id, interest, tag_id)
+SELECT
+  v.user_id::uuid,
+  v.interest,
+  t.id
+FROM (VALUES
   -- Mitesh
   ('a0000000-0000-0000-0000-000000000001', 'Entrepreneurship'),
   ('a0000000-0000-0000-0000-000000000001', 'Networking'),
@@ -259,7 +283,30 @@ INSERT INTO public.user_interests (user_id, interest) VALUES
   ('a0000000-0000-0000-0000-000000000007', 'Technology'),
   ('a0000000-0000-0000-0000-000000000007', 'Jazz & Music'),
   ('a0000000-0000-0000-0000-000000000007', 'Wine & Cocktails'),
-  ('a0000000-0000-0000-0000-000000000007', 'Running & Sport');
+  ('a0000000-0000-0000-0000-000000000007', 'Running & Sport')
+) AS v(user_id, interest)
+JOIN public.tags t ON t.slug = CASE v.interest
+  -- Group A: primary-eligible remaps (6) — verbatim from Migration 3
+  WHEN 'Wine & Cocktails'   THEN 'drinks-bars'
+  WHEN 'Fine Dining'        THEN 'dining-supper-clubs'
+  WHEN 'Art & Culture'      THEN 'galleries-museums'
+  WHEN 'Yoga & Wellness'    THEN 'wellness-mindfulness'
+  WHEN 'Running & Sport'    THEN 'sport-fitness'
+  WHEN 'Jazz & Music'       THEN 'live-music-gigs'
+  -- Group B: interest-only remaps (8) — verbatim from Migration 3
+  WHEN 'Technology'         THEN 'interest-technology'
+  WHEN 'Entrepreneurship'   THEN 'interest-entrepreneurship'
+  WHEN 'Networking'         THEN 'interest-networking'
+  WHEN 'Photography'        THEN 'interest-photography'
+  WHEN 'Travel'             THEN 'interest-travel'
+  WHEN 'Books & Literature' THEN 'interest-books-literature'
+  WHEN 'Sustainable Living' THEN 'interest-sustainable-living'
+  WHEN 'Film & Cinema'      THEN 'interest-film-cinema'
+  -- ELSE NULL would produce a row that fails the FK / NOT NULL gate; the
+  -- INNER JOIN above means an unmapped value silently produces ZERO rows
+  -- for that pair instead — surfaceable via a row-count assertion in the
+  -- E2E setup if anyone removes a mapping by mistake.
+END;
 
 -- ── Step 4: Events ───────────────────────────────────────────────────────────
 

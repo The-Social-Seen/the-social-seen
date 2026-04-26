@@ -3,6 +3,7 @@
 import { z } from 'zod'
 import { revalidatePath } from 'next/cache'
 import { createServerClient } from '@/lib/supabase/server'
+import { interestSlugFor } from '@/lib/constants'
 
 // ── Validation schemas ──────────────────────────────────────────────────────
 
@@ -177,6 +178,38 @@ export async function updateInterests(
     return { success: false, error: 'Authentication required' }
   }
 
+  // Resolve each legacy interest text to its canonical tag slug. Off-list
+  // input here means INTEREST_OPTIONS and the form drifted out of sync —
+  // refuse rather than write an unmappable row.
+  const slugMap = new Map<string, string>()
+  for (const interest of parsed.data.interests) {
+    const slug = interestSlugFor(interest)
+    if (!slug) {
+      console.error('[updateInterests:slug]', `no slug for interest "${interest}"`)
+      return { success: false, error: 'Failed to save interests' }
+    }
+    slugMap.set(interest, slug)
+  }
+
+  // Batch lookup: resolve all required tag slugs to UUIDs in a single query.
+  // After Migration 3, user_interests.tag_id is NOT NULL; every INSERT must
+  // carry a resolved tag_id. We keep `interest` text populated too — F2
+  // drops that column later, but until then read-paths still rely on it.
+  const requiredSlugs = Array.from(new Set(slugMap.values()))
+  const { data: tagRows, error: tagsError } = await supabase
+    .from('tags')
+    .select('id, slug')
+    .in('slug', requiredSlugs)
+
+  if (tagsError || !tagRows || tagRows.length !== requiredSlugs.length) {
+    console.error(
+      '[updateInterests:tags]',
+      tagsError?.message ?? `expected ${requiredSlugs.length} tag rows, got ${tagRows?.length ?? 0}`,
+    )
+    return { success: false, error: 'Failed to save interests' }
+  }
+  const slugToTagId = new Map(tagRows.map((t) => [t.slug, t.id]))
+
   // Delete existing interests
   const { error: deleteError } = await supabase
     .from('user_interests')
@@ -188,10 +221,11 @@ export async function updateInterests(
     return { success: false, error: 'Failed to update interests' }
   }
 
-  // Insert new interests
+  // Insert new interests with resolved tag_id alongside the legacy text.
   const rows = parsed.data.interests.map((interest) => ({
     user_id: user.id,
     interest,
+    tag_id: slugToTagId.get(slugMap.get(interest)!)!,
   }))
 
   const { error: insertError } = await supabase

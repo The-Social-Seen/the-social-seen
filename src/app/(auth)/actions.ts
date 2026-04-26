@@ -9,6 +9,7 @@ import { welcomeTemplate } from '@/lib/email/templates/welcome'
 import { upsertContact } from '@/lib/brevo/sync'
 import { peekAttempts, recordAttempt } from '@/lib/rate-limit'
 import { getCallerIp } from '@/lib/utils/caller-ip'
+import { interestSlugFor } from '@/lib/constants'
 
 // ── Validation schemas ──────────────────────────────────────────────────────
 
@@ -242,6 +243,33 @@ export async function saveInterests(input: {
     return { error: 'You must be signed in to save interests' }
   }
 
+  // Resolve each legacy interest text to its canonical tag slug. Off-list
+  // input here means INTEREST_OPTIONS and the form drifted out of sync —
+  // refuse rather than write an unmappable row.
+  const slugMap = new Map<string, string>()
+  for (const interest of interests) {
+    const slug = interestSlugFor(interest)
+    if (!slug) {
+      return { error: 'Failed to save interests' }
+    }
+    slugMap.set(interest, slug)
+  }
+
+  // Batch lookup: resolve all required tag slugs to UUIDs in a single query.
+  // After Migration 3, user_interests.tag_id is NOT NULL; every INSERT must
+  // carry a resolved tag_id. We keep `interest` text populated too — F2
+  // drops that column later, but until then read-paths still rely on it.
+  const requiredSlugs = Array.from(new Set(slugMap.values()))
+  const { data: tagRows, error: tagsError } = await supabase
+    .from('tags')
+    .select('id, slug')
+    .in('slug', requiredSlugs)
+
+  if (tagsError || !tagRows || tagRows.length !== requiredSlugs.length) {
+    return { error: 'Failed to save interests' }
+  }
+  const slugToTagId = new Map(tagRows.map((t) => [t.slug, t.id]))
+
   // Delete existing interests for this user
   const { error: deleteError } = await supabase
     .from('user_interests')
@@ -252,10 +280,11 @@ export async function saveInterests(input: {
     return { error: 'Failed to update interests' }
   }
 
-  // Insert new interests
+  // Insert new interests with resolved tag_id alongside the legacy text.
   const rows = interests.map((interest) => ({
     user_id: user.id,
     interest,
+    tag_id: slugToTagId.get(slugMap.get(interest)!)!,
   }))
 
   const { error: insertError } = await supabase
