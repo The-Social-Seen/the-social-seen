@@ -10,6 +10,40 @@ Maintained at the end of each phase so feature ideas don't get lost in merged PR
 
 ## 🚀 Major features (original Phase 2 "What's Cut" list)
 
+### Member-data layer (demographics + canonical taxonomy)
+**Source:** Conversation 2026-04-25 — gap surfaced when reviewing user interests vs event categories.
+**Why deferred:** Three related data-layer changes that should ship together rather than as one-off columns. Architecture call needed before code.
+
+**What's in scope:**
+1. **Gender** on profiles — nullable enum `'female' | 'male' | 'non-binary' | 'prefer_not_to_say'`. Optional, self-declared, admin-only visibility (not on public/member-facing profile views). Lawful basis: legitimate interest in event-mix balancing; needs a one-line addition to the privacy policy.
+2. **Age range** on profiles — nullable enum `'18-24' | '25-29' | '30-34' | '35-39' | '40-44' | '45-49' | '50+'`. Bands not DOB (less invasive, sufficient for balancing + positioning sanity). Same admin-only visibility.
+3. **Canonical taxonomy unifying `events.category` + `user_interests.interest`** — single `tags` lookup table; `event_tags (event_id, tag_id, is_primary)` and `user_interests` re-pointed from free `text` to `tag_id` FK. Resolves the current mismatch between the 8-value event enum and the 14-value free-text interest list. Lets future personalization, search-by-tag, and admin matching all run as straight JOINs.
+
+**Where to ask demographics:** NOT at signup (raises friction). Use the existing "Complete Your Profile" banner pattern (CLAUDE.md Batch 5) post-signup, with one-line copy: *"Helps us keep events balanced — optional, only visible to the team."*
+
+**Why bundled:** All three change `profiles` / `events` / `user_interests` schemas; doing them in one migration + admin-form pass + privacy policy update is much cheaper than three separate sprints.
+
+**Out of scope (later, separate work):**
+- Recommendation engine ("events you might like")
+- Event-mix balancing logic (admin caps, automatic enforcement)
+- Email targeting by tag overlap
+- Search-by-tag UI
+- Hierarchy on tags (defer until flat hits its limit)
+
+The data layer is the unblock; the engines that consume it are independent.
+
+**Rough estimate (data layer only):** 2–2.5 days. Schema migrations + admin form additions + profile-completion banner + RLS work + privacy policy edit + admin demographics view per event.
+**Dependencies:** None. All existing.
+**Next step:** Run `/project:architect` to scope the spec (see prompt drafted in conversation). Architect output → `docs/member-data-layer-spec.md`.
+
+### Promo / discount codes at Stripe Checkout
+**Source:** User request, 2026-04-25.
+**Why deferred:** Wasn't part of the Phase 2 paid-booking MVP. Now that the Stripe pipeline is live (PR #51 + #52), the next ask is admin-managed discount codes (e.g. "EARLYBIRD20" knocks £15 off summer party).
+**How it works:** Stripe Checkout has native promotion-code support — admin creates a Coupon → wraps it as a Promotion Code in Stripe Dashboard. The app just needs to enable the input on the Checkout page.
+**Implementation:** One-line code change in `src/lib/stripe/checkout.ts` — add `allow_promotion_codes: true` to the `stripe.checkout.sessions.create` call (around line 95). Then the Stripe-hosted Checkout page renders a "Add promotion code" link the user can click to enter a code; Stripe validates and applies the discount automatically. Receipt + booking metadata both reflect the discounted total via the existing webhook flow.
+**Rough estimate:** ~15 minutes of code + a paragraph in admin onboarding docs explaining how to mint codes in Stripe Dashboard. (Discount creation lives entirely in Stripe — we don't need to build CRUD for it.)
+**Dependencies:** None. Stripe pipeline is shipped.
+
 ### Referral system
 **Source:** PHASE-2-PLAN-v2.md §"What's Cut from Phase 2".
 **Why deferred:** Rewards need mature payment infrastructure. Word-of-mouth already works via WhatsApp.
