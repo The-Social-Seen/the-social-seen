@@ -6,6 +6,12 @@ import type { Profile, UserInterest, BookingWithEvent } from '@/types'
 /**
  * Fetch a user's profile with their interest tags.
  * Returns null if the profile doesn't exist.
+ *
+ * `phone_number` is intentionally NOT in the SELECT list — Phase 3 W1
+ * narrows the `authenticated` GRANT so direct SELECT against that column
+ * fails with `42501`. Callers needing the caller's own phone fetch it
+ * via `getMyPhone()` (SECURITY DEFINER `get_my_phone()` RPC) and merge
+ * it into the result.
  */
 export async function getProfile(
   userId: string,
@@ -46,6 +52,30 @@ export async function getProfile(
     ...(profileResult.data as Profile),
     interests,
   }
+}
+
+// ── Caller's own phone number ───────────────────────────────────────────────
+
+/**
+ * Fetches the signed-in caller's own `phone_number` via the
+ * `get_my_phone()` SECURITY DEFINER function. Returns `null` if the
+ * caller has no row or has not set a phone.
+ *
+ * Why an RPC and not a SELECT: Phase 3 W1 narrowed the `authenticated`
+ * GRANT on `public.profiles` so column-level SELECT on `phone_number`
+ * raises `42501`. The function bypasses that by reading inside a
+ * SECURITY DEFINER context, scoped to `auth.uid()` so it can only ever
+ * return the caller's own number.
+ */
+export async function getMyPhone(): Promise<string | null> {
+  const supabase = await createServerClient()
+  const { data, error } = await supabase.rpc('get_my_phone')
+  if (error) {
+    console.error('[getMyPhone]', error.message)
+    return null
+  }
+  // RPC for `RETURNS text` returns the scalar directly.
+  return (data as string | null) ?? null
 }
 
 // ── User bookings ───────────────────────────────────────────────────────────
