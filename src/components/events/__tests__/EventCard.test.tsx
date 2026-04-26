@@ -58,7 +58,6 @@ function makeEvent(overrides: Partial<EventWithStats> = {}): EventWithStats {
     venue_address: '1 Rooftop Way, London',
     venue_revealed: true,
     postcode: null,
-    category: 'drinks',
     price: 3500, // £35 in pence
     capacity: 30,
     image_url: 'https://images.unsplash.com/photo-cocktails',
@@ -122,7 +121,6 @@ describe('EventCard', () => {
     render(
       <EventCard
         event={makeEvent({
-          category: 'dining',
           primary_tag: { slug: 'dining-supper-clubs', label: 'Dining & Supper Clubs' },
         })}
       />,

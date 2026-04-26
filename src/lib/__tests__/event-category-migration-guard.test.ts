@@ -8,14 +8,16 @@
 // migrated the 4 member-facing event components and added the ?tag=
 // filter contract; F1b-app migrated the 3 remaining carry-overs
 // (getRelatedEvents query + caller, BookingCard chip, EventsTable chip).
+// F1b-schema (Migration 20260506000001) dropped the column, the enum
+// type, the bidirectional sync triggers, and the slug→enum helper.
 //
-// Post-F1b-app invariant — the only place in `src/` (outside tests and
-// the small allowlist below) that may legitimately reference
-// `event.category`, `categoryLabel`, `CATEGORY_LABELS`, or the
-// `EventCategory` type is `src/types/index.ts`. That file holds the
-// legacy enum + helper definitions. F1b-schema retires them all in one
-// shot (drop the column, drop the enum, remove the helpers, retire the
-// type) once nothing references them.
+// Post-F1b-schema invariant — the legacy `EventCategory` type,
+// `CATEGORY_LABELS` map, and `categoryLabel` helper have all been
+// removed from `src/types/index.ts`. Production code anywhere in `src/`
+// must not reference `event.category`, `categoryLabel`, or
+// `CATEGORY_LABELS` — none of them exist anymore. The `EventCategory`
+// type is also gone. Only the small allowlist below covers files where
+// the WORD `category` still appears for unrelated reasons.
 //
 // SCAN_DIRS — every directory that holds production code reading event
 // data. The guard fails loudly if any production file outside the
@@ -23,15 +25,17 @@
 //   - src/components/events/    — F1a-migrated 4 components
 //   - src/components/admin/     — F1b-app-migrated EventsTable
 //   - src/components/profile/   — F1b-app-migrated BookingCard
-//   - src/lib/supabase/queries/ — getRelatedEvents now takes a slug
-//   - src/app/events/           — caller of getRelatedEvents
+//   - src/lib/supabase/queries/ — getRelatedEvents takes a slug
+//   - src/app/events/           — caller of getRelatedEvents + the
+//                                 ?category= soft-fallback redirect
 //
-// `src/types/index.ts` is intentionally NOT scanned — the `EventCategory`
-// type, `CATEGORY_LABELS` map, `Event.category` field, and `categoryLabel`
-// helper definitions all live there until F1b-schema retires them. A
-// future tester pass after F1b-schema can either delete this guard
-// outright or add `src/types/` to SCAN_DIRS (no allowlist needed once
-// the legacy artefacts are gone).
+// `src/types/index.ts` is intentionally still NOT scanned — even though
+// the legacy artefacts are gone, the file's docstring comments mention
+// `events.category` historically (explaining why fields are shaped the
+// way they are). Scanning it would force pruning otherwise-useful
+// migration-history annotations. If those annotations are removed in
+// future, add `src/types/` to SCAN_DIRS — there's no longer any
+// production code that needs an exception there.
 //
 // Plus three edge-case checks for the things the rendering tests don't
 // exercise: the ?category= → ?tag= soft-fallback redirect contract, the
@@ -54,43 +58,42 @@ const SCAN_DIRS = [
 
 // Allowlist — files where the WORD `category` legitimately appears for
 // reasons unrelated to the legacy events.category enum. Each entry has
-// to name a wave that retires it (or be marked permanent if it covers
-// an entirely different concept).
+// to name why it's exempt (or be marked permanent if it covers an
+// entirely different concept).
 //
 // The allowlist is a controlled exception, not a backdoor — any new
-// entry must come with a comment explaining why the file is exempt and
-// when (or never) it retires.
+// entry must come with a comment explaining why the file is exempt.
+//
+// F1b-schema trim: profile.ts and reviews.ts were previously allowlisted
+// because their .select() lists included the `category` column to
+// populate Pick<> types. F1b-schema dropped the column AND the SELECT
+// entries — both files are now category-free and have been removed
+// from this allowlist.
 const ALLOWLIST = new Set<string>([
-  // F1b-schema retires:
-  // - getMyBookings still SELECTs the `category` column to populate the
-  //   BookingWithEvent.event Pick<>. The column drops in F1b-schema, so
-  //   this SELECT and the type Pick<> retire together.
-  'src/lib/supabase/queries/profile.ts',
-  // - getReviewableEvents same situation — SELECTs `category` so the
-  //   ReviewableEvent type Pick<> stays valid until F1b-schema.
-  'src/lib/supabase/queries/reviews.ts',
-  // - /events page reads `?category=<enum>` URL search-param for the
-  //   F1a soft-fallback redirect to `?tag=<slug>`. The redirect path
-  //   stays alive even after F1b-schema (old shared links live a long
-  //   time); the param value is matched against `EventCategory` literal
-  //   strings via primarySlugForLegacyCategory(). When F1b-schema drops
-  //   the enum type, the helper switches to a string keyset of the
-  //   original 9 values and this allowlist entry can be removed.
+  // /events page reads `?category=<value>` URL search-param for the F1a
+  // soft-fallback redirect to `?tag=<slug>`. Old shared links from
+  // before F1a (emails, Google search, social posts) keep arriving with
+  // legacy enum strings as the param value forever — the redirect path
+  // is permanent UX, not tied to any DB column.
+  // Permanent.
   'src/app/events/page.tsx',
-  // Permanent — unrelated concept:
-  // - EmailPreferencesSection's `category` prop is NotificationCategory
-  //   from the email preferences subsystem (review_requests,
-  //   profile_nudges, admin_announcements). Different domain entirely;
-  //   the regex would false-positive on every render path.
+  // EmailPreferencesSection's `category` prop is NotificationCategory
+  // from the email preferences subsystem (review_requests,
+  // profile_nudges, admin_announcements). Unrelated domain entirely;
+  // the regex would false-positive on every render path.
+  // Permanent.
   'src/components/profile/EmailPreferencesSection.tsx',
-  // - TagPicker JSX user-copy "(one — the event's main category)".
-  //   Plain UI text in a help-string; not a code read. Stays.
+  // TagPicker JSX user-copy "(one — the event's main category)" — plain
+  // UI text in a help-string, not a code read.
+  // Permanent.
   'src/components/admin/TagPicker.tsx',
 ])
 
 // Patterns chosen from the prompt's grep brief plus a couple of
 // belt-and-braces variants. All are case-sensitive on `category` so they
-// don't match `EventCategory` (the type name, which we keep until F1b).
+// don't match `Category` in unrelated identifiers like `NotificationCategory`.
+// (The original `EventCategory` type was retired in F1b-schema along with
+// the rest of the legacy artefacts.)
 //
 //   1. `\.category\b` — any property access ending in .category. Covers
 //      `event.category`, `e.category`, `relatedEvent.category`, etc.

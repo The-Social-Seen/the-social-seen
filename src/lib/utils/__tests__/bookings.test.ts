@@ -28,7 +28,6 @@ function makeBooking(
       short_description: 'A short description',
       venue_address: '1 London Rd',
       image_url: '',
-      category: 'drinks',
       dress_code: null,
       primary_tag: { slug: 'drinks-bars', label: 'Drinks & Bars' },
     },

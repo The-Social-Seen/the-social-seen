@@ -132,10 +132,9 @@ export async function getMyPhone(): Promise<string | null> {
  * Fetch all bookings for a user with nested event data.
  * Returns confirmed, waitlisted, and past — frontend splits by date/status.
  *
- * F1a: nested event row includes `primary_tag: { slug, label }` from the
- * event_tags + tags join. The legacy `category` column is still selected
- * during the dual-write window (see types/index.ts → `PrimaryTag`); new
- * UI code should display `primary_tag.label`.
+ * Nested event row includes `primary_tag: { slug, label }` from the
+ * event_tags + tags join (F1a). The legacy `category` column was dropped
+ * by F1b-schema and is no longer selected.
  */
 export async function getMyBookings(
   userId: string,
@@ -148,7 +147,7 @@ export async function getMyBookings(
       `
       id, user_id, event_id, status, waitlist_position, price_at_booking, booked_at, created_at, updated_at, deleted_at,
       event:events(
-        id, slug, title, short_description, date_time, end_time, venue_name, venue_address, image_url, category, dress_code,
+        id, slug, title, short_description, date_time, end_time, venue_name, venue_address, image_url, dress_code,
         event_tags!inner(is_primary, tags!inner(slug, label))
       )
     `,

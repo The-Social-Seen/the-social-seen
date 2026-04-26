@@ -130,7 +130,6 @@ function makeEventDetail(overrides: Partial<EventDetail> = {}): EventDetail {
     venue_address: '123 London Rd',
     venue_revealed: true,
     postcode: null,
-    category: 'dining',
     price: 3500,
     capacity: 30,
     image_url: 'https://example.com/wine.jpg',

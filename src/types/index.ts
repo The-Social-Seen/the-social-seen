@@ -4,16 +4,13 @@ export type UserRole = 'member' | 'admin'
 
 export type UserStatus = 'active' | 'suspended' | 'banned'
 
-export type EventCategory =
-  | 'drinks'
-  | 'dining'
-  | 'cultural'
-  | 'wellness'
-  | 'sport'
-  | 'workshops'
-  | 'music'
-  | 'networking'
-  | 'activity'
+// `EventCategory` (the legacy 9-value enum) was retired in F1b-schema —
+// `events.category` and the corresponding Postgres enum no longer exist.
+// `event_tags.is_primary = true` is the sole source of truth for an
+// event's primary categorisation; the 15 primary-eligible tag slugs live
+// in src/lib/constants/tags.ts (PRIMARY_ELIGIBLE_TAG_SLUGS /
+// PRIMARY_TAG_LABELS) and member-facing rendering reads
+// event.primary_tag.label.
 
 export type BookingStatus =
   | 'confirmed'
@@ -40,24 +37,6 @@ export type AgeRange =
   | '40-44'
   | '45-49'
   | '50+'
-
-// ── Category label map ────────────────────────────────────────────────────────
-
-export const CATEGORY_LABELS: Record<EventCategory, string> = {
-  drinks:     'Drinks',
-  dining:     'Dining',
-  cultural:   'Cultural',
-  wellness:   'Wellness',
-  sport:      'Sport',
-  workshops:  'Workshops',
-  music:      'Music',
-  networking: 'Networking',
-  activity:   'Activity',
-}
-
-export function categoryLabel(category: EventCategory): string {
-  return CATEGORY_LABELS[category]
-}
 
 // ── Database row types ────────────────────────────────────────────────────────
 // These mirror the public schema tables 1:1 (snake_case, exact field names).
@@ -101,7 +80,10 @@ export interface Event {
   venue_revealed:    boolean
   // P2-5: UK postcode, used for Google Maps link. Null on legacy events.
   postcode:          string | null
-  category:          EventCategory
+  // `category` (legacy 9-value enum) dropped in F1b-schema. Source of
+  // truth for primary categorisation is event_tags.is_primary = true,
+  // surfaced as `primary_tag` on EventWithStats / EventDetail / the
+  // BookingWithEvent.event Pick<>.
   price:             number   // stored in pence; £35 = 3500
   capacity:          number | null  // null = unlimited capacity
   image_url:         string | null
@@ -228,17 +210,15 @@ export interface Notification {
 /**
  * Primary-tag info attached to every member-facing event row.
  *
- * Phase 3 F1a (data-layer half): the events query layer now joins
- * `event_tags` + `tags` so member-facing rendering can read the new
- * canonical taxonomy without ever touching `events.category`. The partial
- * unique index `uq_event_tags_one_primary` guarantees exactly one primary
- * tag per event, so this field is non-nullable.
+ * Phase 3 F1a / F1b: the events query layer JOINs `event_tags` + `tags`
+ * so member-facing rendering reads the canonical 15-tag taxonomy via
+ * `event.primary_tag.label`. The partial unique index
+ * `uq_event_tags_one_primary` guarantees exactly one primary tag per
+ * event, so this field is non-nullable.
  *
- * Per spec Decision 5 we are in the dual-write window: `events.category`
- * stays alive (kept in sync via the bidirectional trigger) until F1b drops
- * the column and the `event_category` enum. **New code SHOULD use
- * `primary_tag.label` for display** — `category` is "best-effort legacy
- * display value" and is doomed.
+ * The legacy `events.category` column and `event_category` Postgres enum
+ * were retired in F1b-schema (Migration 20260506000001). This is now the
+ * sole vocabulary for primary categorisation.
  *
  * See: docs/member-data-layer-spec.md (Decisions 4, 5, 6, 9).
  */
@@ -253,9 +233,8 @@ export interface EventWithStats extends Event {
   review_count:    number
   spots_left:      number | null  // null when capacity is null (unlimited)
   /**
-   * Primary tag from `event_tags` + `tags` join (F1a). Non-nullable —
+   * Primary tag from `event_tags` + `tags` join. Non-nullable —
    * every event has exactly one primary by the partial unique index.
-   * Prefer `primary_tag.label` over `category` for display.
    */
   primary_tag:     PrimaryTag
 }
@@ -286,13 +265,11 @@ export interface BookingWithEvent extends Booking {
     | 'venue_name'
     | 'venue_address'
     | 'image_url'
-    | 'category'
     | 'dress_code'
   > & {
     /**
-     * Primary tag from the F1a join. Non-nullable; see `PrimaryTag` /
-     * `EventWithStats.primary_tag`. New code should display
-     * `primary_tag.label` rather than `category`.
+     * Primary tag from the event_tags + tags join. Non-nullable; see
+     * `PrimaryTag` / `EventWithStats.primary_tag`.
      */
     primary_tag: PrimaryTag
   }
@@ -329,7 +306,10 @@ export interface SocialEvent {
   endTime: string
   venueName: string
   venueAddress: string
-  category: EventCategory
+  // Soft-typed string post-F1b-schema (EventCategory enum retired).
+  // The deprecated mock array still uses these legacy strings; consumers
+  // (gallery preview only) don't read this field.
+  category: string
   price: number
   capacity: number
   spotsLeft: number

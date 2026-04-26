@@ -36,7 +36,6 @@ const baseEvent = (overrides: Partial<EventWithStats> = {}): EventWithStats => (
   venue_address: '1 Bank End, London',
   venue_revealed: true,
   postcode: 'SE1 9BU',
-  category: 'drinks',
   price: 3500,
   capacity: 30,
   image_url: null,
