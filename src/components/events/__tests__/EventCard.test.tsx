@@ -73,6 +73,7 @@ function makeEvent(overrides: Partial<EventWithStats> = {}): EventWithStats {
     avg_rating: 0,
     review_count: 0,
     spots_left: 8,
+    primary_tag: { slug: 'drinks-bars', label: 'Drinks & Bars' },
     ...overrides,
   }
 }
@@ -117,9 +118,18 @@ describe('EventCard', () => {
     expect(link.getAttribute('href')).toBe('/events/rooftop-cocktails')
   })
 
-  it('renders category label (capitalised)', () => {
-    render(<EventCard event={makeEvent({ category: 'dining' })} />)
-    expect(screen.getByText('Dining')).toBeTruthy()
+  it('renders the primary_tag label (F1a — was categoryLabel(event.category))', () => {
+    render(
+      <EventCard
+        event={makeEvent({
+          category: 'dining',
+          primary_tag: { slug: 'dining-supper-clubs', label: 'Dining & Supper Clubs' },
+        })}
+      />,
+    )
+    expect(screen.getByText('Dining & Supper Clubs')).toBeTruthy()
+    // Must NOT render the legacy enum label
+    expect(screen.queryByText('Dining')).toBeNull()
   })
 
   // ── Price display ──

@@ -96,6 +96,7 @@ function makeEvent(overrides: Partial<EventDetail> = {}): EventDetail {
     avg_rating: 0,
     review_count: 0,
     spots_left: 8,
+    primary_tag: { slug: 'dining-supper-clubs', label: 'Dining & Supper Clubs' },
     hosts: [],
     inclusions: [],
     ...overrides,

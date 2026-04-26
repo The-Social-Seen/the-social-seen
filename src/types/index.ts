@@ -225,11 +225,39 @@ export interface Notification {
 // ── View types ────────────────────────────────────────────────────────────────
 // Mirrors the event_with_stats database view.
 
+/**
+ * Primary-tag info attached to every member-facing event row.
+ *
+ * Phase 3 F1a (data-layer half): the events query layer now joins
+ * `event_tags` + `tags` so member-facing rendering can read the new
+ * canonical taxonomy without ever touching `events.category`. The partial
+ * unique index `uq_event_tags_one_primary` guarantees exactly one primary
+ * tag per event, so this field is non-nullable.
+ *
+ * Per spec Decision 5 we are in the dual-write window: `events.category`
+ * stays alive (kept in sync via the bidirectional trigger) until F1b drops
+ * the column and the `event_category` enum. **New code SHOULD use
+ * `primary_tag.label` for display** — `category` is "best-effort legacy
+ * display value" and is doomed.
+ *
+ * See: docs/member-data-layer-spec.md (Decisions 4, 5, 6, 9).
+ */
+export interface PrimaryTag {
+  slug:  string
+  label: string
+}
+
 export interface EventWithStats extends Event {
   confirmed_count: number
   avg_rating:      number
   review_count:    number
   spots_left:      number | null  // null when capacity is null (unlimited)
+  /**
+   * Primary tag from `event_tags` + `tags` join (F1a). Non-nullable —
+   * every event has exactly one primary by the partial unique index.
+   * Prefer `primary_tag.label` over `category` for display.
+   */
+  primary_tag:     PrimaryTag
 }
 
 // ── Composed types for UI consumption ────────────────────────────────────────
@@ -260,7 +288,14 @@ export interface BookingWithEvent extends Booking {
     | 'image_url'
     | 'category'
     | 'dress_code'
-  >
+  > & {
+    /**
+     * Primary tag from the F1a join. Non-nullable; see `PrimaryTag` /
+     * `EventWithStats.primary_tag`. New code should display
+     * `primary_tag.label` rather than `category`.
+     */
+    primary_tag: PrimaryTag
+  }
 }
 
 /** A review enriched with the reviewer's public profile */

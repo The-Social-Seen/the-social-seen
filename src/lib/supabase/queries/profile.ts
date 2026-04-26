@@ -3,6 +3,7 @@ import type {
   AgeRange,
   BookingWithEvent,
   Gender,
+  PrimaryTag,
   Profile,
   UserInterest,
 } from '@/types'
@@ -130,6 +131,11 @@ export async function getMyPhone(): Promise<string | null> {
 /**
  * Fetch all bookings for a user with nested event data.
  * Returns confirmed, waitlisted, and past — frontend splits by date/status.
+ *
+ * F1a: nested event row includes `primary_tag: { slug, label }` from the
+ * event_tags + tags join. The legacy `category` column is still selected
+ * during the dual-write window (see types/index.ts → `PrimaryTag`); new
+ * UI code should display `primary_tag.label`.
  */
 export async function getMyBookings(
   userId: string,
@@ -141,11 +147,15 @@ export async function getMyBookings(
     .select(
       `
       id, user_id, event_id, status, waitlist_position, price_at_booking, booked_at, created_at, updated_at, deleted_at,
-      event:events(id, slug, title, short_description, date_time, end_time, venue_name, venue_address, image_url, category, dress_code)
+      event:events(
+        id, slug, title, short_description, date_time, end_time, venue_name, venue_address, image_url, category, dress_code,
+        event_tags!inner(is_primary, tags!inner(slug, label))
+      )
     `,
     )
     .eq('user_id', userId)
     .is('deleted_at', null)
+    .eq('event.event_tags.is_primary', true)
     .order('created_at', { ascending: false })
 
   if (error) {
@@ -153,9 +163,42 @@ export async function getMyBookings(
     return []
   }
 
-  // Supabase returns FK joins as arrays for to-one relations; unwrap
-  return (data ?? []).map((row) => ({
-    ...row,
-    event: Array.isArray(row.event) ? row.event[0] : row.event,
-  })) as BookingWithEvent[]
+  // Supabase returns FK joins as arrays for to-one relations; unwrap.
+  // For each booking, pull primary_tag out of the nested event.event_tags
+  // embed (F1a). The partial unique index guarantees exactly one primary,
+  // so the inner array always has a single element.
+  return (data ?? []).map((row) => {
+    const eventRaw = (Array.isArray(row.event) ? row.event[0] : row.event) as
+      | (Record<string, unknown> & {
+          event_tags?:
+            | Array<{
+                is_primary: boolean
+                tags: { slug: string; label: string } | { slug: string; label: string }[] | null
+              }>
+            | null
+        })
+      | null
+
+    if (!eventRaw) {
+      // Defensive: shouldn't happen given FK constraints, but keep the
+      // shape stable for the consumer rather than crashing.
+      return { ...row, event: null as unknown as BookingWithEvent['event'] }
+    }
+
+    const tagRow = (eventRaw.event_tags ?? []).find((t) => t.is_primary) ?? null
+    const tagInner = tagRow
+      ? Array.isArray(tagRow.tags)
+        ? tagRow.tags[0]
+        : tagRow.tags
+      : null
+    const primary_tag: PrimaryTag = tagInner
+      ? { slug: tagInner.slug, label: tagInner.label }
+      : { slug: '', label: '' } // unreachable in practice — see comment above
+
+    const { event_tags: _et, ...eventFields } = eventRaw
+    return {
+      ...row,
+      event: { ...eventFields, primary_tag } as BookingWithEvent['event'],
+    }
+  }) as BookingWithEvent[]
 }

@@ -159,8 +159,9 @@ export default function EventDetailClient({
                 transition={{ duration: 0.6, delay: 0.1 }}
               >
                 <div className="mb-3 flex flex-wrap items-center gap-3">
+                  {/* Primary-tag badge (F1a — was {event.category}) */}
                   <span className="rounded-full bg-white/20 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
-                    {event.category}
+                    {event.primary_tag.label}
                   </span>
                   {isPast && (
                     <span className="rounded-full bg-white/20 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
@@ -458,8 +459,12 @@ export default function EventDetailClient({
             <div className="mx-auto max-w-7xl px-6 py-16">
               <motion.div {...fadeInUp}>
                 <div className="mb-8 flex items-center justify-between">
+                  {/* Heading uses primary_tag.label (F1a). Related events
+                      are still filtered by legacy category at the page
+                      layer (getRelatedEvents takes EventCategory) — that
+                      stays until F1b widens the related-events query. */}
                   <h2 className="text-2xl font-bold text-text-primary">
-                    More {event.category} Events
+                    More {event.primary_tag.label} Events
                   </h2>
                   <Link
                     href="/events"

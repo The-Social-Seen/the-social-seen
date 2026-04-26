@@ -10,7 +10,6 @@ import { formatPrice } from "@/lib/utils/currency";
 import { resolveEventImage } from "@/lib/utils/images";
 import { isPastEvent } from "@/lib/utils/dates";
 import { LOW_SPOTS_THRESHOLD } from "@/lib/constants";
-import { categoryLabel } from "@/types";
 import type { EventWithStats } from "@/types";
 
 interface EventCardProps {
@@ -80,10 +79,10 @@ export function EventCard({ event, showRating }: EventCardProps) {
           {/* Gradient overlay at bottom for readability */}
           <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent" />
 
-          {/* Category badge */}
+          {/* Primary-tag badge (F1a — was categoryLabel(event.category)) */}
           <div className="absolute left-3 top-3">
             <span className="inline-flex items-center rounded-full bg-bg-card/90 px-3 py-1 font-sans text-xs font-semibold text-text-primary backdrop-blur-sm">
-              {categoryLabel(event.category)}
+              {event.primary_tag.label}
             </span>
           </div>
 

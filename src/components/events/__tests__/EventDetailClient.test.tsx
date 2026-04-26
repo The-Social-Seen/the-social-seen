@@ -145,6 +145,7 @@ function makeEventDetail(overrides: Partial<EventDetail> = {}): EventDetail {
     avg_rating: 0,
     review_count: 0,
     spots_left: 8,
+    primary_tag: { slug: 'dining-supper-clubs', label: 'Dining & Supper Clubs' },
     hosts: [
       {
         id: 'host-1',
@@ -249,9 +250,11 @@ describe('EventDetailClient', () => {
     expect(screen.getByText(/exquisite evening of wine tasting/)).toBeTruthy()
   })
 
-  it('renders category badge', () => {
+  it('renders the primary_tag label badge (F1a — was {event.category})', () => {
     render(<EventDetailClient event={makeEventDetail()} {...defaultProps} />)
-    expect(screen.getByText('dining')).toBeTruthy()
+    expect(screen.getByText('Dining & Supper Clubs')).toBeTruthy()
+    // Must NOT render the bare legacy enum value
+    expect(screen.queryByText('dining')).toBeNull()
   })
 
   // ── Host section ──
@@ -363,10 +366,10 @@ describe('EventDetailClient', () => {
 
   // ── Related events ──
 
-  it('renders related events section when provided', () => {
+  it('renders related events section with primary_tag.label heading (F1a)', () => {
     const related = [makeEventDetail({ id: 'evt-2', title: 'Another Dining Event', slug: 'another-dining' })] as EventWithStats[]
     render(<EventDetailClient event={makeEventDetail()} {...defaultProps} relatedEvents={related} />)
-    expect(screen.getByText(/More dining Events/)).toBeTruthy()
+    expect(screen.getByText(/More Dining & Supper Clubs Events/)).toBeTruthy()
     expect(screen.getByTestId('related-event-card')).toBeTruthy()
   })
 

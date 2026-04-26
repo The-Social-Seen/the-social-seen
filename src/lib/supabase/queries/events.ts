@@ -4,24 +4,93 @@ import type {
   EventDetail,
   EventPhoto,
   EventWithStats,
+  PrimaryTag,
   ReviewWithAuthor,
   Booking,
 } from '@/types'
+
+// ── F1a primary-tag embed ───────────────────────────────────────────────────
+// Phase 3 F1a (data layer): every member-facing event row carries the
+// canonical primary tag (slug + label) joined from event_tags + tags.
+//
+// Per spec Decision 5 we're in the dual-write window — `events.category`
+// stays in sync via the bidirectional trigger until F1b drops it. New
+// code SHOULD use primary_tag.label for display; category is doomed.
+//
+// The JOIN is `event_tags!inner` filtered to is_primary = true. The
+// partial unique index `uq_event_tags_one_primary` (Decision 6)
+// guarantees exactly one primary tag per event, so the inner join is
+// always 1:1. If a query starts returning zero events, that's a data-
+// integrity bug (every event must have a primary), not a query bug —
+// flag it.
+//
+// See: docs/member-data-layer-spec.md (Decisions 4, 5, 6).
+
+const PRIMARY_TAG_EMBED = 'event_tags!inner(is_primary, tags!inner(slug, label))'
+
+interface RowWithPrimaryTagEmbed {
+  event_tags?:
+    | Array<{
+        is_primary: boolean
+        tags: { slug: string; label: string } | { slug: string; label: string }[] | null
+      }>
+    | {
+        is_primary: boolean
+        tags: { slug: string; label: string } | { slug: string; label: string }[] | null
+      }
+    | null
+}
+
+/**
+ * Pull `primary_tag` out of the embedded `event_tags` array and strip the
+ * raw embed off the row. PostgREST returns nested resources as either an
+ * object or a single-element array depending on the relationship cardinality
+ * detection — handle both.
+ */
+function extractPrimaryTag(row: RowWithPrimaryTagEmbed): PrimaryTag {
+  const eventTags = row.event_tags
+  const primaryRow = Array.isArray(eventTags) ? eventTags[0] : eventTags
+  const tag = primaryRow
+    ? Array.isArray(primaryRow.tags)
+      ? primaryRow.tags[0]
+      : primaryRow.tags
+    : null
+  if (!tag) {
+    // Should be impossible — the inner join + partial unique index
+    // guarantees one primary per event. Caller should treat this as a
+    // data-integrity error.
+    throw new Error('Event row missing primary tag (F1a data integrity)')
+  }
+  return { slug: tag.slug, label: tag.label }
+}
+
+function attachPrimaryTag<T extends RowWithPrimaryTagEmbed>(
+  row: T,
+): Omit<T, 'event_tags'> & { primary_tag: PrimaryTag } {
+  const primary_tag = extractPrimaryTag(row)
+  const { event_tags: _et, ...rest } = row
+  return { ...rest, primary_tag } as Omit<T, 'event_tags'> & { primary_tag: PrimaryTag }
+}
 
 // ── Published events (listing page) ─────────────────────────────────────────
 
 /**
  * Fetch all published, non-cancelled events from the event_with_stats view.
  * Returns upcoming + past — client splits by date_time.
+ *
+ * F1a: each row includes `primary_tag: { slug, label }` joined from
+ * event_tags + tags. The `category` column remains populated for
+ * backwards-compatibility through the dual-write window.
  */
 export async function getPublishedEvents(): Promise<EventWithStats[]> {
   const supabase = await createServerClient()
 
   const { data, error } = await supabase
     .from('event_with_stats')
-    .select('*')
+    .select(`*, ${PRIMARY_TAG_EMBED}`)
     .eq('is_published', true)
     .eq('is_cancelled', false)
+    .eq('event_tags.is_primary', true)
     .order('date_time', { ascending: true })
 
   if (error) {
@@ -29,7 +98,9 @@ export async function getPublishedEvents(): Promise<EventWithStats[]> {
     return []
   }
 
-  return (data ?? []) as EventWithStats[]
+  return (data ?? []).map((row) =>
+    attachPrimaryTag(row as RowWithPrimaryTagEmbed),
+  ) as unknown as EventWithStats[]
 }
 
 // ── Past events (with review snippet) ───────────────────────────────────────
@@ -73,8 +144,9 @@ export async function getPastEvents(
   const nowIso = new Date().toISOString()
   let query = supabase
     .from('event_with_stats')
-    .select('*')
+    .select(`*, ${PRIMARY_TAG_EMBED}`)
     .eq('is_published', true)
+    .eq('event_tags.is_primary', true)
     .lt('date_time', nowIso)
     .order('date_time', { ascending: false })
     .limit(PAST_EVENTS_PAGE_SIZE)
@@ -94,7 +166,9 @@ export async function getPastEvents(
     return { events: [], nextCursor: null }
   }
 
-  const rows = (events ?? []) as EventWithStats[]
+  const rows = (events ?? []).map((row) =>
+    attachPrimaryTag(row as RowWithPrimaryTagEmbed),
+  ) as unknown as EventWithStats[]
   if (rows.length === 0) return { events: [], nextCursor: null }
 
   const eventIds = rows.map((e) => e.id)
@@ -170,7 +244,7 @@ export async function getPastEvents(
 export async function getEventBySlug(slug: string): Promise<EventDetail | null> {
   const supabase = await createServerClient()
 
-  // 1. Fetch event with nested hosts + inclusions
+  // 1. Fetch event with nested hosts + inclusions + primary tag (F1a)
   const { data: event, error: eventError } = await supabase
     .from('events')
     .select(`
@@ -181,10 +255,12 @@ export async function getEventBySlug(slug: string): Promise<EventDetail | null> 
       ),
       event_inclusions(
         id, event_id, label, icon, sort_order, created_at
-      )
+      ),
+      ${PRIMARY_TAG_EMBED}
     `)
     .eq('slug', slug)
     .eq('is_published', true)
+    .eq('event_tags.is_primary', true)
     .is('deleted_at', null)
     .single()
 
@@ -245,8 +321,16 @@ export async function getEventBySlug(slug: string): Promise<EventDetail | null> 
   const inclusions = (event.event_inclusions ?? [])
     .sort((a: { sort_order: number }, b: { sort_order: number }) => a.sort_order - b.sort_order)
 
-  // 6. Assemble EventDetail
-  const { event_hosts: _eh, event_inclusions: _ei, ...eventFields } = event
+  // 6. Extract primary tag from the F1a embed
+  const primary_tag = extractPrimaryTag(event as RowWithPrimaryTagEmbed)
+
+  // 7. Assemble EventDetail
+  const {
+    event_hosts: _eh,
+    event_inclusions: _ei,
+    event_tags: _et,
+    ...eventFields
+  } = event as Record<string, unknown> & RowWithPrimaryTagEmbed
 
   return {
     ...eventFields,
@@ -254,6 +338,7 @@ export async function getEventBySlug(slug: string): Promise<EventDetail | null> 
     avg_rating: avgRating,
     review_count: reviewCount,
     spots_left: spotsLeft,
+    primary_tag,
     hosts,
     inclusions,
   } as EventDetail
@@ -324,11 +409,12 @@ export async function getRelatedEvents(
 
   const { data, error } = await supabase
     .from('event_with_stats')
-    .select('*')
+    .select(`*, ${PRIMARY_TAG_EMBED}`)
     .eq('category', category)
     .neq('id', excludeId)
     .eq('is_published', true)
     .eq('is_cancelled', false)
+    .eq('event_tags.is_primary', true)
     .order('date_time', { ascending: true })
     .limit(3)
 
@@ -337,7 +423,9 @@ export async function getRelatedEvents(
     return []
   }
 
-  return (data ?? []) as EventWithStats[]
+  return (data ?? []).map((row) =>
+    attachPrimaryTag(row as RowWithPrimaryTagEmbed),
+  ) as unknown as EventWithStats[]
 }
 
 // ── User's booking for an event ──────────────────────────────────────────────
