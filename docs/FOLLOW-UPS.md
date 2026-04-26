@@ -15,6 +15,19 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 
 ## 🔴 Bugs / regressions to investigate
 
+### UTF-8 em-dashes mojibake'd in event seed copy
+**Source:** Spotted on iOS preview (PR #53 verification, 2026-04-25). Visible on the Summer Party event detail and likely many others.
+**Symptom:** Em-dashes in event titles / descriptions render as `,Äî` instead of `—`. Example: "Mayfair ,Äî the Social Seen's summer party" should be "Mayfair — the Social Seen's summer party". Visible on hosted production, not just local.
+**Root cause hypothesis:** `,Äî` is the exact mojibake produced when UTF-8 bytes for `—` (`E2 80 94`) are interpreted as Mac Roman. Likely the seed file was saved or transcoded through a Mac Roman step at some point — either pre-insert (the bytes in the DB are wrong) or at render time (less likely; the type is `text` in Postgres which is UTF-8 by default). Inspect first with `select short_description from events where short_description like '%,Äî%' limit 1;` against hosted to confirm the bytes in the DB are wrong.
+**Action:**
+1. Confirm whether the bytes in hosted Postgres are mojibake'd or correct.
+2. If bytes are wrong: write a one-shot migration that does `UPDATE events SET short_description = replace(replace(short_description, ',Äî', '—'), ',Äì', '–'), description = same…` (and any other Mac-Roman→UTF-8 patterns found). Do this as a normal migration so it's reproducible against any restored backup.
+3. If bytes are correct: investigate render path — Server Components / `dangerouslySetInnerHTML` / email templates — to find where the encoding is being misread.
+4. Fix the seed file too so the bug doesn't reappear after a `db reset`.
+**Priority:** Medium-high. Customer-facing copy quality issue; visible on every page that shows an affected event.
+
+---
+
 ### Orphan `pending_payment` row when Stripe Checkout creation fails
 **Source:** User report, post-CL-9.
 **Symptom:** Failed paid-event booking shows the generic "Something went wrong" error in the modal, BUT a `pending_payment` row was already inserted by the `book_event_paid` RPC. The orphan shows in the user's bookings list. Cancelling it returns "Booking not found" / "Only confirmed bookings can be cancelled" because `cancelBooking` (src/app/events/[slug]/actions.ts:657) gates on `status === 'confirmed'`.
@@ -40,12 +53,16 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 - If env / migration: pure operator fix, no code change.
 **Priority:** **HIGH — blocks first paid booking.**
 
-### Admin area is not mobile-friendly
-**Source:** User report, post-CL-9.
-**Rationale:** `/admin/*` routes were built desktop-first. The DataTable component overflows on small screens; the event create/edit form, attendee list, members table, reviews moderation, and notifications retry view all need a responsive pass.
-**Action:** Sprint-sized — touch every `/admin/*` page. DataTable likely needs a card-on-mobile variant; tables should swap to stacked rows below the `md:` breakpoint. Forms need single-column reflow.
-**Estimate:** ~1.5–2 days for a full responsive pass on the admin surface.
-**Priority:** Medium — admin is operator-only, so it doesn't block members. Worth doing before a second admin joins (cofounder, events ops, etc.).
+### Admin area mobile responsive — Phase 2 deferrals
+**Source:** PR #53 (`feat(admin): mobile-responsive pass on /admin/*`) shipped Phase 1; spec at `docs/admin-mobile-spec.md` §5 lists Phase 2 items deferred from that PR.
+**Rationale:** Phase 1 closed the structural blockers (table → card stacking, sticky save bar, bottom-sheet dialogs, KPI 2-up, 44×44 touch targets, 43 new tests). These items hit the 15-file-per-batch cap or were explicitly out of scope.
+**Action — Phase 2 polish:**
+- `admin/events/page.tsx` Create Event CTA: stack `flex-col sm:flex-row` with `w-full sm:w-auto` button.
+- `admin/events/[id]/page.tsx` DuplicateEventButton: stack on mobile.
+- `BookingsChart.tsx`: drop `margin={{ left: -20 }}` on mobile so Y-axis labels stop clipping.
+- `notifications/page.tsx`: failed-sends badge polish.
+- Drag-to-reorder, swipe actions, FAB, pull-to-refresh — all explicitly out of scope per spec §5.
+**Priority:** Low. Pure polish — admin is functional on mobile after PR #53.
 
 ---
 
@@ -100,6 +117,17 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 ---
 
 ## 🟡 UX / polish
+
+### AdminSidebar bottom-nav obscures form view when iOS keyboard is open
+**Source:** PR #53 real-iOS verification (2026-04-25).
+**Symptom:** On `/admin/events/[id]` and `/admin/events/new`, focusing the Description textarea opens the keyboard. The chrome stack from bottom up: keyboard → iOS field navigator → AdminSidebar bottom-nav (Overview/Events/Members/Reviews/Notifications) → Cancel button → Save button → form. Net result: the textarea shows ~2 lines of text. The sticky save bar itself works correctly (verified) — the issue is the bottom-nav is unnecessary while editing and eats vertical space.
+**Action — pick one:**
+- **Best:** hide AdminSidebar bottom-nav when a text input has focus (`:focus-within` on a form ancestor + `lg:hidden` on the nav, or VisualViewport API to detect keyboard).
+- **Cheaper:** drop the bottom-nav on admin form pages (`/admin/events/[id]`, `/admin/events/new`, `/admin/notifications`) — these are deep pages where cross-section nav is rare during edit.
+- **Cheapest:** stack Cancel + Save horizontally instead of vertically — recovers ~50px without behaviour change.
+**Priority:** Low. Functional, just cluttered.
+
+---
 
 ### Square `/logo.png` asset for Organization JSON-LD
 **Source:** Phase 2.5 Batch 6.
