@@ -73,6 +73,7 @@ function makeEvent(overrides: Partial<EventWithStats> = {}): EventWithStats {
     avg_rating: 0,
     review_count: 0,
     spots_left: 20,
+    primary_tag: { slug: 'drinks-bars', label: 'Drinks & Bars' },
     ...overrides,
   }
 }

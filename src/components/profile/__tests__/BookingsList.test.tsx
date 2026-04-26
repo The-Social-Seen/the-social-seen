@@ -150,6 +150,7 @@ function makeBooking(overrides: Partial<BookingWithEvent> & { id?: string } = {}
       image_url: 'https://example.com/wine.jpg',
       category: 'dining',
       dress_code: 'Smart Casual',
+      primary_tag: { slug: 'dining-supper-clubs', label: 'Dining & Supper Clubs' },
     },
     ...overrides,
   }
@@ -232,6 +233,7 @@ describe('BookingsList', () => {
           image_url: null,
           category: 'music',
           dress_code: null,
+          primary_tag: { slug: 'live-music-gigs', label: 'Live Music & Gigs' },
         },
       }),
     ]

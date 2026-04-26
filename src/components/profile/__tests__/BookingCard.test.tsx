@@ -57,6 +57,7 @@ function makeBooking(overrides: Partial<BookingWithEvent> = {}): BookingWithEven
       image_url: 'https://example.com/wine.jpg',
       category: 'dining',
       dress_code: 'Smart Casual',
+      primary_tag: { slug: 'dining-supper-clubs', label: 'Dining & Supper Clubs' },
     },
     ...overrides,
   }

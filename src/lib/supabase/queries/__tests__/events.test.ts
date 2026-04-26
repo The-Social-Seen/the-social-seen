@@ -88,6 +88,16 @@ import {
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
+// F1a: every event row carries the event_tags embed (one row, is_primary = true).
+// The query filters with .eq('event_tags.is_primary', true) and the partial
+// unique index guarantees exactly one primary, so the array always has length 1.
+const mockPrimaryTagEmbed = [
+  {
+    is_primary: true,
+    tags: { slug: 'dining-supper-clubs', label: 'Dining & Supper Clubs' },
+  },
+]
+
 const mockEventWithStats = {
   id: 'evt-1',
   slug: 'wine-and-wisdom',
@@ -112,6 +122,7 @@ const mockEventWithStats = {
   avg_rating: 4.5,
   review_count: 8,
   spots_left: 18,
+  event_tags: mockPrimaryTagEmbed,
 }
 
 const mockEventRow = {
@@ -158,6 +169,7 @@ const mockEventRow = {
     { id: 'inc-1', event_id: 'evt-1', label: 'Welcome drink', icon: 'wine', sort_order: 1, created_at: '2026-04-01T00:00:00Z' },
     { id: 'inc-2', event_id: 'evt-1', label: 'Cheese board', icon: 'utensils', sort_order: 0, created_at: '2026-04-01T00:00:00Z' },
   ],
+  event_tags: mockPrimaryTagEmbed,
 }
 
 const mockReview = {

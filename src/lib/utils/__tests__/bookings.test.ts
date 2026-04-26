@@ -30,6 +30,7 @@ function makeBooking(
       image_url: '',
       category: 'drinks',
       dress_code: null,
+      primary_tag: { slug: 'drinks-bars', label: 'Drinks & Bars' },
     },
   }
 }
