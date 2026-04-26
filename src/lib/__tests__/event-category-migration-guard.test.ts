@@ -1,51 +1,92 @@
-// F1a regression guard — Phase 3 member data layer, app-code migration.
+// F1a/F1b regression guard — Phase 3 member data layer, app-code migration.
 //
-// The 4 member-facing event components were migrated off the legacy
+// Production code reading event data was migrated off the legacy
 // `events.category` enum (9 values: drinks, dining, cultural, …) to read
 // the new `event.primary_tag.label` from the canonical 15-value taxonomy
 // (Theatre & Comedy, Galleries & Museums, Nightlife & Dancing, …) shipped
-// by Migration 2 (20260504000001_create_tags_and_event_tags.sql).
+// by Migration 2 (20260504000001_create_tags_and_event_tags.sql). F1a
+// migrated the 4 member-facing event components and added the ?tag=
+// filter contract; F1b-app migrated the 3 remaining carry-overs
+// (getRelatedEvents query + caller, BookingCard chip, EventsTable chip).
 //
-// Migrated components (zero `category` reads after this PR):
-//   - src/components/events/EventCard.tsx
-//   - src/components/events/EventDetailClient.tsx
-//   - src/components/events/EventsPageClient.tsx
-//   - src/components/events/PastEventCard.tsx
+// Post-F1b-app invariant — the only place in `src/` (outside tests and
+// the small allowlist below) that may legitimately reference
+// `event.category`, `categoryLabel`, `CATEGORY_LABELS`, or the
+// `EventCategory` type is `src/types/index.ts`. That file holds the
+// legacy enum + helper definitions. F1b-schema retires them all in one
+// shot (drop the column, drop the enum, remove the helpers, retire the
+// type) once nothing references them.
 //
-// This guard prevents a silent regression: a future PR that re-adds an
-// `event.category`-based render path on a member-facing component would
-// undo the F1a UX improvement (members would see the coarse legacy
-// labels again — "Cultural" instead of "Theatre & Comedy") AND would
-// block F1b from dropping the column.
+// SCAN_DIRS — every directory that holds production code reading event
+// data. The guard fails loudly if any production file outside the
+// allowlist references the legacy enum or its helpers:
+//   - src/components/events/    — F1a-migrated 4 components
+//   - src/components/admin/     — F1b-app-migrated EventsTable
+//   - src/components/profile/   — F1b-app-migrated BookingCard
+//   - src/lib/supabase/queries/ — getRelatedEvents now takes a slug
+//   - src/app/events/           — caller of getRelatedEvents
 //
-// Scoping choice (documented per the prompt):
-//   We scan src/components/events/ exclusively. Carry-overs the
-//   frontend-developer's handover called out remain out of scope:
-//     - src/components/profile/BookingCard.tsx — F1b (booking card label)
-//     - src/components/admin/EventsTable.tsx — admin path, F1b cleanup
-//     - src/app/events/[slug]/page.tsx — getRelatedEvents() at the page
-//       layer still takes EventCategory; F1b widens it to a primary slug
-//   These files legitimately read event.category today and are flagged
-//   in the F1a UI commit's handover as deferred — pulling them into
-//   this guard now would block the F1a PR. Each will get its own guard
-//   when its respective wave lands.
+// `src/types/index.ts` is intentionally NOT scanned — the `EventCategory`
+// type, `CATEGORY_LABELS` map, `Event.category` field, and `categoryLabel`
+// helper definitions all live there until F1b-schema retires them. A
+// future tester pass after F1b-schema can either delete this guard
+// outright or add `src/types/` to SCAN_DIRS (no allowlist needed once
+// the legacy artefacts are gone).
 //
 // Plus three edge-case checks for the things the rendering tests don't
 // exercise: the ?category= → ?tag= soft-fallback redirect contract, the
 // ?tag= validation against PRIMARY_ELIGIBLE_TAG_SLUGS, and the chip-bar
 // long-label layout (whitespace-nowrap on chips with 24+ char labels).
+// Plus a function-source signature check for getRelatedEvents (F1b-app).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 
 const REPO_ROOT = resolve(__dirname, '../../..')
-const SCAN_DIRS = ['src/components/events'] as const
+const SCAN_DIRS = [
+  'src/components/events',
+  'src/components/admin',
+  'src/components/profile',
+  'src/lib/supabase/queries',
+  'src/app/events',
+] as const
 
-// No allowlist — the 4 migrated components must be 100% category-free.
-// Production bookings/admin/page-layer carry-overs are scoped out via
-// SCAN_DIRS rather than allowlisted (each retires in its own wave).
-const ALLOWLIST = new Set<string>([])
+// Allowlist — files where the WORD `category` legitimately appears for
+// reasons unrelated to the legacy events.category enum. Each entry has
+// to name a wave that retires it (or be marked permanent if it covers
+// an entirely different concept).
+//
+// The allowlist is a controlled exception, not a backdoor — any new
+// entry must come with a comment explaining why the file is exempt and
+// when (or never) it retires.
+const ALLOWLIST = new Set<string>([
+  // F1b-schema retires:
+  // - getMyBookings still SELECTs the `category` column to populate the
+  //   BookingWithEvent.event Pick<>. The column drops in F1b-schema, so
+  //   this SELECT and the type Pick<> retire together.
+  'src/lib/supabase/queries/profile.ts',
+  // - getReviewableEvents same situation — SELECTs `category` so the
+  //   ReviewableEvent type Pick<> stays valid until F1b-schema.
+  'src/lib/supabase/queries/reviews.ts',
+  // - /events page reads `?category=<enum>` URL search-param for the
+  //   F1a soft-fallback redirect to `?tag=<slug>`. The redirect path
+  //   stays alive even after F1b-schema (old shared links live a long
+  //   time); the param value is matched against `EventCategory` literal
+  //   strings via primarySlugForLegacyCategory(). When F1b-schema drops
+  //   the enum type, the helper switches to a string keyset of the
+  //   original 9 values and this allowlist entry can be removed.
+  'src/app/events/page.tsx',
+  // Permanent — unrelated concept:
+  // - EmailPreferencesSection's `category` prop is NotificationCategory
+  //   from the email preferences subsystem (review_requests,
+  //   profile_nudges, admin_announcements). Different domain entirely;
+  //   the regex would false-positive on every render path.
+  'src/components/profile/EmailPreferencesSection.tsx',
+  // - TagPicker JSX user-copy "(one — the event's main category)".
+  //   Plain UI text in a help-string; not a code read. Stays.
+  'src/components/admin/TagPicker.tsx',
+])
 
 // Patterns chosen from the prompt's grep brief plus a couple of
 // belt-and-braces variants. All are case-sensitive on `category` so they
@@ -510,5 +551,73 @@ describe('F1a — chip-bar long-label layout', () => {
     const labels = PRIMARY_TAG_LABELS.map((t) => t.label)
     expect(labels).toContain('Activities & Social Games')
     expect(labels).toContain('Workshops & Masterclasses')
+  })
+})
+
+// ── Test 5 — getRelatedEvents signature lock-in (F1b-app) ────────────────────
+
+describe('F1b-app — getRelatedEvents primary-tag JOIN', () => {
+  // F1b-app changed getRelatedEvents from
+  //   (category: EventCategory, excludeId: string)  →  filter on events.category
+  // to
+  //   (primaryTagSlug: string,  excludeId: string)  →  filter on event_tags.tags.slug
+  //
+  // The widened SCAN_DIRS above already prevents *new* event.category reads
+  // from sneaking back into the query layer, but a malicious or careless PR
+  // could still revert the JOIN itself — same function name, same returned
+  // shape, but suddenly filtering on the legacy column again. Source-grep
+  // assertions lock the function-source signature so that kind of revert
+  // surfaces here, with a named diagnostic, rather than as a UX regression
+  // (Theatre & Comedy events showing Galleries & Museums peers again).
+
+  const eventsQuerySrc = readFileSync(
+    resolve(REPO_ROOT, 'src/lib/supabase/queries/events.ts'),
+    'utf-8',
+  )
+
+  it('signature param is `primaryTagSlug` (not the legacy `category: EventCategory`)', () => {
+    // The function-declaration regex tolerates whitespace + arg formatting
+    // changes. What matters is that the FIRST parameter name reads
+    // `primaryTagSlug` — the rename is the public contract change.
+    const match = eventsQuerySrc.match(
+      /export\s+async\s+function\s+getRelatedEvents\s*\(\s*(\w+)\s*:/,
+    )
+    expect(
+      match,
+      'Could not locate `export async function getRelatedEvents(<arg>:` in events.ts — the function may have been renamed or deleted.',
+    ).not.toBeNull()
+    expect(match![1]).toBe('primaryTagSlug')
+    // And paired safety: the legacy first-arg name must not have come back.
+    expect(match![1]).not.toBe('category')
+  })
+
+  it("filters by event_tags.tags.slug (not events.category) in the query chain", () => {
+    // Locate the function body — from `function getRelatedEvents` to the
+    // next `// ──` section divider — and assert the F1b filter chain is
+    // present and the legacy chain is absent.
+    const start = eventsQuerySrc.indexOf('export async function getRelatedEvents')
+    expect(start, 'getRelatedEvents not found in events.ts').toBeGreaterThan(-1)
+    const rest = eventsQuerySrc.slice(start)
+    const end = rest.indexOf('// ──', 1) // next section header below the function
+    const body = end > 0 ? rest.slice(0, end) : rest
+
+    // F1b-app filter — event_tags + tags JOIN, keyed by primary tag slug.
+    expect(
+      body,
+      "getRelatedEvents body should filter via .eq('event_tags.tags.slug', primaryTagSlug)",
+    ).toContain("'event_tags.tags.slug'")
+    expect(
+      body,
+      "getRelatedEvents body should still require event_tags.is_primary = true",
+    ).toContain("'event_tags.is_primary'")
+
+    // The legacy filter — direct `.eq('category', …)` — must not return.
+    // Anchored regex so we don't false-positive on the JSDoc reference to
+    // "events.category" higher up (which is in a doc comment, but we
+    // sliced the body window to avoid that anyway).
+    expect(
+      body,
+      "getRelatedEvents body should NOT filter by the legacy events.category column anymore",
+    ).not.toMatch(/\.eq\(\s*['"]category['"]/)
   })
 })
