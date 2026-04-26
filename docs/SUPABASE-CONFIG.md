@@ -192,6 +192,39 @@ No env-var change on approval — the code already uses `SocialSeen`.
 
 ---
 
+## 7. Migration authoring caveats
+
+### `ALTER TYPE … ADD VALUE` is unsafe inside `supabase db push` migrations
+
+Postgres rule: `ALTER TYPE <enum> ADD VALUE …` cannot run inside a transaction in older PG versions, and even on PG 15+ the new value is not visible inside the same transaction it was added. `supabase db push` wraps each migration in an implicit `BEGIN … COMMIT`, so this DDL can be silently swallowed: the migration is recorded in `schema_migrations` as applied, but the enum value never actually lands.
+
+**Symptom seen on this project (2026-04-26):** `20260406000001_add_activity_category.sql` applied cleanly on local + CI, was recorded in `schema_migrations` on hosted, but `pg_enum` on hosted only showed 8 values for `event_category`. Surfaced months later when a downstream trigger function cast a string to `'activity'::event_category` and got `22P02 invalid input value`. Fixed via a manual `ALTER TYPE … ADD VALUE` in the SQL editor + a forward-fix migration `20260505000001_repair_activity_category_enum.sql`.
+
+**How to author safely from now on:**
+
+- **Don't put `ALTER TYPE … ADD VALUE` in a regular migration.** It works often enough to not look broken, but you can't trust the apply.
+- **Instead, add the new enum value via the Supabase SQL editor** (a single statement, not wrapped in any transaction) when shipping the change. Document the manual step in the relevant runbook / batch handover.
+- **In the migration that depends on the new value**, add a defensive `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE …) THEN RAISE EXCEPTION …; END IF; END $$;` block at the top so a future fresh apply against an environment missing the value fails loudly instead of silently corrupting.
+- **For the durable forward-fix that protects future fresh applies** (CI on a clean DB, restored backup, brand-new staging project), include the `ALTER TYPE … ADD VALUE IF NOT EXISTS` in a follow-up migration anyway. It will be a no-op where the value is already present, and the rare case where it isn't (e.g. backup-restore that predates the manual fix) is the exact case it's there for.
+
+### Verifying enum changes actually committed
+
+After any migration that adds an enum value, run this in the SQL editor and confirm the new value appears:
+
+```sql
+SELECT enumlabel FROM pg_enum
+WHERE enumtypid = '<schema>.<enum_type>'::regtype
+ORDER BY enumsortorder;
+```
+
+If it doesn't, follow the pattern above (manual `ALTER TYPE` in SQL editor + forward-fix migration) before any code referencing the new value ships.
+
+### Other authoring gotchas (additive — extend as discovered)
+
+- **Triggers that reference enum values cast at runtime** install successfully even if the enum value doesn't exist (PL/pgSQL is lazy-compiled). The error only surfaces when the trigger fires. Combine with the verification step above to catch this at apply-time, not under live traffic.
+
+---
+
 ## Restoring to a fresh Supabase project
 
 Sequence to re-apply all settings from scratch:
