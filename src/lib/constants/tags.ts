@@ -72,3 +72,69 @@ const SLUG_TO_LEGACY_CATEGORY: Record<string, EventCategory> = {
 export function legacyCategoryForSlug(slug: string): EventCategory | null {
   return SLUG_TO_LEGACY_CATEGORY[slug] ?? null
 }
+
+/**
+ * Member-facing display order + labels for the 15 primary-eligible tags.
+ *
+ * Mirrors the seed in Migration 2 (sort_order 10..150 ascending). Used by
+ * the events filter chip bar and any UI that needs to enumerate primary
+ * tags without hitting the DB. Labels match `tags.label` exactly — change
+ * here means change in Migration 2 too.
+ *
+ * Order matches the migration's ascending sort_order: "Drinks & Bars" first
+ * (sort 10), "Workshops & Masterclasses" last (sort 150).
+ */
+export const PRIMARY_TAG_LABELS: ReadonlyArray<{ slug: string; label: string }> = [
+  { slug: 'drinks-bars',             label: 'Drinks & Bars' },
+  { slug: 'dining-supper-clubs',     label: 'Dining & Supper Clubs' },
+  { slug: 'activities-social-games', label: 'Activities & Social Games' },
+  { slug: 'nightlife-dancing',       label: 'Nightlife & Dancing' },
+  { slug: 'live-music-gigs',         label: 'Live Music & Gigs' },
+  { slug: 'theatre-comedy',          label: 'Theatre & Comedy' },
+  { slug: 'galleries-museums',       label: 'Galleries & Museums' },
+  { slug: 'festivals-seasonal',      label: 'Festivals & Seasonal' },
+  { slug: 'sport-fitness',           label: 'Sport & Fitness' },
+  { slug: 'outdoor-picnics',         label: 'Outdoor & Picnics' },
+  { slug: 'weekends-travel',         label: 'Weekends & Travel' },
+  { slug: 'themed-socials',          label: 'Themed Socials' },
+  { slug: 'charity-volunteering',    label: 'Charity & Volunteering' },
+  { slug: 'wellness-mindfulness',    label: 'Wellness & Mindfulness' },
+  { slug: 'workshops-masterclasses', label: 'Workshops & Masterclasses' },
+]
+
+/**
+ * Reverse mapping for the `?category=` → `?tag=` soft fallback on the
+ * events listing page. Mirrors Migration 2's "Step 2: default fallback"
+ * SQL — each legacy enum value points to the most representative primary
+ * slug (the one a member who clicked the old chip would most plausibly
+ * have meant).
+ *
+ * Lossy: an enum value that splits into multiple primary slugs (e.g.
+ * `cultural` → theatre / galleries / festivals / charity) collapses to
+ * one. That's accepted — the soft fallback exists to keep old shared
+ * links from 404'ing, not to perfectly recover original intent. Users
+ * landing via the redirect can re-pick a sharper tag from the new chip
+ * row.
+ *
+ * Returns the canonical primary slug, or null if the input isn't a known
+ * legacy enum value (caller treats null as "ignore the param").
+ */
+const LEGACY_CATEGORY_TO_PRIMARY_SLUG: Record<EventCategory, string> = {
+  drinks:     'drinks-bars',
+  dining:     'dining-supper-clubs',
+  cultural:   'galleries-museums',     // see Migration 2 Step 2 fallback
+  wellness:   'wellness-mindfulness',
+  sport:      'sport-fitness',
+  workshops:  'workshops-masterclasses',
+  music:      'live-music-gigs',
+  networking: 'workshops-masterclasses', // networking demoted to interest-only
+  activity:   'activities-social-games',
+}
+
+const LEGACY_CATEGORIES = new Set<string>(Object.keys(LEGACY_CATEGORY_TO_PRIMARY_SLUG))
+
+export function primarySlugForLegacyCategory(category: string): string | null {
+  return LEGACY_CATEGORIES.has(category)
+    ? LEGACY_CATEGORY_TO_PRIMARY_SLUG[category as EventCategory]
+    : null
+}

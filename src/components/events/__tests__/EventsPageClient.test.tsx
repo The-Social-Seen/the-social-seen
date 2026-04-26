@@ -41,6 +41,18 @@ vi.mock('next/link', () => ({
   ),
 }))
 
+const mockRouterReplace = vi.fn()
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    replace: mockRouterReplace,
+    push: vi.fn(),
+    refresh: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}))
+
 import EventsPageClient from '../EventsPageClient'
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -78,17 +90,37 @@ function makeEvent(overrides: Partial<EventWithStats> = {}): EventWithStats {
   }
 }
 
+// F1a: each fixture carries the matching primary_tag for its event.
+// Filter logic now keys off primary_tag.slug, so the per-event tag must
+// match what the chip filter expects.
 const testEvents: EventWithStats[] = [
-  makeEvent({ id: 'e1', slug: 'wine-tasting', title: 'Wine Tasting', category: 'drinks', price: 0, date_time: '2036-01-01T19:00:00Z' }),
-  makeEvent({ id: 'e2', slug: 'fine-dining', title: 'Fine Dining', category: 'dining', price: 5000, date_time: '2036-02-01T19:00:00Z' }),
-  makeEvent({ id: 'e3', slug: 'art-show', title: 'Art Show', category: 'cultural', price: 3000, date_time: '2036-03-01T19:00:00Z' }),
-  makeEvent({ id: 'e4', slug: 'free-networking', title: 'Free Networking', category: 'networking', price: 0, date_time: '2036-04-01T19:00:00Z' }),
+  makeEvent({
+    id: 'e1', slug: 'wine-tasting', title: 'Wine Tasting',
+    category: 'drinks', price: 0, date_time: '2036-01-01T19:00:00Z',
+    primary_tag: { slug: 'drinks-bars', label: 'Drinks & Bars' },
+  }),
+  makeEvent({
+    id: 'e2', slug: 'fine-dining', title: 'Fine Dining',
+    category: 'dining', price: 5000, date_time: '2036-02-01T19:00:00Z',
+    primary_tag: { slug: 'dining-supper-clubs', label: 'Dining & Supper Clubs' },
+  }),
+  makeEvent({
+    id: 'e3', slug: 'art-show', title: 'Art Show',
+    category: 'cultural', price: 3000, date_time: '2036-03-01T19:00:00Z',
+    primary_tag: { slug: 'galleries-museums', label: 'Galleries & Museums' },
+  }),
+  makeEvent({
+    id: 'e4', slug: 'workshops-event', title: 'Free Workshops',
+    category: 'workshops', price: 0, date_time: '2036-04-01T19:00:00Z',
+    primary_tag: { slug: 'workshops-masterclasses', label: 'Workshops & Masterclasses' },
+  }),
 ]
 
 // ── Setup ───────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
   vi.setSystemTime(new Date('2026-04-11T12:00:00Z'))
+  mockRouterReplace.mockClear()
 })
 
 afterEach(() => {
@@ -104,20 +136,43 @@ describe('EventsPageClient', () => {
     expect(screen.getByText('Wine Tasting')).toBeTruthy()
     expect(screen.getByText('Fine Dining')).toBeTruthy()
     expect(screen.getByText('Art Show')).toBeTruthy()
-    expect(screen.getByText('Free Networking')).toBeTruthy()
+    expect(screen.getByText('Free Workshops')).toBeTruthy()
   })
 
-  it('T4-2: category filter Dining shows only dining events', () => {
+  it('T4-2 (F1a): primary-tag filter "Dining & Supper Clubs" shows only matching events', () => {
     render(<EventsPageClient events={testEvents} />)
 
-    // Click the Dining category pill (first match — the filter button, not the card tag)
-    const diningButtons = screen.getAllByText('Dining')
-    fireEvent.click(diningButtons[0])
+    // Click the Dining & Supper Clubs filter pill — it's the chip in the
+    // filter bar, not a card label (cards render the same label too).
+    const diningChips = screen.getAllByText('Dining & Supper Clubs')
+    fireEvent.click(diningChips[0])
 
     expect(screen.getByText('Fine Dining')).toBeTruthy()
     expect(screen.queryByText('Wine Tasting')).toBeNull()
     expect(screen.queryByText('Art Show')).toBeNull()
-    expect(screen.queryByText('Free Networking')).toBeNull()
+    expect(screen.queryByText('Free Workshops')).toBeNull()
+  })
+
+  it('T4-2b (F1a): clicking a tag chip pushes ?tag=<slug> to the URL', () => {
+    render(<EventsPageClient events={testEvents} />)
+
+    const diningChips = screen.getAllByText('Dining & Supper Clubs')
+    fireEvent.click(diningChips[0])
+
+    expect(mockRouterReplace).toHaveBeenCalledWith(
+      '/events?tag=dining-supper-clubs',
+      { scroll: false },
+    )
+  })
+
+  it('T4-2c (F1a): initialTag prop pre-selects the matching chip', () => {
+    render(<EventsPageClient events={testEvents} initialTag="galleries-museums" />)
+
+    // Only the Art Show event should be visible (its primary_tag.slug
+    // matches the initial filter).
+    expect(screen.getByText('Art Show')).toBeTruthy()
+    expect(screen.queryByText('Wine Tasting')).toBeNull()
+    expect(screen.queryByText('Fine Dining')).toBeNull()
   })
 
   it('T4-3: price filter Free shows only free events', () => {
@@ -133,7 +188,7 @@ describe('EventsPageClient', () => {
     fireEvent.click(filterButton)
 
     expect(screen.getByText('Wine Tasting')).toBeTruthy()
-    expect(screen.getByText('Free Networking')).toBeTruthy()
+    expect(screen.getByText('Free Workshops')).toBeTruthy()
     expect(screen.queryByText('Fine Dining')).toBeNull()
     expect(screen.queryByText('Art Show')).toBeNull()
   })
@@ -146,20 +201,20 @@ describe('EventsPageClient', () => {
     expect(screen.getByText('Fine Dining')).toBeTruthy()
     expect(screen.getByText('Art Show')).toBeTruthy()
     expect(screen.queryByText('Wine Tasting')).toBeNull()
-    expect(screen.queryByText('Free Networking')).toBeNull()
+    expect(screen.queryByText('Free Workshops')).toBeNull()
   })
 
-  it('T4-5: clearing filters after selecting Dining shows all events again', () => {
+  it('T4-5: clearing filter via "All" chip shows all events again', () => {
     render(<EventsPageClient events={testEvents} />)
 
-    // Apply Dining filter
-    const diningButtons = screen.getAllByText('Dining')
-    fireEvent.click(diningButtons[0])
+    // Apply Dining & Supper Clubs filter
+    const diningChips = screen.getAllByText('Dining & Supper Clubs')
+    fireEvent.click(diningChips[0])
 
     // Verify only dining visible
     expect(screen.queryByText('Wine Tasting')).toBeNull()
 
-    // Clear filters — click 'All' category pill (first "All" button)
+    // Clear filters — click 'All' tag chip (first "All" button)
     const allButtons = screen.getAllByText('All')
     fireEvent.click(allButtons[0])
 
@@ -167,6 +222,27 @@ describe('EventsPageClient', () => {
     expect(screen.getByText('Wine Tasting')).toBeTruthy()
     expect(screen.getByText('Fine Dining')).toBeTruthy()
     expect(screen.getByText('Art Show')).toBeTruthy()
-    expect(screen.getByText('Free Networking')).toBeTruthy()
+    expect(screen.getByText('Free Workshops')).toBeTruthy()
+
+    // URL was reset to /events with no ?tag= param
+    expect(mockRouterReplace).toHaveBeenLastCalledWith('/events', {
+      scroll: false,
+    })
+  })
+
+  it('T4-6 (F1a): renders all 15 primary-eligible tag chips + All', () => {
+    render(<EventsPageClient events={testEvents} />)
+
+    // Sample a few chips to confirm the 15-tag bar (sharper labels)
+    expect(screen.getAllByText('All').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Drinks & Bars').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Theatre & Comedy').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Activities & Social Games').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Wellness & Mindfulness').length).toBeGreaterThan(0)
+    // Legacy enum labels must NOT appear as a filter chip
+    const chipBar = screen.getAllByText('Drinks & Bars')[0]
+    const chipParent = chipBar.closest('div')
+    expect(chipParent?.textContent).not.toContain('Cultural')
+    expect(chipParent?.textContent).not.toContain('Networking')
   })
 })

@@ -1,7 +1,12 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { ArrowRight } from "lucide-react";
 import { getPublishedEvents } from "@/lib/supabase/queries/events";
 import { canonicalUrl } from "@/lib/utils/site";
+import {
+  PRIMARY_ELIGIBLE_TAG_SLUGS,
+  primarySlugForLegacyCategory,
+} from "@/lib/constants/tags";
 import EventsPageClient from "@/components/events/EventsPageClient";
 import type { Metadata } from "next";
 
@@ -12,7 +17,41 @@ export const metadata: Metadata = {
   alternates: { canonical: canonicalUrl("/events") },
 };
 
-export default async function EventsPage() {
+interface EventsPageProps {
+  // Next.js 15: searchParams is async.
+  searchParams: Promise<{
+    tag?: string | string[];
+    category?: string | string[];
+  }>;
+}
+
+function firstParam(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) return value[0];
+  return value;
+}
+
+export default async function EventsPage({ searchParams }: EventsPageProps) {
+  const resolved = await searchParams;
+  const tagParam = firstParam(resolved.tag);
+  const categoryParam = firstParam(resolved.category);
+
+  // F1a soft fallback — old shared links use `?category=<enum>`. Map to
+  // the canonical primary slug and redirect so the URL bar reflects the
+  // new param shape. If both are present, `?tag=` wins (it's the future)
+  // and `?category=` is dropped silently.
+  if (categoryParam && !tagParam) {
+    const fallbackSlug = primarySlugForLegacyCategory(categoryParam);
+    if (fallbackSlug) {
+      redirect(`/events?tag=${encodeURIComponent(fallbackSlug)}`);
+    }
+    // Unknown category value: drop it. Falls through to "All".
+  }
+
+  // Validate the tag slug — if it's not one of the 15 primary-eligible
+  // slugs, treat as "All" rather than rendering an empty list.
+  const initialTag =
+    tagParam && PRIMARY_ELIGIBLE_TAG_SLUGS.has(tagParam) ? tagParam : null;
+
   const events = await getPublishedEvents();
 
   return (
@@ -38,7 +77,7 @@ export default async function EventsPage() {
         </div>
       </section>
 
-      <EventsPageClient events={events} />
+      <EventsPageClient events={events} initialTag={initialTag} />
     </main>
   );
 }

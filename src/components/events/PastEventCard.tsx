@@ -3,7 +3,6 @@ import Image from 'next/image'
 import { Star } from 'lucide-react'
 import { formatDateCard } from '@/lib/utils/dates'
 import { resolveEventImage } from '@/lib/utils/images'
-import { categoryLabel } from '@/types'
 import type { PastEventWithSnippet } from '@/lib/supabase/queries/events'
 
 function StarRow({ rating }: { rating: number }) {
@@ -75,8 +74,9 @@ export default function PastEventCard({
 
       <div className="flex flex-1 flex-col gap-3 p-5">
         <div className="flex items-center gap-2">
+          {/* Primary-tag chip (F1a — was categoryLabel(event.category)) */}
           <span className="rounded-full border border-gold/20 px-2.5 py-0.5 text-xs font-medium text-gold">
-            {categoryLabel(event.category)}
+            {event.primary_tag.label}
           </span>
           {!cancelled && event.review_count > 0 && (
             <span className="flex items-center gap-1 text-xs text-text-secondary">
