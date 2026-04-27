@@ -110,7 +110,6 @@ describe('getReviewableEvents', () => {
           date_time: '2020-01-01T19:00:00Z',
           venue_name: 'Bar',
           image_url: '',
-          category: 'drinks',
         },
       },
     ])

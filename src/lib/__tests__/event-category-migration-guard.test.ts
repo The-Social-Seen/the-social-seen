@@ -624,3 +624,125 @@ describe('F1b-app — getRelatedEvents primary-tag JOIN', () => {
     ).not.toMatch(/\.eq\(\s*['"]category['"]/)
   })
 })
+
+// ── Test 6 — F1b-schema migration source-text shape (lockstep) ─────────────
+
+describe('F1b-schema — drop migration source-text shape', () => {
+  // The F1b-schema migration is a DESTRUCTIVE one-shot drop: column,
+  // enum, two triggers, two trigger fns, one helper. Its safety net is
+  // the defensive RAISE EXCEPTION block at the end. A future PR that
+  // weakens any of those statements (removes an IF EXISTS, drops the
+  // verification block, forgets to drop one of the artefacts) would
+  // silently leave dead schema behind on hosted — which Postgres would
+  // happily ignore until something tries to use it.
+  //
+  // These source-text assertions lock in the migration's SHAPE so that
+  // kind of weakening surfaces here, with a named diagnostic, rather
+  // than as a half-applied schema on production. Pattern mirrors the
+  // W2+W3 migration-2 lockstep test.
+
+  const MIGRATION_PATH = resolve(
+    REPO_ROOT,
+    'supabase/migrations/20260506000001_drop_events_category_and_triggers.sql',
+  )
+  const MIGRATION_SQL = readFileSync(MIGRATION_PATH, 'utf-8')
+
+  // The 5 DROP statements + their target object names. Each pattern is
+  // case-insensitive on the SQL keywords (DROP / TRIGGER / FUNCTION etc.)
+  // and tolerates whitespace / newlines, but locks the IF EXISTS clause
+  // and the fully-qualified object name down.
+  const DROP_STATEMENTS: ReadonlyArray<readonly [string, RegExp]> = [
+    [
+      'DROP TRIGGER trg_sync_primary_tag_from_category ON public.events',
+      /DROP\s+TRIGGER\s+IF\s+EXISTS\s+trg_sync_primary_tag_from_category\s+ON\s+public\.events/i,
+    ],
+    [
+      'DROP TRIGGER trg_sync_category_from_primary_tag ON public.event_tags',
+      /DROP\s+TRIGGER\s+IF\s+EXISTS\s+trg_sync_category_from_primary_tag\s+ON\s+public\.event_tags/i,
+    ],
+    [
+      'DROP FUNCTION _sync_primary_tag_from_category()',
+      /DROP\s+FUNCTION\s+IF\s+EXISTS\s+public\._sync_primary_tag_from_category\s*\(\s*\)/i,
+    ],
+    [
+      'DROP FUNCTION _sync_category_from_primary_tag()',
+      /DROP\s+FUNCTION\s+IF\s+EXISTS\s+public\._sync_category_from_primary_tag\s*\(\s*\)/i,
+    ],
+    [
+      'DROP FUNCTION _tag_slug_to_legacy_category(text)',
+      /DROP\s+FUNCTION\s+IF\s+EXISTS\s+public\._tag_slug_to_legacy_category\s*\(\s*text\s*\)/i,
+    ],
+    [
+      'ALTER TABLE events DROP COLUMN category',
+      /ALTER\s+TABLE\s+public\.events\s+DROP\s+COLUMN\s+IF\s+EXISTS\s+category/i,
+    ],
+    [
+      'DROP TYPE event_category',
+      /DROP\s+TYPE\s+IF\s+EXISTS\s+public\.event_category/i,
+    ],
+  ]
+
+  for (const [label, re] of DROP_STATEMENTS) {
+    it(`migration contains ${label} (with IF EXISTS for idempotency)`, () => {
+      expect(
+        MIGRATION_SQL,
+        `Missing or weakened DROP statement — expected /${re.source}/`,
+      ).toMatch(re)
+    })
+  }
+
+  it('migration has a defensive DO $$ … END $$; verification block at the end', () => {
+    // The block re-checks information_schema / pg_type / pg_trigger /
+    // pg_proc and RAISE EXCEPTIONs if any of the four artefacts (column,
+    // type, two triggers) survive. Weakening this turns a half-applied
+    // schema into a silent success.
+    expect(MIGRATION_SQL).toMatch(/DO\s+\$\$\s*BEGIN[\s\S]+END\s+\$\$;/)
+    expect(MIGRATION_SQL).toMatch(/RAISE\s+EXCEPTION/i)
+  })
+
+  it('verification block names all 4 artefact-survival checks', () => {
+    // Each of these strings must appear inside the verification block —
+    // they're the explicit catalog probes for the four artefacts. If a
+    // future "cleanup" deletes one of the IF EXISTS branches, this fails.
+    expect(MIGRATION_SQL).toMatch(/events\.category column still exists/i)
+    expect(MIGRATION_SQL).toMatch(/event_category type still exists/i)
+    expect(MIGRATION_SQL).toMatch(/trg_sync_primary_tag_from_category/i)
+    expect(MIGRATION_SQL).toMatch(/trg_sync_category_from_primary_tag/i)
+  })
+
+  it('migration uses IF EXISTS uniformly (sanity — no DROP without the guard)', () => {
+    // Iterate every line that BEGINS with `DROP <KEYWORD>` (after any
+    // leading whitespace) and assert the rest of the statement contains
+    // IF EXISTS. Anchoring to start-of-line skips the "DROP COLUMN" /
+    // "DROP TYPE" wording inside RAISE EXCEPTION string literals
+    // (those mentions are mid-line, indented inside a SQL string).
+    const lines = MIGRATION_SQL.split('\n')
+    const ddlStarter =
+      /^\s*DROP\s+(TRIGGER|FUNCTION|TABLE|TYPE|INDEX|VIEW|POLICY|SCHEMA)\b/i
+    let saw = 0
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (!ddlStarter.test(line)) continue
+      // Capture the statement (this line + continuations until the
+      // closing semicolon) so we can scan it for IF EXISTS even if the
+      // statement spans lines.
+      let stmt = line
+      let j = i
+      while (!stmt.includes(';') && j + 1 < lines.length) {
+        j += 1
+        stmt += '\n' + lines[j]
+      }
+      saw++
+      expect(
+        stmt,
+        `DDL DROP without IF EXISTS guard at line ${i + 1} — got: ${stmt.slice(0, 100)}`,
+      ).toMatch(/IF\s+EXISTS/i)
+    }
+    // Sanity: we expect at least 5 line-anchored DDL DROPs. Real F1b-
+    // schema migration has 2 triggers + 2 trigger fns + 1 helper fn +
+    // 1 type = 6. (The column drop is `ALTER TABLE … DROP COLUMN`,
+    // not a top-level DROP, so it doesn't match this regex — it has
+    // its own dedicated test above.)
+    expect(saw).toBeGreaterThanOrEqual(5)
+  })
+})

@@ -163,7 +163,6 @@ describe('duplicateEvent', () => {
     venue_address: '8 Southwark St',
     postcode: 'SE1 1TL',
     venue_revealed: false,
-    category: 'drinks',
     price: 3500,
     capacity: 30,
     image_url: null,
