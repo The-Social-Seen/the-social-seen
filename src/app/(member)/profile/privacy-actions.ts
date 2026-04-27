@@ -97,7 +97,7 @@ export async function exportMyData(): Promise<string> {
         .eq('user_id', user.id),
       supabase
         .from('user_interests')
-        .select('id, interest, created_at')
+        .select('id, created_at, tags(slug, label)')
         .eq('user_id', user.id),
     ])
 
@@ -113,6 +113,32 @@ export async function exportMyData(): Promise<string> {
     : undefined
   const gender = demographicsRow?.gender ?? null
   const ageRange = demographicsRow?.age_range ?? null
+
+  // F2-app: source the `interest` label from the joined `tags` row.
+  // The legacy `user_interests.interest` text column is no longer
+  // SELECTed; F2-schema drops it next. The export's emitted shape
+  // (`[{ id, interest, created_at }, ...]`) is preserved so prior
+  // exports remain comparable.
+  type ExportInterestRow = {
+    id: string
+    created_at: string
+    tags:
+      | { slug: string; label: string }
+      | { slug: string; label: string }[]
+      | null
+  }
+  const interestsForExport = ((interestsRes.data ?? []) as ExportInterestRow[])
+    .map((row) => {
+      const tag = Array.isArray(row.tags) ? row.tags[0] : row.tags
+      return {
+        id: row.id,
+        interest: tag?.label ?? null,
+        created_at: row.created_at,
+      }
+    })
+    .filter((row): row is { id: string; interest: string; created_at: string } =>
+      row.interest !== null,
+    )
 
   const exported = {
     export_metadata: {
@@ -131,7 +157,7 @@ export async function exportMyData(): Promise<string> {
       : null,
     bookings: bookingsRes.data ?? [],
     reviews: reviewsRes.data ?? [],
-    interests: interestsRes.data ?? [],
+    interests: interestsForExport,
   }
 
   return JSON.stringify(exported, null, 2)

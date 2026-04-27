@@ -98,15 +98,25 @@ describe('exportMyData', () => {
 
   it('returns a JSON string containing profile + bookings + reviews + interests', async () => {
     authenticate('user-1')
-    // 4 parallel from() queries — each resolves to a canned row.
-    mockFrom.mockImplementation(() => {
-      // All four Promise.all branches share the same mock response
-      // shape; the Server Action unpacks by `res.data`. Returning a
-      // single `data` works because it's just for JSON export.
-      return mockChain({
-        data: { hello: 'world' },
-        error: null,
-      })
+    // 4 parallel from() queries — profile/bookings/reviews accept the
+    // simple `{ hello: 'world' }` placeholder (the export passes them
+    // through verbatim), but `user_interests` is now reshaped via the
+    // `tags` JOIN (F2-app), so its mock must return a realistic array
+    // with the joined `tags: { slug, label }` row.
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'user_interests') {
+        return mockChain({
+          data: [
+            {
+              id: 'int-1',
+              created_at: '2026-01-15T10:00:00Z',
+              tags: { slug: 'drinks-bars', label: 'Wine & Cocktails' },
+            },
+          ],
+          error: null,
+        })
+      }
+      return mockChain({ data: { hello: 'world' }, error: null })
     })
     // RPC mock returns one canned response per call, in order:
     //   1. get_my_phone()         -> scalar phone string
@@ -136,9 +146,13 @@ describe('exportMyData', () => {
 
   it('includes gender + age_range as null when the demographics RPC returns no rows', async () => {
     authenticate('user-1')
-    mockFrom.mockImplementation(() =>
-      mockChain({ data: { hello: 'world' }, error: null }),
-    )
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'user_interests') {
+        // F2-app: SELECT now joins `tags`; mock must return an array.
+        return mockChain({ data: [], error: null })
+      }
+      return mockChain({ data: { hello: 'world' }, error: null })
+    })
     mockRpc
       .mockResolvedValueOnce({ data: null, error: null })
       .mockResolvedValueOnce({ data: [], error: null })
