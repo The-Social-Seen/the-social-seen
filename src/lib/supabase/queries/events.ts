@@ -25,9 +25,12 @@ import type {
 //
 // See: docs/member-data-layer-spec.md (Decisions 4, 5, 6).
 
-const PRIMARY_TAG_EMBED = 'event_tags!inner(is_primary, tags!inner(slug, label))'
+// Exported — every reader of `event_with_stats` (member-facing or
+// admin) MUST go through these so the JOIN definition has one source
+// of truth.
+export const PRIMARY_TAG_EMBED = 'event_tags!inner(is_primary, tags!inner(slug, label))'
 
-interface RowWithPrimaryTagEmbed {
+export interface RowWithPrimaryTagEmbed {
   event_tags?:
     | Array<{
         is_primary: boolean
@@ -63,7 +66,7 @@ function extractPrimaryTag(row: RowWithPrimaryTagEmbed): PrimaryTag {
   return { slug: tag.slug, label: tag.label }
 }
 
-function attachPrimaryTag<T extends RowWithPrimaryTagEmbed>(
+export function attachPrimaryTag<T extends RowWithPrimaryTagEmbed>(
   row: T,
 ): Omit<T, 'event_tags'> & { primary_tag: PrimaryTag } {
   const primary_tag = extractPrimaryTag(row)
