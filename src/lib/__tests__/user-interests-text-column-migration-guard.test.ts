@@ -530,3 +530,106 @@ describe('F2-app — exportMyData interests shape lock-in', () => {
     expect(interestValues).toEqual(['Drinks & Bars', 'Travel'])
   })
 })
+
+// ── Test 4 — F2-schema migration source-text shape (lockstep) ──────────────
+
+describe('F2-schema — drop migration source-text shape', () => {
+  // The F2-schema migration is a DESTRUCTIVE one-shot drop: one
+  // constraint, one column. Its safety net is the defensive RAISE
+  // EXCEPTION block at the end. A future PR that weakens any of those
+  // statements (removes an IF EXISTS, drops the verification block,
+  // forgets one of the two artefact-survival checks) would silently
+  // leave dead schema behind on hosted — Postgres would happily ignore
+  // the unique constraint until something tries to use it, and a
+  // lingering `interest` column would silently get re-populated by any
+  // INSERT that still references it.
+  //
+  // These source-text assertions lock in the migration's SHAPE so that
+  // kind of weakening surfaces here, with a named diagnostic, rather
+  // than as a half-applied schema on production. Pattern mirrors the
+  // F1b-schema source-text guard.
+
+  const MIGRATION_PATH = resolve(
+    REPO_ROOT,
+    'supabase/migrations/20260507000001_drop_user_interests_interest_column.sql',
+  )
+  const MIGRATION_SQL = readFileSync(MIGRATION_PATH, 'utf-8')
+
+  // The 2 ALTER statements + their target object names. Each pattern
+  // is case-insensitive on the SQL keywords (ALTER / DROP / CONSTRAINT
+  // / COLUMN) and tolerates whitespace / newlines, but locks the
+  // IF EXISTS clause and the fully-qualified object names down.
+  const ALTER_STATEMENTS: ReadonlyArray<readonly [string, RegExp]> = [
+    [
+      'DROP CONSTRAINT uq_user_interests_user_interest',
+      /ALTER\s+TABLE\s+public\.user_interests\s+DROP\s+CONSTRAINT\s+IF\s+EXISTS\s+uq_user_interests_user_interest/i,
+    ],
+    [
+      'DROP COLUMN user_interests.interest',
+      /ALTER\s+TABLE\s+public\.user_interests\s+DROP\s+COLUMN\s+IF\s+EXISTS\s+interest/i,
+    ],
+  ]
+
+  for (const [label, re] of ALTER_STATEMENTS) {
+    it(`migration contains ${label} (with IF EXISTS for idempotency)`, () => {
+      expect(
+        MIGRATION_SQL,
+        `Missing or weakened ALTER statement — expected /${re.source}/`,
+      ).toMatch(re)
+    })
+  }
+
+  it('migration has a defensive DO $$ … END $$; verification block', () => {
+    // The block re-checks information_schema / pg_constraint and
+    // RAISE EXCEPTIONs if either of the two artefacts (column or
+    // constraint) survive. Weakening this turns a half-applied schema
+    // into a silent success.
+    expect(MIGRATION_SQL).toMatch(/DO\s+\$\$\s*BEGIN[\s\S]+END\s+\$\$;/)
+    expect(MIGRATION_SQL).toMatch(/RAISE\s+EXCEPTION/i)
+  })
+
+  it('verification block names both artefact-survival checks', () => {
+    // Each of these strings must appear inside the verification block —
+    // they're the explicit catalog probes for the two artefacts. If a
+    // future "cleanup" deletes one of the IF EXISTS branches, this fails.
+    expect(MIGRATION_SQL).toMatch(/user_interests\.interest column still exists/i)
+    expect(MIGRATION_SQL).toMatch(
+      /uq_user_interests_user_interest constraint still exists/i,
+    )
+  })
+
+  it('migration uses IF EXISTS uniformly on every ALTER … DROP statement', () => {
+    // Iterate every line that is the start of an `ALTER TABLE …` block
+    // and assert the captured statement (this line + continuations
+    // until `;`) contains both `DROP` and `IF EXISTS`. Anchored to
+    // start-of-line so we skip any "DROP COLUMN" / "DROP CONSTRAINT"
+    // wording inside RAISE EXCEPTION string literals.
+    const lines = MIGRATION_SQL.split('\n')
+    const ddlStarter = /^\s*ALTER\s+TABLE\b/i
+    let saw = 0
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (!ddlStarter.test(line)) continue
+      // Capture the statement (this line + continuations until the
+      // closing semicolon) so we can scan it for IF EXISTS even if
+      // the statement spans lines.
+      let stmt = line
+      let j = i
+      while (!stmt.includes(';') && j + 1 < lines.length) {
+        j += 1
+        stmt += '\n' + lines[j]
+      }
+      // Only count statements that contain a DROP — additive ALTER
+      // TABLE statements (e.g. ADD CONSTRAINT) wouldn't need IF EXISTS.
+      if (!/\bDROP\b/i.test(stmt)) continue
+      saw++
+      expect(
+        stmt,
+        `ALTER … DROP without IF EXISTS guard at line ${i + 1} — got: ${stmt.slice(0, 100)}`,
+      ).toMatch(/IF\s+EXISTS/i)
+    }
+    // Sanity: the migration has exactly 2 ALTER … DROP statements
+    // (constraint + column). Both must be IF EXISTS-guarded.
+    expect(saw).toBe(2)
+  })
+})
