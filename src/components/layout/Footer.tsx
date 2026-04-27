@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { Instagram } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { SOCIAL_LINKS } from "@/lib/constants";
@@ -35,6 +36,11 @@ const socialLinks = [
 ];
 
 export function Footer() {
+  const pathname = usePathname();
+  // Hide on /admin/* — admin layout owns its own chrome. See Header.tsx
+  // for rationale (middleware-driven detection broken in Next 16).
+  if (pathname?.startsWith("/admin")) return null;
+
   const currentYear = new Date().getFullYear();
 
   return (

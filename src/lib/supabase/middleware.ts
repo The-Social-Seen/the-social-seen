@@ -145,11 +145,5 @@ export async function updateSession(request: NextRequest) {
     }
   }
 
-  // Forward pathname to root layout so it can conditionally render
-  // Header/Footer. Set on BOTH the request (so `next/headers` in Server
-  // Components reads it) and the response (cheap telemetry for proxies).
-  requestHeaders.set('x-pathname', pathname)
-  supabaseResponse.headers.set('x-pathname', pathname)
-
   return supabaseResponse
 }

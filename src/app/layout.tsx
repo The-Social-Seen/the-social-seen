@@ -79,8 +79,6 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const headerList = await headers();
-  const pathname = headerList.get("x-pathname") ?? "";
-  const isAdmin = pathname.startsWith("/admin");
   // Per-request nonce set by middleware. Applied to the inline
   // theme-detect script so CSP can drop `'unsafe-inline'` — the
   // script runs, attacker-injected `<script>` tags don't.
@@ -113,10 +111,16 @@ export default async function RootLayout({
       </head>
       <body
         className={`${playfair.variable} ${dmSans.variable} font-sans antialiased`}
+        suppressHydrationWarning
       >
         <PostHogProvider>
           <ThemeProvider>
-            {!isAdmin && <Header />}
+            {/* Header, Footer, and CookieConsentBanner self-hide on
+                /admin/* via usePathname() — see those components. The
+                previous server-side `headers().get('x-pathname')` check
+                doesn't work in Next 16 (middleware request-header
+                propagation issue). */}
+            <Header />
             {/*
               No root `<main>` here — each route group owns its landmark:
               - (auth)/layout.tsx, (member)/layout.tsx, (admin)/layout.tsx
@@ -127,10 +131,10 @@ export default async function RootLayout({
               landmarks, which fails WCAG 1.3.1 (one `<main>` per document).
             */}
             {children}
-            {!isAdmin && <Footer />}
+            <Footer />
             {/* P2-8b: consent banner. Shown only until the user
-                decides; respects admin-layout chromeless preference. */}
-            {!isAdmin && <CookieConsentBanner />}
+                decides; suppressed on /admin/* by the component. */}
+            <CookieConsentBanner />
             <AccountDeletedHandler />
           </ThemeProvider>
         </PostHogProvider>
