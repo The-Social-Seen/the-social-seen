@@ -92,6 +92,18 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 **Action:** TBD by post-mortem write-up — likely retry with backoff, distinct error surface for "Stripe rejects vs Stripe unreachable", and a Sentry tag matching `surface: 'createPaidCheckout'` for filterable triage.
 **Priority:** **HIGH — production reliability** for the paid-booking path.
 
+### Stripe live-mode "Could not start checkout" — diagnose
+**Source:** Mid-session 2026-04-27 — user swapped Vercel Production env from test keys to live keys, paid-booking flow returned the generic "Could not start checkout" toast at the redirect step. Deferred to finish the Member Data Layer; never resumed.
+**Last known state:** Live `sk_live_*` + `pk_live_*` + a live-mode `whsec_*` configured on Vercel Production scope. Test keys still on Preview + local. Vercel redeployed. Booking attempt failed.
+**Rationale:** The catch block in `createPaidCheckout` already wires the underlying error into Sentry tagged `surface: 'createPaidCheckout'` (PR #51). The actual exception text from the failed live-mode attempt is in Sentry — open it, read the message, fix.
+**Likely causes (ranked):**
+1. **Live-mode account not fully activated.** Stripe rejects with `StripeInvalidRequestError: Your account cannot currently make live charges` until ID + bank details verification completes. Fix: complete activation in Stripe Dashboard.
+2. **Live webhook signing-secret mismatch.** Wouldn't fail at session creation though, only at the webhook receipt step — so unlikely this error.
+3. **Mixed key modes** — live `sk_` paired with test `pk_` (or vice versa). Stripe rejects with `StripeAuthenticationError`. Fix: reconcile env vars on Vercel Production.
+4. **Live-mode Stripe Dashboard branding/receipts not configured.** Cosmetic, doesn't fail the redirect itself but confirms separate-mode-config awareness.
+**Action:** Open Sentry → filter `surface:createPaidCheckout` → grab the most recent live-mode event → paste the exception name + message. From there the fix is almost certainly env-var or Stripe-dashboard-side, not code.
+**Priority:** **HIGH — blocks live paid bookings** (test mode still works fine).
+
 ### `email_verified` reconciliation path
 **Source:** P2-3 backend handover.
 **Rationale:** `verifyEmailOtp()` soft-succeeds if the DB update to `profiles.email_verified = true` fails after Supabase already accepted the OTP. User sees success but their flag is still false; they can't book until they verify again.
@@ -158,6 +170,36 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 **Rationale:** Mock helpers like `vi.fn(() => Promise.resolve({ data: <obj> }))` widen object literals to `unknown`, so TypeScript's excess-property checking is silent on stale fixtures. Future schema migrations that drop a column will hit the same blind spot — fixtures retain dead fields and tsc stays clean.
 **Action:** Either (a) extract every inline mock object into a typed `const event: EventWithStats = {...}` before passing to mock, or (b) add `satisfies EventWithStats` clauses to fixture builders. The `satisfies` form is least invasive but requires changing builder return types from explicit annotations to `satisfies`. ~30 min refactor across the test files that currently use the widening pattern.
 **Priority:** Low — bites only on the next schema-drop migration; surface-level test failures will still catch real bugs.
+
+### Regression guard pattern-2-vs-3 ordering — diagnostic label mis-attribution
+**Source:** F2-schema tester + reviewer (PR #67).
+**Rationale:** The `user-interests-text-column-migration-guard.test.ts` and `event-category-migration-guard.test.ts` guards both use a `PROTECTED_PATTERNS` array iterated in order, breaking on first match. For a `.select('id, interest, created_at')` shape, both pattern 2 (destructure `\binterest\s*[,)\}]`) and pattern 3 (SELECT-list `select.*[, ]interest\b`) match — pattern 2 wins by array order, so the diagnostic mis-labels a SELECT-list match as "destructured `interest` identifier". Detection still fires correctly; only the label is imprecise.
+**Action:** Flip the array order so pattern 3 (SELECT-list) is checked before pattern 2 (destructure). One-line change. Or: add a more specific pattern for SELECT lists that consumes the wrapping quote so it wins over the destructure pattern.
+**Priority:** Very low — cosmetic, no detection gap.
+
+### Regression guard narrow gap on single-quoted single-column SELECTs
+**Source:** F2-schema tester (PR #67).
+**Rationale:** Patterns 2 (`\binterest\s*[,)\}]`) and 3 (`select.*[, ]interest\b`) both require a delimiter — `,`, `)`, or `}` for pattern 2, and `,` or space immediately before `interest` for pattern 3. A hypothetical `.select('interest')` (single quoted single-column, first character is `'`) would slip past both. Vanishingly rare in real code (always at least `id, interest`); runtime would fail anyway because the column is dropped.
+**Action:** Tighten pattern 3 to also catch `'interest` after a quote. One-line regex change.
+**Priority:** Very low — narrow vector, runtime catches it anyway.
+
+### Stale TODO(W4-docker) comments at `migration-w2-w3-taxonomy.test.ts:995, 1003, 1004`
+**Source:** F2-schema tester (PR #67).
+**Rationale:** Three `it.skip(...)` blocks at those lines reference `interest: 'X'` / `interest: 'A'` / `interest: 'B'` synthetic INSERT shapes inside test bodies that would now fail (the `interest` column is gone post-F2-schema). When/if W4-docker enables, those test bodies need updating to drop the `interest:` field from the synthetic INSERTs.
+**Action:** Skip-block bodies update to use `(user_id, tag_id)` shape. ~10 min when W4-docker work resumes.
+**Priority:** Very low — affects only the `it.skip(...)` path; live tests are unaffected.
+
+### Regression guard `__tests__` walk-skip — widening optional
+**Source:** F1b-schema + F2-schema tester (PRs #64, #67).
+**Rationale:** Both regression guards skip scanning `__tests__/` directories during the file walk. Post-F2-schema fixture sweeps removed all live `interest:` mock entries, so widening the scan to `__tests__/` would be safe today — but invites a different fragility class: test files legitimately use `interest` mock values in unrelated contexts (e.g. `NotificationCategory` interest types, taxonomy tests using `interest-` slug prefix).
+**Action:** Decision call. Widen + add an allowlist for legitimate test-only references, OR keep the deferred state with a comment explaining the trade-off.
+**Priority:** Very low — judgment call, neither path is wrong.
+
+### Defensive `Array.isArray(row.tags)` fallback not directly tested
+**Source:** F2-app + F2-schema reviewers (PRs #66, #67).
+**Rationale:** `getProfile` (`src/lib/supabase/queries/profile.ts:66`) and `exportMyData` (`src/app/(member)/profile/privacy-actions.ts:132`) both contain a defensive `Array.isArray(row.tags) ? row.tags[0] : row.tags` fallback for the joined tag. Mirrors the existing `getMyBookings` convention in the same file. Shape lock-in tests pass `tags: { slug, label }` object form only — the array branch isn't exercised. Defensive code, low runtime risk.
+**Action:** Add a test case that mocks the array form and asserts the fallback resolves correctly. Or remove the array branch if `tag_id` NOT NULL FK + Supabase typegen guarantee the singular form (would require codegen confirmation).
+**Priority:** Very low.
 
 ---
 

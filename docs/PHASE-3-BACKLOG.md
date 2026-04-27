@@ -10,31 +10,25 @@ Maintained at the end of each phase so feature ideas don't get lost in merged PR
 
 ## 🚀 Major features (original Phase 2 "What's Cut" list)
 
-### Member-data layer (demographics + canonical taxonomy)
-**Source:** Conversation 2026-04-25 — gap surfaced when reviewing user interests vs event categories.
-**Why deferred:** Three related data-layer changes that should ship together rather than as one-off columns. Architecture call needed before code.
+### ~~Member-data layer (demographics + canonical taxonomy)~~ — SHIPPED 2026-04-27
+**Status:** Closed across 7 PRs and 2 days. Spec at `docs/member-data-layer-spec.md`.
+- W1 (PR #56): demographics + phone GRANT narrowing
+- W2+W3 (PR #58): canonical 23-tag taxonomy + `user_interests` reconciliation
+- W4 ↔ W5 (PR #61): Complete Your Profile banner + admin TagPicker
+- F1a (PR #62): app-code reads new taxonomy
+- F1b-app (PR #63): carry-over reads migration
+- F1b-schema (PR #64): drop legacy `events.category` enum + column + sync triggers
+- F2-app (PR #66): app-code reads `user_interests` via tags JOIN
+- F2-schema (PR #67): drop `user_interests.interest` text column
 
-**What's in scope:**
-1. **Gender** on profiles — nullable enum `'female' | 'male' | 'non-binary' | 'prefer_not_to_say'`. Optional, self-declared, admin-only visibility (not on public/member-facing profile views). Lawful basis: legitimate interest in event-mix balancing; needs a one-line addition to the privacy policy.
-2. **Age range** on profiles — nullable enum `'18-24' | '25-29' | '30-34' | '35-39' | '40-44' | '45-49' | '50+'`. Bands not DOB (less invasive, sufficient for balancing + positioning sanity). Same admin-only visibility.
-3. **Canonical taxonomy unifying `events.category` + `user_interests.interest`** — single `tags` lookup table; `event_tags (event_id, tag_id, is_primary)` and `user_interests` re-pointed from free `text` to `tag_id` FK. Resolves the current mismatch between the 8-value event enum and the 14-value free-text interest list. Lets future personalization, search-by-tag, and admin matching all run as straight JOINs.
+After F2-schema applied (2026-04-27): `tags` + `event_tags` + `user_interests.tag_id` is the sole source of truth. No dual-write columns left.
 
-**Where to ask demographics:** NOT at signup (raises friction). Use the existing "Complete Your Profile" banner pattern (CLAUDE.md Batch 5) post-signup, with one-line copy: *"Helps us keep events balanced — optional, only visible to the team."*
-
-**Why bundled:** All three change `profiles` / `events` / `user_interests` schemas; doing them in one migration + admin-form pass + privacy policy update is much cheaper than three separate sprints.
-
-**Out of scope (later, separate work):**
+Downstream features now unblocked (separate scope, not started):
 - Recommendation engine ("events you might like")
 - Event-mix balancing logic (admin caps, automatic enforcement)
 - Email targeting by tag overlap
 - Search-by-tag UI
-- Hierarchy on tags (defer until flat hits its limit)
-
-The data layer is the unblock; the engines that consume it are independent.
-
-**Rough estimate (data layer only):** 2–2.5 days. Schema migrations + admin form additions + profile-completion banner + RLS work + privacy policy edit + admin demographics view per event.
-**Dependencies:** None. All existing.
-**Next step:** Run `/project:architect` to scope the spec (see prompt drafted in conversation). Architect output → `docs/member-data-layer-spec.md`.
+- Tag hierarchy (deferred until flat hits its limit)
 
 ### Promo / discount codes at Stripe Checkout
 **Source:** User request, 2026-04-25.
