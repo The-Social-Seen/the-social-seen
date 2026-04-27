@@ -86,6 +86,12 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 **Action:** Mint a dedicated 32+ byte random secret, set `UNSUBSCRIBE_TOKEN_SECRET` in Vercel (Preview + Production) + `supabase secrets set` on the edge function. One-line code change; already supported.
 **Priority:** Medium — do before any pipeline that rotates the service role key.
 
+### Stripe `ensureStripeCustomer` defensive fix
+**Source:** 2026-04-27 outage post-mortem.
+**Rationale:** The customer-creation path in the paid-booking flow was implicated. Hardening should land after F1b-schema ships so the fix doesn't tangle with the data-layer migration sequence.
+**Action:** TBD by post-mortem write-up — likely retry with backoff, distinct error surface for "Stripe rejects vs Stripe unreachable", and a Sentry tag matching `surface: 'createPaidCheckout'` for filterable triage.
+**Priority:** **HIGH — production reliability** for the paid-booking path.
+
 ### `email_verified` reconciliation path
 **Source:** P2-3 backend handover.
 **Rationale:** `verifyEmailOtp()` soft-succeeds if the DB update to `profiles.email_verified = true` fails after Supabase already accepted the OTP. User sees success but their flag is still false; they can't book until they verify again.
@@ -101,6 +107,12 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 ---
 
 ## 🟡 UX / polish
+
+### "More X Events" related-events sections can shrink to 1 peer post-F1a/b
+**Source:** F1a manual preview verification.
+**Rationale:** F1b-app's `getRelatedEvents(primaryTagSlug)` correctly narrows the match — Halloween Party's "More Nightlife & Dancing Events" now shows just one peer (Christmas Party at Tonteria). Pre-F1b would have shown the wider `cultural` bucket which conflated several primary tags. Sharper match = correct behaviour, but a 1-event "More Nightlife & Dancing Events" heading reads thin.
+**Action:** Either rename the heading to "More events you'll like" and broaden the source query (cross-tag affinity vs strict same-primary), or adjust copy when there's <2 peers ("Another night to check out: …"). Product call.
+**Priority:** Low — no functional regression, just thin-list awkwardness.
 
 ### AdminSidebar bottom-nav obscures form view when iOS keyboard is open
 **Source:** PR #53 real-iOS verification (2026-04-25).
@@ -124,6 +136,28 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 ## 📈 Analytics & measurement
 
 ### (none open — Phase 2.5 Batch 7 closed the analytics backlog.)
+
+---
+
+## 🧹 Member data layer follow-ups
+
+### `saveEventTags` DELETE-then-INSERT atomicity
+**Source:** W5 code review (PR #61).
+**Rationale:** The Server Action issues two PostgREST round-trips — `DELETE FROM event_tags WHERE event_id = X` then `INSERT INTO event_tags (...)`. PostgREST wraps each request in its own implicit transaction, so this is NOT atomic. During the ~5–50ms window the event has zero `event_tags` rows. Benign today (member-facing reads use `event_tags.tags.slug` JOIN — F1b-app — and the brief empty state is allowed by the partial unique index), but concurrent admin edits to the same event are a last-writer-wins race.
+**Action:** Wrap the DELETE+INSERT in a Postgres function (RPC) that runs atomically. Same security posture (admin auth + tag-eligibility validation), single round-trip.
+**Priority:** Low — only matters if multi-admin concurrency appears.
+
+### Three-way slug→enum lockstep — 4th assertion
+**Source:** W5 code review + F1a tester note.
+**Rationale:** The lockstep guard in `src/lib/constants/__tests__/tags.test.ts` catches drift between (a) the test's expected table and Migration 2 SQL, (b) production constants in `src/lib/constants/tags.ts`, and (c) the per-slug parametrised test. But a coordinated drift in ALL THREE simultaneously slips past — realistically protected because migrations are immutable per safety rules.
+**Action:** Add a 4th assertion comparing production constants directly to Migration 2 SQL (read the migration file's `_tag_slug_to_legacy_category` CASE or — post-F1b-schema — the seed insert's CASE) so all three sources are pairwise asserted.
+**Priority:** Low — a test of last resort.
+
+### Fixture-pattern refactor — `satisfies Event` to catch tsc-blind-spot
+**Source:** F1b-schema tester note (caught 6 stale fixtures the dev's tsc missed).
+**Rationale:** Mock helpers like `vi.fn(() => Promise.resolve({ data: <obj> }))` widen object literals to `unknown`, so TypeScript's excess-property checking is silent on stale fixtures. Future schema migrations that drop a column will hit the same blind spot — fixtures retain dead fields and tsc stays clean.
+**Action:** Either (a) extract every inline mock object into a typed `const event: EventWithStats = {...}` before passing to mock, or (b) add `satisfies EventWithStats` clauses to fixture builders. The `satisfies` form is least invasive but requires changing builder return types from explicit annotations to `satisfies`. ~30 min refactor across the test files that currently use the widening pattern.
+**Priority:** Low — bites only on the next schema-drop migration; surface-level test failures will still catch real bugs.
 
 ---
 
@@ -222,6 +256,12 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 ---
 
 ## ⚙️ Operations
+
+### CI migration-drift check (local vs hosted `schema_migrations`)
+**Source:** Session-start handover (post-CL-9 — discovered 19 migrations were unapplied to hosted).
+**Rationale:** Migration files are committed to git and applied locally / in CI on `supabase db reset`, but hosted apply is a manual `supabase db push` step. Drift is silent — the W2+W3 hosted-apply caught it via a different vector (`activity` enum quirk), and the F1b-schema verify script catches it for that specific column drop, but there's no general guard. Future PRs that add a migration but forget to instruct the operator to push will reproduce the bug.
+**Action:** Option A — small CI step that queries hosted's `schema_migrations` table (read-only, via service-role + a postgres function that returns the version array) and compares to the file system list under `supabase/migrations/`. Fail CI on drift with a clear "X migrations pending hosted apply" message. ~30 min of CI work + a small SECURITY DEFINER function exposing the migration list.
+**Priority:** Medium — prevents the same silent-drift class of bug as the W2+W3 + F1b-schema episodes.
 
 ### Admin-announcement preference lookup is 1 DB round-trip per recipient
 **Source:** Phase 2.5 Batch 2 code review.
