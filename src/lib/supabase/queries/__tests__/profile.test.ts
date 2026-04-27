@@ -78,9 +78,26 @@ const mockProfile = {
   deleted_at: null,
 }
 
+// F2-app: getProfile now reads via JOIN to `tags` instead of the legacy
+// `user_interests.interest` text column. The mock mirrors the new SELECT
+// shape: each row carries `tag_id` and a nested `tags: { slug, label }`
+// object. The mapper extracts `tags.label` so the consumer-visible
+// `string[]` shape is unchanged.
 const mockInterests = [
-  { id: 'int-1', user_id: 'user-1', interest: 'Wine & Cocktails', created_at: '2026-01-15T10:00:00Z' },
-  { id: 'int-2', user_id: 'user-1', interest: 'Fine Dining', created_at: '2026-01-15T10:00:00Z' },
+  {
+    id: 'int-1',
+    user_id: 'user-1',
+    tag_id: 'tag-uuid-drinks-bars',
+    created_at: '2026-01-15T10:00:00Z',
+    tags: { slug: 'drinks-bars', label: 'Wine & Cocktails' },
+  },
+  {
+    id: 'int-2',
+    user_id: 'user-1',
+    tag_id: 'tag-uuid-dining-supper-clubs',
+    created_at: '2026-01-15T10:00:00Z',
+    tags: { slug: 'dining-supper-clubs', label: 'Fine Dining' },
+  },
 ]
 
 const mockBookingRow = {

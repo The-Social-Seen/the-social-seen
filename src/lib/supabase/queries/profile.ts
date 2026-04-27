@@ -5,7 +5,6 @@ import type {
   Gender,
   PrimaryTag,
   Profile,
-  UserInterest,
 } from '@/types'
 
 // ── Profile + interests ─────────────────────────────────────────────────────
@@ -36,7 +35,7 @@ export async function getProfile(
       .single(),
     supabase
       .from('user_interests')
-      .select('id, user_id, interest, created_at')
+      .select('id, user_id, tag_id, created_at, tags(slug, label)')
       .eq('user_id', userId),
   ])
 
@@ -51,13 +50,23 @@ export async function getProfile(
     console.error('[getProfile:interests]', interestsResult.error.message)
   }
 
-  // Cast loosely — the SELECT only fetches the `interest` text column for
-  // legacy read compatibility; F2 will eventually drop the column and the
-  // join to `tags.label` becomes the source. Until then, getProfile keeps
-  // returning a `string[]` of interest labels.
-  const interests = (interestsResult.data ?? []).map(
-    (row: Pick<UserInterest, 'interest'>) => row.interest,
-  )
+  // F2-app: source labels from the joined `tags` row instead of the
+  // legacy `user_interests.interest` text column. F2-schema drops the
+  // text column next. Consumer-facing shape (`string[]`) is unchanged.
+  // user_interests.tag_id is NOT NULL FK → tags, so the join always
+  // resolves to one row; the array fallback is defensive for typegen.
+  type InterestRow = {
+    tags:
+      | { slug: string; label: string }
+      | { slug: string; label: string }[]
+      | null
+  }
+  const interests = ((interestsResult.data ?? []) as InterestRow[])
+    .map((row) => {
+      const tag = Array.isArray(row.tags) ? row.tags[0] : row.tags
+      return tag?.label ?? null
+    })
+    .filter((label): label is string => label !== null)
 
   return {
     ...(profileResult.data as Profile),
