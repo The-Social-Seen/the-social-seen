@@ -41,9 +41,15 @@ function applyTheme(theme: Theme) {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(() =>
-    typeof window !== "undefined" ? getInitialTheme() : "light"
-  );
+  // Initial state must match between server and client render — the
+  // server has no localStorage / matchMedia, so it always serialises
+  // "light". The first client render uses the SAME value to satisfy
+  // React's hydration check; the persisted preference is then read
+  // in the mount effect below and applied via setTheme. A divergent
+  // initial state here triggers a hydration mismatch that bails React
+  // out of attaching downstream event handlers (Links and buttons stop
+  // responding to clicks until the next interaction).
+  const [theme, setTheme] = useState<Theme>("light");
   const [mounted, setMounted] = useState(false);
 
   // Apply theme to DOM whenever it changes
@@ -51,9 +57,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     applyTheme(theme);
   }, [theme]);
 
-  // Mark hydration complete — legitimate SSR hydration pattern
+  // Read persisted / system preference on mount, then mark hydration
+  // complete so the FOUC guard on the wrapper div releases.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
+    setTheme(getInitialTheme());
     setMounted(true);
   }, []);
 
