@@ -1,30 +1,34 @@
-// F2-app regression guard — Phase 3 member data layer.
+// F2 regression guard — Phase 3 member data layer.
 //
-// The two production reads of `user_interests.interest` (the text
-// column populated by the registration / profile chip picker) were
-// migrated to read `tags.label` via JOIN through `user_interests.tag_id`:
+// History:
+//   • F2-app (PR #66) migrated the two production reads of
+//     `user_interests.interest` to JOIN through `user_interests.tag_id`
+//     onto `tags.label`:
+//       - getProfile (src/lib/supabase/queries/profile.ts)
+//       - exportMyData (src/app/(member)/profile/privacy-actions.ts)
+//   • F2-schema (this PR) dropped the `interest` text column outright.
+//     `user_interests.tag_id` is now the SOLE carrier of interest
+//     semantics; the column the legacy reads pointed at no longer
+//     exists in the database.
 //
-//   1. getProfile in src/lib/supabase/queries/profile.ts — used by the
-//      /profile page server component.
-//   2. exportMyData in src/app/(member)/profile/privacy-actions.ts —
-//      the GDPR data-export Server Action.
+// Post-F2-schema this guard is the static-analysis backstop against
+// accidental re-introduction. A future PR that re-adds a SELECT or
+// property read for an `interest` text column would now also fail at
+// runtime (the column is gone), but catching it at test time means
+// the regression surfaces with a clear diagnostic before anyone hits
+// the runtime error.
 //
-// F2-schema (next dispatch) drops the `interest` text column. Until
-// then the column stays alive so the two write paths (saveInterests in
-// `src/app/(auth)/actions.ts` and updateInterests in
-// `src/app/(member)/profile/actions.ts`) can keep populating it
-// alongside `tag_id` for safe rollback.
-//
-// This guard locks the read-side migration in: any future PR that
-// reintroduces a read of the `interest` text column inside the scanned
-// directories fails loudly with file/line/pattern/excerpt diagnostics
-// (mirrors F1a's `event-category-migration-guard.test.ts`).
+// The earlier 2-entry write-path allowlist (actions.ts + (auth)/actions.ts,
+// which used to INSERT both `interest` text and tag_id) is empty now —
+// F2-schema's INSERT-payload trim removed those references entirely.
+// The loop variables in those write paths were renamed to `interestLabel`
+// in the same change so the destructure pattern below no longer matches.
 //
 // Plus two edge-case shape-stability tests (one for getProfile's
 // `string[]` return shape, one for exportMyData's `[{id, interest,
 // created_at}]` emission) — these lock in the consumer-visible
-// contracts the dev preserved on purpose for backward-compat, so a
-// future "simplify" PR can't silently flip them.
+// contracts the F2-app dev preserved on purpose for backward-compat,
+// so a future "simplify" PR can't silently flip them.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -49,20 +53,16 @@ const SCAN_DIRS = [
   'src/app/(member)/profile',
 ] as const
 
-// File-level allowlist — write paths that legitimately INSERT both the
-// `interest` text column and the new `tag_id`. Each entry must name the
-// retirement wave so future cleanup is scripted.
-const ALLOWLIST = new Set<string>([
-  // updateInterests INSERT writes (user_id, interest, tag_id). The
-  // `interest` text is part of the row payload; tag_id is the new FK.
-  // F2-schema retires both the column and this allowlist entry.
-  'src/app/(member)/profile/actions.ts',
-  // saveInterests (registration) writes the same row shape. Lives
-  // outside the current SCAN_DIRS so this entry is preventive — if a
-  // future PR widens SCAN_DIRS to src/app/(auth)/, the allowlist is
-  // already in place. Same retirement as actions.ts (F2-schema).
-  'src/app/(auth)/actions.ts',
-])
+// File-level allowlist — empty post-F2-schema. The legacy column the
+// allowlist used to cover (write-path INSERTs of `interest` text +
+// tag_id) no longer exists. Both write paths were trimmed in F2-schema's
+// INSERT-payload edit; the loop variables were renamed to `interestLabel`
+// so they no longer trip the destructure pattern below.
+//
+// If a future PR genuinely needs to add a file-level exemption (e.g. a
+// new admin tool that legitimately references an `interest` field for
+// display), add the entry here with a comment explaining why.
+const ALLOWLIST = new Set<string>([])
 
 // Patterns from the prompt's grep brief, with one refinement on the
 // property-access pattern:

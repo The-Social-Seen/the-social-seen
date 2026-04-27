@@ -235,89 +235,62 @@ WHERE id = 'a0000000-0000-0000-0000-000000000007';
 
 -- ── Step 3: User Interests ───────────────────────────────────────────────────
 --
--- After Migration 3 (20260504000002_migrate_user_interests_to_tag_id.sql),
--- public.user_interests.tag_id is NOT NULL. The seed's existing interest
--- values are mapped to canonical tag slugs via the same CASE used by
--- Migration 3's reconciliation backfill.
+-- After F2-schema (20260507000001_drop_user_interests_interest_column),
+-- user_interests.tag_id is the sole carrier of interest semantics — the
+-- legacy `interest` text column is gone. The seed inserts rows by
+-- joining the canonical slug to tags.id (one query, no per-row CASE).
 --
--- ⚠️ Lockstep with Migration 3: the WHEN → THEN map below MUST stay
--- identical to the CASE in Migration 3's backfill UPDATE. If you add a
--- new INTEREST_OPTIONS value, update both:
---   • supabase/migrations/20260504000002_migrate_user_interests_to_tag_id.sql
---   • this file (the JOIN CASE below)
--- And also extend Migration 3's reconciliation map first if needed
--- (its verification block raises if any seed row falls through to NULL).
+-- The slugs below are the per-user picks under the Decision 9
+-- reconciliation map. Group A (drinks-bars, dining-supper-clubs, etc.)
+-- are primary-eligible tags; Group B (interest-…) are interest-only.
+-- If a slug here drifts out of the seeded `tags` taxonomy, the INNER
+-- JOIN produces ZERO rows for that pair — surfaces as a missing-row
+-- test failure rather than an apply-time NOT NULL crash.
 --
--- Pattern: INSERT … SELECT … FROM (VALUES …) JOIN tags ON t.slug = CASE …
--- The JOIN's nature ensures no row is inserted without a resolved tag_id;
--- a typo in the interest label produces zero rows for that pair (NOT a
--- NULL violation), so it would surface as a missing-row test failure
--- rather than an apply-time NOT NULL crash.
+-- Pattern: INSERT … SELECT … FROM (VALUES …) JOIN tags ON t.slug = v.slug.
 
-INSERT INTO public.user_interests (user_id, interest, tag_id)
+INSERT INTO public.user_interests (user_id, tag_id)
 SELECT
   v.user_id::uuid,
-  v.interest,
   t.id
 FROM (VALUES
   -- Mitesh
-  ('a0000000-0000-0000-0000-000000000001', 'Entrepreneurship'),
-  ('a0000000-0000-0000-0000-000000000001', 'Networking'),
-  ('a0000000-0000-0000-0000-000000000001', 'Wine & Cocktails'),
-  ('a0000000-0000-0000-0000-000000000001', 'Technology'),
+  ('a0000000-0000-0000-0000-000000000001', 'interest-entrepreneurship'),
+  ('a0000000-0000-0000-0000-000000000001', 'interest-networking'),
+  ('a0000000-0000-0000-0000-000000000001', 'drinks-bars'),
+  ('a0000000-0000-0000-0000-000000000001', 'interest-technology'),
   -- Charlotte
-  ('a0000000-0000-0000-0000-000000000002', 'Wine & Cocktails'),
-  ('a0000000-0000-0000-0000-000000000002', 'Fine Dining'),
-  ('a0000000-0000-0000-0000-000000000002', 'Art & Culture'),
-  ('a0000000-0000-0000-0000-000000000002', 'Networking'),
+  ('a0000000-0000-0000-0000-000000000002', 'drinks-bars'),
+  ('a0000000-0000-0000-0000-000000000002', 'dining-supper-clubs'),
+  ('a0000000-0000-0000-0000-000000000002', 'galleries-museums'),
+  ('a0000000-0000-0000-0000-000000000002', 'interest-networking'),
   -- James
-  ('a0000000-0000-0000-0000-000000000003', 'Fine Dining'),
-  ('a0000000-0000-0000-0000-000000000003', 'Wine & Cocktails'),
-  ('a0000000-0000-0000-0000-000000000003', 'Running & Sport'),
-  ('a0000000-0000-0000-0000-000000000003', 'Networking'),
+  ('a0000000-0000-0000-0000-000000000003', 'dining-supper-clubs'),
+  ('a0000000-0000-0000-0000-000000000003', 'drinks-bars'),
+  ('a0000000-0000-0000-0000-000000000003', 'sport-fitness'),
+  ('a0000000-0000-0000-0000-000000000003', 'interest-networking'),
   -- Priya
-  ('a0000000-0000-0000-0000-000000000004', 'Art & Culture'),
-  ('a0000000-0000-0000-0000-000000000004', 'Yoga & Wellness'),
-  ('a0000000-0000-0000-0000-000000000004', 'Technology'),
-  ('a0000000-0000-0000-0000-000000000004', 'Photography'),
+  ('a0000000-0000-0000-0000-000000000004', 'galleries-museums'),
+  ('a0000000-0000-0000-0000-000000000004', 'wellness-mindfulness'),
+  ('a0000000-0000-0000-0000-000000000004', 'interest-technology'),
+  ('a0000000-0000-0000-0000-000000000004', 'interest-photography'),
   -- Oliver
-  ('a0000000-0000-0000-0000-000000000005', 'Entrepreneurship'),
-  ('a0000000-0000-0000-0000-000000000005', 'Technology'),
-  ('a0000000-0000-0000-0000-000000000005', 'Running & Sport'),
-  ('a0000000-0000-0000-0000-000000000005', 'Wine & Cocktails'),
+  ('a0000000-0000-0000-0000-000000000005', 'interest-entrepreneurship'),
+  ('a0000000-0000-0000-0000-000000000005', 'interest-technology'),
+  ('a0000000-0000-0000-0000-000000000005', 'sport-fitness'),
+  ('a0000000-0000-0000-0000-000000000005', 'drinks-bars'),
   -- Sophie
-  ('a0000000-0000-0000-0000-000000000006', 'Fine Dining'),
-  ('a0000000-0000-0000-0000-000000000006', 'Yoga & Wellness'),
-  ('a0000000-0000-0000-0000-000000000006', 'Art & Culture'),
-  ('a0000000-0000-0000-0000-000000000006', 'Books & Literature'),
+  ('a0000000-0000-0000-0000-000000000006', 'dining-supper-clubs'),
+  ('a0000000-0000-0000-0000-000000000006', 'wellness-mindfulness'),
+  ('a0000000-0000-0000-0000-000000000006', 'galleries-museums'),
+  ('a0000000-0000-0000-0000-000000000006', 'interest-books-literature'),
   -- Marcus
-  ('a0000000-0000-0000-0000-000000000007', 'Technology'),
-  ('a0000000-0000-0000-0000-000000000007', 'Jazz & Music'),
-  ('a0000000-0000-0000-0000-000000000007', 'Wine & Cocktails'),
-  ('a0000000-0000-0000-0000-000000000007', 'Running & Sport')
-) AS v(user_id, interest)
-JOIN public.tags t ON t.slug = CASE v.interest
-  -- Group A: primary-eligible remaps (6) — verbatim from Migration 3
-  WHEN 'Wine & Cocktails'   THEN 'drinks-bars'
-  WHEN 'Fine Dining'        THEN 'dining-supper-clubs'
-  WHEN 'Art & Culture'      THEN 'galleries-museums'
-  WHEN 'Yoga & Wellness'    THEN 'wellness-mindfulness'
-  WHEN 'Running & Sport'    THEN 'sport-fitness'
-  WHEN 'Jazz & Music'       THEN 'live-music-gigs'
-  -- Group B: interest-only remaps (8) — verbatim from Migration 3
-  WHEN 'Technology'         THEN 'interest-technology'
-  WHEN 'Entrepreneurship'   THEN 'interest-entrepreneurship'
-  WHEN 'Networking'         THEN 'interest-networking'
-  WHEN 'Photography'        THEN 'interest-photography'
-  WHEN 'Travel'             THEN 'interest-travel'
-  WHEN 'Books & Literature' THEN 'interest-books-literature'
-  WHEN 'Sustainable Living' THEN 'interest-sustainable-living'
-  WHEN 'Film & Cinema'      THEN 'interest-film-cinema'
-  -- ELSE NULL would produce a row that fails the FK / NOT NULL gate; the
-  -- INNER JOIN above means an unmapped value silently produces ZERO rows
-  -- for that pair instead — surfaceable via a row-count assertion in the
-  -- E2E setup if anyone removes a mapping by mistake.
-END;
+  ('a0000000-0000-0000-0000-000000000007', 'interest-technology'),
+  ('a0000000-0000-0000-0000-000000000007', 'live-music-gigs'),
+  ('a0000000-0000-0000-0000-000000000007', 'drinks-bars'),
+  ('a0000000-0000-0000-0000-000000000007', 'sport-fitness')
+) AS v(user_id, slug)
+JOIN public.tags t ON t.slug = v.slug;
 
 -- ── Step 4: Events ───────────────────────────────────────────────────────────
 

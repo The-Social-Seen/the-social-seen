@@ -114,11 +114,12 @@ export async function exportMyData(): Promise<string> {
   const gender = demographicsRow?.gender ?? null
   const ageRange = demographicsRow?.age_range ?? null
 
-  // F2-app: source the `interest` label from the joined `tags` row.
-  // The legacy `user_interests.interest` text column is no longer
-  // SELECTed; F2-schema drops it next. The export's emitted shape
-  // (`[{ id, interest, created_at }, ...]`) is preserved so prior
-  // exports remain comparable.
+  // Source the `interest` label from the joined `tags` row. The legacy
+  // `user_interests.interest` text column was dropped by F2-schema —
+  // `tag_id` is the sole carrier of interest semantics now. The export's
+  // emitted shape (`[{ id, interest, created_at }, ...]`) is preserved
+  // (with `interest` sourced from tags.label) so prior exports remain
+  // comparable.
   type ExportInterestRow = {
     id: string
     created_at: string

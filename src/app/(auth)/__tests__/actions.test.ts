@@ -477,16 +477,17 @@ describe('saveInterests', () => {
     }
   })
 
-  it('saves interests for authenticated user (resolves tag_id alongside interest)', async () => {
+  it('saves interests for authenticated user (resolves tag_id from slug)', async () => {
     mockGetUser.mockResolvedValue({
       data: { user: { id: 'user-1' } },
       error: null,
     })
 
-    // After Migration 3, saveInterests must resolve each interest's
-    // canonical tag slug, look up the matching tag UUIDs, and INSERT
-    // (user_id, interest, tag_id). The mock returns two tag rows
-    // matching the slugs in src/lib/constants.ts INTEREST_OPTIONS.
+    // After F2-schema dropped the legacy `interest` text column,
+    // saveInterests resolves each interest label to its canonical tag
+    // slug, looks up the matching tag UUIDs, and INSERTs (user_id, tag_id).
+    // The mock returns two tag rows matching the slugs in
+    // src/lib/constants.ts INTEREST_OPTIONS.
     const chains = mockSupabaseTables({
       tags: {
         data: [
@@ -512,12 +513,10 @@ describe('saveInterests', () => {
     expect(chains.user_interests.insert).toHaveBeenCalledWith([
       {
         user_id: 'user-1',
-        interest: 'Wine & Cocktails',
         tag_id: 'tag-uuid-drinks-bars',
       },
       {
         user_id: 'user-1',
-        interest: 'Fine Dining',
         tag_id: 'tag-uuid-dining-supper-clubs',
       },
     ])
