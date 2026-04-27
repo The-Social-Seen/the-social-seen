@@ -1,30 +1,34 @@
-// F2-app regression guard — Phase 3 member data layer.
+// F2 regression guard — Phase 3 member data layer.
 //
-// The two production reads of `user_interests.interest` (the text
-// column populated by the registration / profile chip picker) were
-// migrated to read `tags.label` via JOIN through `user_interests.tag_id`:
+// History:
+//   • F2-app (PR #66) migrated the two production reads of
+//     `user_interests.interest` to JOIN through `user_interests.tag_id`
+//     onto `tags.label`:
+//       - getProfile (src/lib/supabase/queries/profile.ts)
+//       - exportMyData (src/app/(member)/profile/privacy-actions.ts)
+//   • F2-schema (this PR) dropped the `interest` text column outright.
+//     `user_interests.tag_id` is now the SOLE carrier of interest
+//     semantics; the column the legacy reads pointed at no longer
+//     exists in the database.
 //
-//   1. getProfile in src/lib/supabase/queries/profile.ts — used by the
-//      /profile page server component.
-//   2. exportMyData in src/app/(member)/profile/privacy-actions.ts —
-//      the GDPR data-export Server Action.
+// Post-F2-schema this guard is the static-analysis backstop against
+// accidental re-introduction. A future PR that re-adds a SELECT or
+// property read for an `interest` text column would now also fail at
+// runtime (the column is gone), but catching it at test time means
+// the regression surfaces with a clear diagnostic before anyone hits
+// the runtime error.
 //
-// F2-schema (next dispatch) drops the `interest` text column. Until
-// then the column stays alive so the two write paths (saveInterests in
-// `src/app/(auth)/actions.ts` and updateInterests in
-// `src/app/(member)/profile/actions.ts`) can keep populating it
-// alongside `tag_id` for safe rollback.
-//
-// This guard locks the read-side migration in: any future PR that
-// reintroduces a read of the `interest` text column inside the scanned
-// directories fails loudly with file/line/pattern/excerpt diagnostics
-// (mirrors F1a's `event-category-migration-guard.test.ts`).
+// The earlier 2-entry write-path allowlist (actions.ts + (auth)/actions.ts,
+// which used to INSERT both `interest` text and tag_id) is empty now —
+// F2-schema's INSERT-payload trim removed those references entirely.
+// The loop variables in those write paths were renamed to `interestLabel`
+// in the same change so the destructure pattern below no longer matches.
 //
 // Plus two edge-case shape-stability tests (one for getProfile's
 // `string[]` return shape, one for exportMyData's `[{id, interest,
 // created_at}]` emission) — these lock in the consumer-visible
-// contracts the dev preserved on purpose for backward-compat, so a
-// future "simplify" PR can't silently flip them.
+// contracts the F2-app dev preserved on purpose for backward-compat,
+// so a future "simplify" PR can't silently flip them.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -49,20 +53,16 @@ const SCAN_DIRS = [
   'src/app/(member)/profile',
 ] as const
 
-// File-level allowlist — write paths that legitimately INSERT both the
-// `interest` text column and the new `tag_id`. Each entry must name the
-// retirement wave so future cleanup is scripted.
-const ALLOWLIST = new Set<string>([
-  // updateInterests INSERT writes (user_id, interest, tag_id). The
-  // `interest` text is part of the row payload; tag_id is the new FK.
-  // F2-schema retires both the column and this allowlist entry.
-  'src/app/(member)/profile/actions.ts',
-  // saveInterests (registration) writes the same row shape. Lives
-  // outside the current SCAN_DIRS so this entry is preventive — if a
-  // future PR widens SCAN_DIRS to src/app/(auth)/, the allowlist is
-  // already in place. Same retirement as actions.ts (F2-schema).
-  'src/app/(auth)/actions.ts',
-])
+// File-level allowlist — empty post-F2-schema. The legacy column the
+// allowlist used to cover (write-path INSERTs of `interest` text +
+// tag_id) no longer exists. Both write paths were trimmed in F2-schema's
+// INSERT-payload edit; the loop variables were renamed to `interestLabel`
+// so they no longer trip the destructure pattern below.
+//
+// If a future PR genuinely needs to add a file-level exemption (e.g. a
+// new admin tool that legitimately references an `interest` field for
+// display), add the entry here with a comment explaining why.
+const ALLOWLIST = new Set<string>([])
 
 // Patterns from the prompt's grep brief, with one refinement on the
 // property-access pattern:
@@ -528,5 +528,108 @@ describe('F2-app — exportMyData interests shape lock-in', () => {
     // future PR swaps tags.label for tags.slug, this fails loudly.
     const interestValues = parsed.interests.map((e) => e.interest).sort()
     expect(interestValues).toEqual(['Drinks & Bars', 'Travel'])
+  })
+})
+
+// ── Test 4 — F2-schema migration source-text shape (lockstep) ──────────────
+
+describe('F2-schema — drop migration source-text shape', () => {
+  // The F2-schema migration is a DESTRUCTIVE one-shot drop: one
+  // constraint, one column. Its safety net is the defensive RAISE
+  // EXCEPTION block at the end. A future PR that weakens any of those
+  // statements (removes an IF EXISTS, drops the verification block,
+  // forgets one of the two artefact-survival checks) would silently
+  // leave dead schema behind on hosted — Postgres would happily ignore
+  // the unique constraint until something tries to use it, and a
+  // lingering `interest` column would silently get re-populated by any
+  // INSERT that still references it.
+  //
+  // These source-text assertions lock in the migration's SHAPE so that
+  // kind of weakening surfaces here, with a named diagnostic, rather
+  // than as a half-applied schema on production. Pattern mirrors the
+  // F1b-schema source-text guard.
+
+  const MIGRATION_PATH = resolve(
+    REPO_ROOT,
+    'supabase/migrations/20260507000001_drop_user_interests_interest_column.sql',
+  )
+  const MIGRATION_SQL = readFileSync(MIGRATION_PATH, 'utf-8')
+
+  // The 2 ALTER statements + their target object names. Each pattern
+  // is case-insensitive on the SQL keywords (ALTER / DROP / CONSTRAINT
+  // / COLUMN) and tolerates whitespace / newlines, but locks the
+  // IF EXISTS clause and the fully-qualified object names down.
+  const ALTER_STATEMENTS: ReadonlyArray<readonly [string, RegExp]> = [
+    [
+      'DROP CONSTRAINT uq_user_interests_user_interest',
+      /ALTER\s+TABLE\s+public\.user_interests\s+DROP\s+CONSTRAINT\s+IF\s+EXISTS\s+uq_user_interests_user_interest/i,
+    ],
+    [
+      'DROP COLUMN user_interests.interest',
+      /ALTER\s+TABLE\s+public\.user_interests\s+DROP\s+COLUMN\s+IF\s+EXISTS\s+interest/i,
+    ],
+  ]
+
+  for (const [label, re] of ALTER_STATEMENTS) {
+    it(`migration contains ${label} (with IF EXISTS for idempotency)`, () => {
+      expect(
+        MIGRATION_SQL,
+        `Missing or weakened ALTER statement — expected /${re.source}/`,
+      ).toMatch(re)
+    })
+  }
+
+  it('migration has a defensive DO $$ … END $$; verification block', () => {
+    // The block re-checks information_schema / pg_constraint and
+    // RAISE EXCEPTIONs if either of the two artefacts (column or
+    // constraint) survive. Weakening this turns a half-applied schema
+    // into a silent success.
+    expect(MIGRATION_SQL).toMatch(/DO\s+\$\$\s*BEGIN[\s\S]+END\s+\$\$;/)
+    expect(MIGRATION_SQL).toMatch(/RAISE\s+EXCEPTION/i)
+  })
+
+  it('verification block names both artefact-survival checks', () => {
+    // Each of these strings must appear inside the verification block —
+    // they're the explicit catalog probes for the two artefacts. If a
+    // future "cleanup" deletes one of the IF EXISTS branches, this fails.
+    expect(MIGRATION_SQL).toMatch(/user_interests\.interest column still exists/i)
+    expect(MIGRATION_SQL).toMatch(
+      /uq_user_interests_user_interest constraint still exists/i,
+    )
+  })
+
+  it('migration uses IF EXISTS uniformly on every ALTER … DROP statement', () => {
+    // Iterate every line that is the start of an `ALTER TABLE …` block
+    // and assert the captured statement (this line + continuations
+    // until `;`) contains both `DROP` and `IF EXISTS`. Anchored to
+    // start-of-line so we skip any "DROP COLUMN" / "DROP CONSTRAINT"
+    // wording inside RAISE EXCEPTION string literals.
+    const lines = MIGRATION_SQL.split('\n')
+    const ddlStarter = /^\s*ALTER\s+TABLE\b/i
+    let saw = 0
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (!ddlStarter.test(line)) continue
+      // Capture the statement (this line + continuations until the
+      // closing semicolon) so we can scan it for IF EXISTS even if
+      // the statement spans lines.
+      let stmt = line
+      let j = i
+      while (!stmt.includes(';') && j + 1 < lines.length) {
+        j += 1
+        stmt += '\n' + lines[j]
+      }
+      // Only count statements that contain a DROP — additive ALTER
+      // TABLE statements (e.g. ADD CONSTRAINT) wouldn't need IF EXISTS.
+      if (!/\bDROP\b/i.test(stmt)) continue
+      saw++
+      expect(
+        stmt,
+        `ALTER … DROP without IF EXISTS guard at line ${i + 1} — got: ${stmt.slice(0, 100)}`,
+      ).toMatch(/IF\s+EXISTS/i)
+    }
+    // Sanity: the migration has exactly 2 ALTER … DROP statements
+    // (constraint + column). Both must be IF EXISTS-guarded.
+    expect(saw).toBe(2)
   })
 })

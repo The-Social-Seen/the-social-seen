@@ -50,11 +50,12 @@ export async function getProfile(
     console.error('[getProfile:interests]', interestsResult.error.message)
   }
 
-  // F2-app: source labels from the joined `tags` row instead of the
-  // legacy `user_interests.interest` text column. F2-schema drops the
-  // text column next. Consumer-facing shape (`string[]`) is unchanged.
-  // user_interests.tag_id is NOT NULL FK → tags, so the join always
-  // resolves to one row; the array fallback is defensive for typegen.
+  // Source labels from the joined `tags` row. The legacy
+  // `user_interests.interest` text column was dropped by F2-schema —
+  // tag_id is the sole carrier of interest semantics now. Consumer-facing
+  // shape (`string[]`) is unchanged. user_interests.tag_id is NOT NULL FK
+  // → tags, so the join always resolves to one row; the array fallback
+  // is defensive for typegen.
   type InterestRow = {
     tags:
       | { slug: string; label: string }

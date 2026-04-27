@@ -280,13 +280,14 @@ describe('updateInterests', () => {
     expect(result.error).toContain('Authentication required')
   })
 
-  it('deletes existing interests and inserts new ones (resolves tag_id alongside interest)', async () => {
+  it('deletes existing interests and inserts new ones (resolves tag_id from slug)', async () => {
     authenticateUser()
 
-    // After Migration 3, updateInterests must resolve each interest's
-    // canonical tag slug, look up the matching tag UUIDs, and INSERT
-    // (user_id, interest, tag_id). The mock returns two tag rows
-    // matching the slugs in src/lib/constants.ts INTEREST_OPTIONS.
+    // After F2-schema dropped the legacy `interest` text column,
+    // updateInterests resolves each interest label to its canonical tag
+    // slug, looks up the matching tag UUIDs, and INSERTs (user_id, tag_id).
+    // The mock returns two tag rows matching the slugs in
+    // src/lib/constants.ts INTEREST_OPTIONS.
     const chains = mockSupabaseTables({
       tags: {
         data: [
@@ -311,12 +312,10 @@ describe('updateInterests', () => {
     expect(chains.user_interests.insert).toHaveBeenCalledWith([
       {
         user_id: 'user-1',
-        interest: 'Wine & Cocktails',
         tag_id: 'tag-uuid-drinks-bars',
       },
       {
         user_id: 'user-1',
-        interest: 'Technology',
         tag_id: 'tag-uuid-interest-technology',
       },
     ])

@@ -152,9 +152,9 @@ export interface EventPhoto {
 export interface UserInterest {
   id:         string
   user_id:    string
-  interest:   string
-  // Phase 3 Migration 3 — required FK to public.tags. Kept alongside the
-  // legacy `interest` text column until follow-up F2 drops the text column.
+  // FK to public.tags. After F2-schema (drop_user_interests_interest_column),
+  // this is the sole carrier of interest semantics — the legacy `interest`
+  // text column is gone. Reads JOIN to tags.label for the display string.
   tag_id:     string
   created_at: string
 }
