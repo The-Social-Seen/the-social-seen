@@ -1,6 +1,15 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
+
+// next/navigation: Footer reads usePathname to self-hide on /admin/*.
+// Default to '/' so the existing tests (which don't care about pathname)
+// see a non-admin route and Footer renders normally.
+vi.mock('next/navigation', () => ({
+  usePathname: vi.fn(() => '/'),
+}))
+
+import { usePathname } from 'next/navigation'
 
 // The newsletter signup form inside the footer uses TurnstileWidget,
 // which consumes the ThemeProvider context. Mock both rather than
@@ -99,5 +108,24 @@ describe('Footer', () => {
   it('renders updated tagline copy', () => {
     render(<Footer />)
     expect(screen.getByText(/curated experiences for london/i)).toBeTruthy()
+  })
+})
+
+describe('Footer — admin route hiding', () => {
+  beforeEach(() => {
+    vi.mocked(usePathname).mockReturnValue('/')
+  })
+
+  it('renders nothing when pathname starts with /admin', () => {
+    vi.mocked(usePathname).mockReturnValue('/admin/events')
+    const { container } = render(<Footer />)
+    expect(container.firstChild).toBeNull()
+    expect(container.querySelector('footer')).toBeNull()
+  })
+
+  it('renders the public footer on non-admin paths', () => {
+    vi.mocked(usePathname).mockReturnValue('/events')
+    const { container } = render(<Footer />)
+    expect(container.querySelector('footer')).toBeTruthy()
   })
 })
