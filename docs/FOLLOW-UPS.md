@@ -92,6 +92,18 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 **Action:** TBD by post-mortem write-up — likely retry with backoff, distinct error surface for "Stripe rejects vs Stripe unreachable", and a Sentry tag matching `surface: 'createPaidCheckout'` for filterable triage.
 **Priority:** **HIGH — production reliability** for the paid-booking path.
 
+### Stripe live-mode "Could not start checkout" — diagnose
+**Source:** Mid-session 2026-04-27 — user swapped Vercel Production env from test keys to live keys, paid-booking flow returned the generic "Could not start checkout" toast at the redirect step. Deferred to finish the Member Data Layer; never resumed.
+**Last known state:** Live `sk_live_*` + `pk_live_*` + a live-mode `whsec_*` configured on Vercel Production scope. Test keys still on Preview + local. Vercel redeployed. Booking attempt failed.
+**Rationale:** The catch block in `createPaidCheckout` already wires the underlying error into Sentry tagged `surface: 'createPaidCheckout'` (PR #51). The actual exception text from the failed live-mode attempt is in Sentry — open it, read the message, fix.
+**Likely causes (ranked):**
+1. **Live-mode account not fully activated.** Stripe rejects with `StripeInvalidRequestError: Your account cannot currently make live charges` until ID + bank details verification completes. Fix: complete activation in Stripe Dashboard.
+2. **Live webhook signing-secret mismatch.** Wouldn't fail at session creation though, only at the webhook receipt step — so unlikely this error.
+3. **Mixed key modes** — live `sk_` paired with test `pk_` (or vice versa). Stripe rejects with `StripeAuthenticationError`. Fix: reconcile env vars on Vercel Production.
+4. **Live-mode Stripe Dashboard branding/receipts not configured.** Cosmetic, doesn't fail the redirect itself but confirms separate-mode-config awareness.
+**Action:** Open Sentry → filter `surface:createPaidCheckout` → grab the most recent live-mode event → paste the exception name + message. From there the fix is almost certainly env-var or Stripe-dashboard-side, not code.
+**Priority:** **HIGH — blocks live paid bookings** (test mode still works fine).
+
 ### `email_verified` reconciliation path
 **Source:** P2-3 backend handover.
 **Rationale:** `verifyEmailOtp()` soft-succeeds if the DB update to `profiles.email_verified = true` fails after Supabase already accepted the OTP. User sees success but their flag is still false; they can't book until they verify again.
