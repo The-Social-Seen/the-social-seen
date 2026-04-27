@@ -673,6 +673,14 @@ describe('F1b-schema — drop migration source-text shape', () => {
       /DROP\s+FUNCTION\s+IF\s+EXISTS\s+public\._tag_slug_to_legacy_category\s*\(\s*text\s*\)/i,
     ],
     [
+      'DROP INDEX idx_events_category',
+      // Required before DROP COLUMN — the index from migration 003 depends
+      // on `events.category`. Postgres rejects DROP COLUMN with SQLSTATE
+      // 2BP01 if the index isn't dropped first. Discovered when CI Path B
+      // hit this on the first F1b-schema apply attempt.
+      /DROP\s+INDEX\s+IF\s+EXISTS\s+public\.idx_events_category/i,
+    ],
+    [
       'ALTER TABLE events DROP COLUMN category',
       /ALTER\s+TABLE\s+public\.events\s+DROP\s+COLUMN\s+IF\s+EXISTS\s+category/i,
     ],
@@ -738,11 +746,11 @@ describe('F1b-schema — drop migration source-text shape', () => {
         `DDL DROP without IF EXISTS guard at line ${i + 1} — got: ${stmt.slice(0, 100)}`,
       ).toMatch(/IF\s+EXISTS/i)
     }
-    // Sanity: we expect at least 5 line-anchored DDL DROPs. Real F1b-
+    // Sanity: we expect at least 6 line-anchored DDL DROPs. Real F1b-
     // schema migration has 2 triggers + 2 trigger fns + 1 helper fn +
-    // 1 type = 6. (The column drop is `ALTER TABLE … DROP COLUMN`,
-    // not a top-level DROP, so it doesn't match this regex — it has
-    // its own dedicated test above.)
-    expect(saw).toBeGreaterThanOrEqual(5)
+    // 1 index + 1 type = 7. (The column drop is `ALTER TABLE … DROP
+    // COLUMN`, not a top-level DROP, so it doesn't match this regex —
+    // it has its own dedicated test above.)
+    expect(saw).toBeGreaterThanOrEqual(6)
   })
 })

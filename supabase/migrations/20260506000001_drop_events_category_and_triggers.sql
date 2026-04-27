@@ -110,6 +110,15 @@ DROP FUNCTION IF EXISTS public._tag_slug_to_legacy_category(text);
 -- ║ 4. Drop the column                                                         ║
 -- ╚═══════════════════════════════════════════════════════════════════════════╝
 
+-- The 003_create_events.sql migration also created a B-tree index
+-- `idx_events_category` on `events(category)` for the legacy filter UI.
+-- Postgres won't drop the column while a dependent index still references
+-- it (SQLSTATE 2BP01). Drop the index first, then the column. The index
+-- is no longer needed — F1a/F1b-app moved the filter UI to read
+-- `event_tags.is_primary` joined to `tags.slug`, which has its own
+-- unique index (`uq_event_tags_one_primary`) under W2+W3.
+DROP INDEX IF EXISTS public.idx_events_category;
+
 ALTER TABLE public.events DROP COLUMN IF EXISTS category;
 
 -- ╔═══════════════════════════════════════════════════════════════════════════╗
