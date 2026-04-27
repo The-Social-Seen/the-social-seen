@@ -35,21 +35,33 @@
 --        • _tag_slug_to_legacy_category(text)
 --      (No matching enum→slug helper exists — that direction lived inline
 --      in _sync_primary_tag_from_category as a CASE expression.)
---   4. Drop the column:
+--   4. Drop the events.category dependents:
+--        • idx_events_category    (B-tree index from Migration 003)
+--        • event_with_stats view  (from Migration 011) — the view's
+--          SELECT e.* expansion at view-creation time bound an internal
+--          column reference to events.category; Postgres rejects the
+--          column drop while the view holds that reference.
+--      Both blockers fail the column drop with SQLSTATE 2BP01 if not
+--      pre-dropped (caught the hard way during CI of this migration).
+--   5. Drop the column:
 --        • events.category
---   5. Drop the enum type:
+--   6. Recreate the event_with_stats view with the SELECT body verbatim
+--      from Migration 011 (e.* now expands without `category`).
+--   7. Drop the enum type:
 --        • public.event_category
 --
 -- After this migration, event_tags.is_primary = true is the SOLE source of
 -- truth for an event's primary categorisation. The 15-tag canonical
 -- taxonomy in `tags` (seeded by Migration 2) replaces the 9-value legacy
--- enum.
+-- enum. The event_with_stats view returns the same shape minus `category`
+-- — F1a's primary_tag JOIN is the read path for that field anyway.
 --
 -- ── Anon visibility ─────────────────────────────────────────────────────────
 -- N/A — this is a schema-level change. The `events` table's anon GRANT
 -- previously included `category` implicitly via the table-level GRANT;
 -- after the column drops, that implicit grant covers strictly fewer
--- columns. No new exposure.
+-- columns. The recreated view inherits the underlying tables' RLS so
+-- anon visibility on event_with_stats is unchanged. No new exposure.
 --
 -- ── Drop order ──────────────────────────────────────────────────────────────
 -- Postgres drops dependents before dependencies. We do it explicitly to
@@ -59,11 +71,19 @@
 --   2. Trigger functions reference the enum (`category::text` casts and
 --      `event_category` parameter types) → drop next.
 --   3. The slug→enum helper RETURNS event_category → drop next.
---   4. The events.category column is typed as event_category → drop next.
---   5. The event_category type now has zero dependents → drop last.
+--   4. idx_events_category indexes events(category) → drop next.
+--   5. event_with_stats view holds an `e.*`-expanded reference to
+--      events.category → drop next (will be recreated post-column-drop).
+--   6. events.category column is typed as event_category → drop next.
+--   7. Recreate event_with_stats view (e.* now resolves without
+--      `category`) → before the type drop so any post-apply consumer
+--      hitting the view sees the new shape immediately.
+--   8. The event_category type now has zero dependents → drop last.
 --
--- Each statement is IF EXISTS for idempotency — re-running this migration
--- after a successful apply is a no-op.
+-- Each statement is IF EXISTS / verbatim CREATE for idempotency —
+-- re-running this migration after a successful apply is a no-op for the
+-- DROPs and a no-op-ish recreate for the view (CREATE VIEW errors if it
+-- exists, but we DROP IF EXISTS just before, so the pair is idempotent).
 --
 -- ── Safety / blast radius ───────────────────────────────────────────────────
 -- DESTRUCTIVE. Once this lands, the `events.category` column is gone and
@@ -107,7 +127,7 @@ DROP FUNCTION IF EXISTS public._sync_category_from_primary_tag();
 DROP FUNCTION IF EXISTS public._tag_slug_to_legacy_category(text);
 
 -- ╔═══════════════════════════════════════════════════════════════════════════╗
--- ║ 4. Drop the column                                                         ║
+-- ║ 4. Drop events.category dependents (index + view)                          ║
 -- ╚═══════════════════════════════════════════════════════════════════════════╝
 
 -- The 003_create_events.sql migration also created a B-tree index
@@ -119,16 +139,68 @@ DROP FUNCTION IF EXISTS public._tag_slug_to_legacy_category(text);
 -- unique index (`uq_event_tags_one_primary`) under W2+W3.
 DROP INDEX IF EXISTS public.idx_events_category;
 
+-- Migration 011 (20260402000011_create_views.sql) created the
+-- event_with_stats view as `SELECT e.*, … FROM public.events e LEFT
+-- JOIN …`. Postgres expands `e.*` at view-creation time, so the view's
+-- internal column list bound a reference to events.category — even
+-- though the SQL never names it explicitly. CREATE OR REPLACE VIEW
+-- can't change a resolved column list, so the only fix is drop, drop,
+-- recreate. The recreation runs in section 6 below; this DROP must
+-- come before the column drop.
+DROP VIEW IF EXISTS public.event_with_stats;
+
+-- ╔═══════════════════════════════════════════════════════════════════════════╗
+-- ║ 5. Drop the column                                                         ║
+-- ╚═══════════════════════════════════════════════════════════════════════════╝
+
 ALTER TABLE public.events DROP COLUMN IF EXISTS category;
 
 -- ╔═══════════════════════════════════════════════════════════════════════════╗
--- ║ 5. Drop the enum type                                                      ║
+-- ║ 6. Recreate event_with_stats view                                          ║
+-- ╚═══════════════════════════════════════════════════════════════════════════╝
+
+-- Body verbatim from Migration 011 lines 7-31 (the SELECT and onward).
+-- We use plain `CREATE VIEW` (not `CREATE OR REPLACE`) because we
+-- explicitly dropped it in section 4 above — this pair (DROP + CREATE)
+-- is idempotent under re-apply. `e.*` now resolves to the events row
+-- shape MINUS `category`. Members read primary_tag.label via the F1a
+-- JOIN on event_tags + tags; the view's column set is no longer a
+-- consumer of events.category in any case.
+CREATE VIEW public.event_with_stats AS
+SELECT
+  e.*,
+  COALESCE(bc.confirmed_count, 0)  AS confirmed_count,
+  COALESCE(rc.avg_rating, 0)       AS avg_rating,
+  COALESCE(rc.review_count, 0)     AS review_count,
+  CASE
+    WHEN e.capacity IS NULL THEN NULL
+    ELSE GREATEST(e.capacity - COALESCE(bc.confirmed_count, 0), 0)
+  END AS spots_left
+FROM public.events e
+LEFT JOIN (
+  SELECT event_id, COUNT(*) AS confirmed_count
+  FROM public.bookings
+  WHERE status = 'confirmed' AND deleted_at IS NULL
+  GROUP BY event_id
+) bc ON bc.event_id = e.id
+LEFT JOIN (
+  SELECT event_id,
+         AVG(rating)::numeric(3,2) AS avg_rating,
+         COUNT(*)                  AS review_count
+  FROM public.event_reviews
+  WHERE is_visible = true
+  GROUP BY event_id
+) rc ON rc.event_id = e.id
+WHERE e.deleted_at IS NULL;
+
+-- ╔═══════════════════════════════════════════════════════════════════════════╗
+-- ║ 7. Drop the enum type                                                      ║
 -- ╚═══════════════════════════════════════════════════════════════════════════╝
 
 DROP TYPE IF EXISTS public.event_category;
 
 -- ╔═══════════════════════════════════════════════════════════════════════════╗
--- ║ 6. Defensive post-apply verification                                       ║
+-- ║ 8. Defensive post-apply verification                                       ║
 -- ╚═══════════════════════════════════════════════════════════════════════════╝
 
 -- If any of the four artefacts are still present after the DROPs above,
