@@ -103,7 +103,6 @@ const mockBookingRow = {
       end_time: '2026-05-10T22:00:00Z',
       venue_name: 'The Cellar',
       image_url: '/img/wine.jpg',
-      category: 'dining',
       dress_code: 'Smart Casual',
     },
   ],

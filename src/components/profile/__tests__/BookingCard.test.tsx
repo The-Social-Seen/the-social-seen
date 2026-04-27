@@ -55,7 +55,6 @@ function makeBooking(overrides: Partial<BookingWithEvent> = {}): BookingWithEven
       short_description: 'A short description',
       venue_address: '1 London Rd',
       image_url: 'https://example.com/wine.jpg',
-      category: 'dining',
       dress_code: 'Smart Casual',
       primary_tag: { slug: 'dining-supper-clubs', label: 'Dining & Supper Clubs' },
     },

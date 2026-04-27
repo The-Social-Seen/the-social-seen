@@ -15,7 +15,6 @@ function makeEvent(overrides: Partial<EventDetail> = {}): EventDetail {
     venue_address: '8 Southwark St',
     postcode: 'SE1 1TL',
     venue_revealed: true,
-    category: 'drinks',
     price: 3500,
     capacity: 30,
     image_url: null,

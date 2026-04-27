@@ -70,7 +70,6 @@ function makeEvent(overrides: Partial<EventWithStats> = {}): EventWithStats {
     venue_address: '1 London Rd',
     venue_revealed: true,
     postcode: null,
-    category: 'drinks',
     price: 0,
     capacity: 30,
     image_url: 'https://example.com/test.jpg',
@@ -96,22 +95,22 @@ function makeEvent(overrides: Partial<EventWithStats> = {}): EventWithStats {
 const testEvents: EventWithStats[] = [
   makeEvent({
     id: 'e1', slug: 'wine-tasting', title: 'Wine Tasting',
-    category: 'drinks', price: 0, date_time: '2036-01-01T19:00:00Z',
+    price: 0, date_time: '2036-01-01T19:00:00Z',
     primary_tag: { slug: 'drinks-bars', label: 'Drinks & Bars' },
   }),
   makeEvent({
     id: 'e2', slug: 'fine-dining', title: 'Fine Dining',
-    category: 'dining', price: 5000, date_time: '2036-02-01T19:00:00Z',
+    price: 5000, date_time: '2036-02-01T19:00:00Z',
     primary_tag: { slug: 'dining-supper-clubs', label: 'Dining & Supper Clubs' },
   }),
   makeEvent({
     id: 'e3', slug: 'art-show', title: 'Art Show',
-    category: 'cultural', price: 3000, date_time: '2036-03-01T19:00:00Z',
+    price: 3000, date_time: '2036-03-01T19:00:00Z',
     primary_tag: { slug: 'galleries-museums', label: 'Galleries & Museums' },
   }),
   makeEvent({
     id: 'e4', slug: 'workshops-event', title: 'Free Workshops',
-    category: 'workshops', price: 0, date_time: '2036-04-01T19:00:00Z',
+    price: 0, date_time: '2036-04-01T19:00:00Z',
     primary_tag: { slug: 'workshops-masterclasses', label: 'Workshops & Masterclasses' },
   }),
 ]

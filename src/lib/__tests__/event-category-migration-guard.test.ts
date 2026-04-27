@@ -8,14 +8,16 @@
 // migrated the 4 member-facing event components and added the ?tag=
 // filter contract; F1b-app migrated the 3 remaining carry-overs
 // (getRelatedEvents query + caller, BookingCard chip, EventsTable chip).
+// F1b-schema (Migration 20260506000001) dropped the column, the enum
+// type, the bidirectional sync triggers, and the slug→enum helper.
 //
-// Post-F1b-app invariant — the only place in `src/` (outside tests and
-// the small allowlist below) that may legitimately reference
-// `event.category`, `categoryLabel`, `CATEGORY_LABELS`, or the
-// `EventCategory` type is `src/types/index.ts`. That file holds the
-// legacy enum + helper definitions. F1b-schema retires them all in one
-// shot (drop the column, drop the enum, remove the helpers, retire the
-// type) once nothing references them.
+// Post-F1b-schema invariant — the legacy `EventCategory` type,
+// `CATEGORY_LABELS` map, and `categoryLabel` helper have all been
+// removed from `src/types/index.ts`. Production code anywhere in `src/`
+// must not reference `event.category`, `categoryLabel`, or
+// `CATEGORY_LABELS` — none of them exist anymore. The `EventCategory`
+// type is also gone. Only the small allowlist below covers files where
+// the WORD `category` still appears for unrelated reasons.
 //
 // SCAN_DIRS — every directory that holds production code reading event
 // data. The guard fails loudly if any production file outside the
@@ -23,15 +25,17 @@
 //   - src/components/events/    — F1a-migrated 4 components
 //   - src/components/admin/     — F1b-app-migrated EventsTable
 //   - src/components/profile/   — F1b-app-migrated BookingCard
-//   - src/lib/supabase/queries/ — getRelatedEvents now takes a slug
-//   - src/app/events/           — caller of getRelatedEvents
+//   - src/lib/supabase/queries/ — getRelatedEvents takes a slug
+//   - src/app/events/           — caller of getRelatedEvents + the
+//                                 ?category= soft-fallback redirect
 //
-// `src/types/index.ts` is intentionally NOT scanned — the `EventCategory`
-// type, `CATEGORY_LABELS` map, `Event.category` field, and `categoryLabel`
-// helper definitions all live there until F1b-schema retires them. A
-// future tester pass after F1b-schema can either delete this guard
-// outright or add `src/types/` to SCAN_DIRS (no allowlist needed once
-// the legacy artefacts are gone).
+// `src/types/index.ts` is intentionally still NOT scanned — even though
+// the legacy artefacts are gone, the file's docstring comments mention
+// `events.category` historically (explaining why fields are shaped the
+// way they are). Scanning it would force pruning otherwise-useful
+// migration-history annotations. If those annotations are removed in
+// future, add `src/types/` to SCAN_DIRS — there's no longer any
+// production code that needs an exception there.
 //
 // Plus three edge-case checks for the things the rendering tests don't
 // exercise: the ?category= → ?tag= soft-fallback redirect contract, the
@@ -54,43 +58,42 @@ const SCAN_DIRS = [
 
 // Allowlist — files where the WORD `category` legitimately appears for
 // reasons unrelated to the legacy events.category enum. Each entry has
-// to name a wave that retires it (or be marked permanent if it covers
-// an entirely different concept).
+// to name why it's exempt (or be marked permanent if it covers an
+// entirely different concept).
 //
 // The allowlist is a controlled exception, not a backdoor — any new
-// entry must come with a comment explaining why the file is exempt and
-// when (or never) it retires.
+// entry must come with a comment explaining why the file is exempt.
+//
+// F1b-schema trim: profile.ts and reviews.ts were previously allowlisted
+// because their .select() lists included the `category` column to
+// populate Pick<> types. F1b-schema dropped the column AND the SELECT
+// entries — both files are now category-free and have been removed
+// from this allowlist.
 const ALLOWLIST = new Set<string>([
-  // F1b-schema retires:
-  // - getMyBookings still SELECTs the `category` column to populate the
-  //   BookingWithEvent.event Pick<>. The column drops in F1b-schema, so
-  //   this SELECT and the type Pick<> retire together.
-  'src/lib/supabase/queries/profile.ts',
-  // - getReviewableEvents same situation — SELECTs `category` so the
-  //   ReviewableEvent type Pick<> stays valid until F1b-schema.
-  'src/lib/supabase/queries/reviews.ts',
-  // - /events page reads `?category=<enum>` URL search-param for the
-  //   F1a soft-fallback redirect to `?tag=<slug>`. The redirect path
-  //   stays alive even after F1b-schema (old shared links live a long
-  //   time); the param value is matched against `EventCategory` literal
-  //   strings via primarySlugForLegacyCategory(). When F1b-schema drops
-  //   the enum type, the helper switches to a string keyset of the
-  //   original 9 values and this allowlist entry can be removed.
+  // /events page reads `?category=<value>` URL search-param for the F1a
+  // soft-fallback redirect to `?tag=<slug>`. Old shared links from
+  // before F1a (emails, Google search, social posts) keep arriving with
+  // legacy enum strings as the param value forever — the redirect path
+  // is permanent UX, not tied to any DB column.
+  // Permanent.
   'src/app/events/page.tsx',
-  // Permanent — unrelated concept:
-  // - EmailPreferencesSection's `category` prop is NotificationCategory
-  //   from the email preferences subsystem (review_requests,
-  //   profile_nudges, admin_announcements). Different domain entirely;
-  //   the regex would false-positive on every render path.
+  // EmailPreferencesSection's `category` prop is NotificationCategory
+  // from the email preferences subsystem (review_requests,
+  // profile_nudges, admin_announcements). Unrelated domain entirely;
+  // the regex would false-positive on every render path.
+  // Permanent.
   'src/components/profile/EmailPreferencesSection.tsx',
-  // - TagPicker JSX user-copy "(one — the event's main category)".
-  //   Plain UI text in a help-string; not a code read. Stays.
+  // TagPicker JSX user-copy "(one — the event's main category)" — plain
+  // UI text in a help-string, not a code read.
+  // Permanent.
   'src/components/admin/TagPicker.tsx',
 ])
 
 // Patterns chosen from the prompt's grep brief plus a couple of
 // belt-and-braces variants. All are case-sensitive on `category` so they
-// don't match `EventCategory` (the type name, which we keep until F1b).
+// don't match `Category` in unrelated identifiers like `NotificationCategory`.
+// (The original `EventCategory` type was retired in F1b-schema along with
+// the rest of the legacy artefacts.)
 //
 //   1. `\.category\b` — any property access ending in .category. Covers
 //      `event.category`, `e.category`, `relatedEvent.category`, etc.
@@ -619,5 +622,135 @@ describe('F1b-app — getRelatedEvents primary-tag JOIN', () => {
       body,
       "getRelatedEvents body should NOT filter by the legacy events.category column anymore",
     ).not.toMatch(/\.eq\(\s*['"]category['"]/)
+  })
+})
+
+// ── Test 6 — F1b-schema migration source-text shape (lockstep) ─────────────
+
+describe('F1b-schema — drop migration source-text shape', () => {
+  // The F1b-schema migration is a DESTRUCTIVE one-shot drop: column,
+  // enum, two triggers, two trigger fns, one helper. Its safety net is
+  // the defensive RAISE EXCEPTION block at the end. A future PR that
+  // weakens any of those statements (removes an IF EXISTS, drops the
+  // verification block, forgets to drop one of the artefacts) would
+  // silently leave dead schema behind on hosted — which Postgres would
+  // happily ignore until something tries to use it.
+  //
+  // These source-text assertions lock in the migration's SHAPE so that
+  // kind of weakening surfaces here, with a named diagnostic, rather
+  // than as a half-applied schema on production. Pattern mirrors the
+  // W2+W3 migration-2 lockstep test.
+
+  const MIGRATION_PATH = resolve(
+    REPO_ROOT,
+    'supabase/migrations/20260506000001_drop_events_category_and_triggers.sql',
+  )
+  const MIGRATION_SQL = readFileSync(MIGRATION_PATH, 'utf-8')
+
+  // The 5 DROP statements + their target object names. Each pattern is
+  // case-insensitive on the SQL keywords (DROP / TRIGGER / FUNCTION etc.)
+  // and tolerates whitespace / newlines, but locks the IF EXISTS clause
+  // and the fully-qualified object name down.
+  const DROP_STATEMENTS: ReadonlyArray<readonly [string, RegExp]> = [
+    [
+      'DROP TRIGGER trg_sync_primary_tag_from_category ON public.events',
+      /DROP\s+TRIGGER\s+IF\s+EXISTS\s+trg_sync_primary_tag_from_category\s+ON\s+public\.events/i,
+    ],
+    [
+      'DROP TRIGGER trg_sync_category_from_primary_tag ON public.event_tags',
+      /DROP\s+TRIGGER\s+IF\s+EXISTS\s+trg_sync_category_from_primary_tag\s+ON\s+public\.event_tags/i,
+    ],
+    [
+      'DROP FUNCTION _sync_primary_tag_from_category()',
+      /DROP\s+FUNCTION\s+IF\s+EXISTS\s+public\._sync_primary_tag_from_category\s*\(\s*\)/i,
+    ],
+    [
+      'DROP FUNCTION _sync_category_from_primary_tag()',
+      /DROP\s+FUNCTION\s+IF\s+EXISTS\s+public\._sync_category_from_primary_tag\s*\(\s*\)/i,
+    ],
+    [
+      'DROP FUNCTION _tag_slug_to_legacy_category(text)',
+      /DROP\s+FUNCTION\s+IF\s+EXISTS\s+public\._tag_slug_to_legacy_category\s*\(\s*text\s*\)/i,
+    ],
+    [
+      'DROP INDEX idx_events_category',
+      // Required before DROP COLUMN — the index from migration 003 depends
+      // on `events.category`. Postgres rejects DROP COLUMN with SQLSTATE
+      // 2BP01 if the index isn't dropped first. Discovered when CI Path B
+      // hit this on the first F1b-schema apply attempt.
+      /DROP\s+INDEX\s+IF\s+EXISTS\s+public\.idx_events_category/i,
+    ],
+    [
+      'ALTER TABLE events DROP COLUMN category',
+      /ALTER\s+TABLE\s+public\.events\s+DROP\s+COLUMN\s+IF\s+EXISTS\s+category/i,
+    ],
+    [
+      'DROP TYPE event_category',
+      /DROP\s+TYPE\s+IF\s+EXISTS\s+public\.event_category/i,
+    ],
+  ]
+
+  for (const [label, re] of DROP_STATEMENTS) {
+    it(`migration contains ${label} (with IF EXISTS for idempotency)`, () => {
+      expect(
+        MIGRATION_SQL,
+        `Missing or weakened DROP statement — expected /${re.source}/`,
+      ).toMatch(re)
+    })
+  }
+
+  it('migration has a defensive DO $$ … END $$; verification block at the end', () => {
+    // The block re-checks information_schema / pg_type / pg_trigger /
+    // pg_proc and RAISE EXCEPTIONs if any of the four artefacts (column,
+    // type, two triggers) survive. Weakening this turns a half-applied
+    // schema into a silent success.
+    expect(MIGRATION_SQL).toMatch(/DO\s+\$\$\s*BEGIN[\s\S]+END\s+\$\$;/)
+    expect(MIGRATION_SQL).toMatch(/RAISE\s+EXCEPTION/i)
+  })
+
+  it('verification block names all 4 artefact-survival checks', () => {
+    // Each of these strings must appear inside the verification block —
+    // they're the explicit catalog probes for the four artefacts. If a
+    // future "cleanup" deletes one of the IF EXISTS branches, this fails.
+    expect(MIGRATION_SQL).toMatch(/events\.category column still exists/i)
+    expect(MIGRATION_SQL).toMatch(/event_category type still exists/i)
+    expect(MIGRATION_SQL).toMatch(/trg_sync_primary_tag_from_category/i)
+    expect(MIGRATION_SQL).toMatch(/trg_sync_category_from_primary_tag/i)
+  })
+
+  it('migration uses IF EXISTS uniformly (sanity — no DROP without the guard)', () => {
+    // Iterate every line that BEGINS with `DROP <KEYWORD>` (after any
+    // leading whitespace) and assert the rest of the statement contains
+    // IF EXISTS. Anchoring to start-of-line skips the "DROP COLUMN" /
+    // "DROP TYPE" wording inside RAISE EXCEPTION string literals
+    // (those mentions are mid-line, indented inside a SQL string).
+    const lines = MIGRATION_SQL.split('\n')
+    const ddlStarter =
+      /^\s*DROP\s+(TRIGGER|FUNCTION|TABLE|TYPE|INDEX|VIEW|POLICY|SCHEMA)\b/i
+    let saw = 0
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (!ddlStarter.test(line)) continue
+      // Capture the statement (this line + continuations until the
+      // closing semicolon) so we can scan it for IF EXISTS even if the
+      // statement spans lines.
+      let stmt = line
+      let j = i
+      while (!stmt.includes(';') && j + 1 < lines.length) {
+        j += 1
+        stmt += '\n' + lines[j]
+      }
+      saw++
+      expect(
+        stmt,
+        `DDL DROP without IF EXISTS guard at line ${i + 1} — got: ${stmt.slice(0, 100)}`,
+      ).toMatch(/IF\s+EXISTS/i)
+    }
+    // Sanity: we expect at least 6 line-anchored DDL DROPs. Real F1b-
+    // schema migration has 2 triggers + 2 trigger fns + 1 helper fn +
+    // 1 index + 1 type = 7. (The column drop is `ALTER TABLE … DROP
+    // COLUMN`, not a top-level DROP, so it doesn't match this regex —
+    // it has its own dedicated test above.)
+    expect(saw).toBeGreaterThanOrEqual(6)
   })
 })

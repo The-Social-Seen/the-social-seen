@@ -8,6 +8,17 @@
 --   Members: charlotte.davis@gmail.com, james.hartley@outlook.com,
 --            priya.sharma@gmail.com, oliver.bennett@me.com,
 --            sophie.williams@gmail.com, marcus.chen@gmail.com
+--
+-- ── Lockstep with Migration 2's per-event tag backfill ─────────────────────
+-- After F1b-schema (Migration 20260506000001) dropped `events.category`
+-- and the bidirectional sync trigger that auto-populated `event_tags`
+-- from it, this seed maintains explicit `event_tags` rows (Step 4.5
+-- below). The 33 primary tag mappings + 17 secondary tag mappings here
+-- mirror Migration 2's per-event backfill at lines 261–445. Any change
+-- to one MUST propagate to the other — admin event-create code paths
+-- write event_tags directly, but a fresh `supabase db reset` (CI, new
+-- local Postgres, restored backup) relies on this seed to populate the
+-- 33 baseline events. Drift = empty member-facing pages on fresh reset.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 BEGIN;
@@ -321,7 +332,7 @@ DELETE FROM public.events;
 INSERT INTO public.events (
   id, slug, title, description, short_description,
   date_time, end_time, venue_name, venue_address,
-  category, price, capacity, image_url, dress_code,
+  price, capacity, image_url, dress_code,
   is_published, is_cancelled
 ) VALUES
 
@@ -342,7 +353,6 @@ This was the first Social Seen gathering of 2024 — small enough to feel like a
   '2024-01-19 22:00:00+00',
   'Fairgame',
   '14 Water Street, Canary Wharf, London E14 5GX',
-  'drinks',
   0,
   20,
   'https://images.unsplash.com/photo-1511512578047-dfb367046420?w=800&q=80',
@@ -365,7 +375,6 @@ The backdrop helped. Covent Garden in the evening has a specific energy: tourist
   '2024-02-09 22:30:00+00',
   'London Cocktail Club',
   '4 Upper St Martin''s Lane, London WC2H 9NY',
-  'drinks',
   0,
   35,
   'https://images.unsplash.com/photo-1527661591475-527312dd65f5?w=800&q=80',
@@ -388,7 +397,6 @@ The group moved to a pub in the surrounding streets afterwards, the kind of Soho
   '2024-03-08 21:30:00+00',
   'Whistle Punks Urban Axe Throwing',
   '28 Arundel Street, London WC2R 3DQ',
-  'sport',
   2500,
   45,
   'https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?w=800&q=80',
@@ -411,7 +419,6 @@ This was as much a milestone as a party — proof that the group had grown to th
   '2024-04-12 23:00:00+00',
   'Stereo',
   '14 King Street, Covent Garden, London WC2E 8JD',
-  'drinks',
   0,
   70,
   'https://images.unsplash.com/photo-1570051008600-b34baa49e751?w=800&q=80',
@@ -434,7 +441,6 @@ For first-time attendees, rooftop events have a particular advantage: the view p
   '2024-05-17 21:30:00+00',
   'LSQ London',
   '1 Leicester Square, London WC2H 7NA',
-  'drinks',
   0,
   32,
   'https://images.unsplash.com/photo-1516912481808-3406841bd33c?w=800&q=80',
@@ -457,7 +463,6 @@ For those who''d been with The Social Seen from the early months, this felt like
   '2024-08-08 23:00:00+00',
   'Luna Gin Bar',
   '33 Wellington Street, Covent Garden, London WC2E 7BN',
-  'drinks',
   0,
   75,
   'https://images.unsplash.com/photo-1542206395-9feb3edaa68d?w=800&q=80',
@@ -480,7 +485,6 @@ The group moved to The Little Scarlett Door afterwards — a members'' bar on a 
   '2024-09-13 23:00:00+00',
   'Flight Club Soho',
   '2 Bedford Avenue, London WC1B 3RA',
-  'sport',
   2000,
   32,
   'https://images.unsplash.com/photo-1553361371-9b22f78e8b1d?w=800&q=80',
@@ -503,7 +507,6 @@ Twenty is the right number for a weekend away: large enough to ensure you''ll fi
   '2024-10-06 18:00:00+00',
   'Cotswolds Country House',
   'Great Rissington Farm, Great Rissington, Cheltenham GL54 2LL',
-  'cultural',
   25000,
   20,
   'https://images.unsplash.com/photo-1533929736458-ca588d08c8be?w=800&q=80',
@@ -526,7 +529,6 @@ South London members had been asking for an event closer to home since the sprin
   '2024-10-18 23:00:00+00',
   'Amiga Bar',
   '19 Old Town, Clapham, London SW4 0JT',
-  'drinks',
   0,
   42,
   'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=800&q=80',
@@ -549,7 +551,6 @@ Returning to London on the Monday felt, for many, like a small readjustment. The
   '2024-10-27 18:00:00+00',
   'Snowdonia National Park',
   'Pen-y-Pass YHA, Nant Gwynant, Caernarfon LL55 4NY',
-  'sport',
   15000,
   20,
   'https://images.unsplash.com/photo-1551632811-561732d1e306?w=800&q=80',
@@ -572,7 +573,6 @@ The Social Seen doesn''t often do formal, which is precisely why it works when i
   '2024-11-08 23:30:00+00',
   'The Reform Club',
   '104 Pall Mall, London SW1Y 5EW',
-  'dining',
   12500,
   40,
   'https://images.unsplash.com/photo-1519671482749-fd09be7ccebf?w=800&q=80',
@@ -595,7 +595,6 @@ Bonfire night in London is generally a loud, crowded, municipal affair. This was
   '2024-11-05 22:00:00+00',
   'Totteridge Cricket Club',
   '145 Totteridge Lane, London N20 8LY',
-  'cultural',
   1000,
   80,
   'https://images.unsplash.com/photo-1467810563316-b1af168c36a5?w=800&q=80',
@@ -618,7 +617,6 @@ Small events within The Social Seen serve a distinct function from the large one
   '2024-11-17 22:30:00+00',
   'The Bill Murray',
   '39 Queen''s Head Street, London N1 8NQ',
-  'cultural',
   2000,
   10,
   'https://images.unsplash.com/photo-1578662996442-48f60103fc96?w=800&q=80',
@@ -641,7 +639,6 @@ The drinks at the top were, as always, the reward for the climb: the Thames in b
   '2024-11-22 22:00:00+00',
   'Tate Modern',
   'Bankside, London SE1 9TG',
-  'cultural',
   0,
   30,
   'https://images.unsplash.com/photo-1526040652367-ac003a0475fe?w=800&q=80',
@@ -664,7 +661,6 @@ The evening moved through the gears it was designed for: cocktails and introduct
   '2024-12-13 01:00:00+00',
   'Tonteria',
   '7-12 Sloane Square, London SW1W 8EE',
-  'drinks',
   3500,
   100,
   'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=800&q=80',
@@ -687,7 +683,6 @@ What remains from this event is harder to articulate than a rooftop view or a go
   '2024-12-24 17:00:00+00',
   'Crisis Christmas Centre',
   '66 Commercial Street, London E1 6LT',
-  'cultural',
   0,
   20,
   'https://images.unsplash.com/photo-1593113630400-ea4288922702?w=800&q=80',
@@ -710,7 +705,6 @@ New Year''s gatherings carry particular weight at The Social Seen: the transitio
   '2025-01-29 22:00:00+00',
   'Leong''s Legends',
   '4 Macclesfield Street, London W1D 6AX',
-  'dining',
   2500,
   50,
   'https://images.unsplash.com/photo-1563245372-f21724e3856d?w=800&q=80',
@@ -733,7 +727,6 @@ What distinguishes this evening in retrospect is its lightness. It did not take 
   '2025-02-14 23:00:00+00',
   'Mr Fogg''s Residence',
   '15 Bruton Lane, Mayfair, London W1J 6JD',
-  'drinks',
   0,
   30,
   'https://images.unsplash.com/photo-1516450137517-162bfbeb8dba?w=800&q=80',
@@ -756,7 +749,6 @@ Breadstall has since become one of several venues the Social Seen returns to —
   '2025-02-27 22:00:00+00',
   'Breadstall',
   '30 Great Windmill Street, Soho, London W1D 7LR',
-  'dining',
   2000,
   40,
   'https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?w=800&q=80',
@@ -779,7 +771,6 @@ By Thursday, the group had developed the particular intimacy of people who have 
   '2025-02-15 20:00:00+00',
   'ClubMed St Moritz',
   'Via San Gian 6, 7500 St Moritz, Switzerland',
-  'sport',
   150000,
   15,
   'https://images.unsplash.com/photo-1551698618-1dfe5d97d256?w=800&q=80',
@@ -802,7 +793,6 @@ Some members had never heard of Oliver Heldens before the invite landed. Several
   '2025-03-15 02:00:00+00',
   'O2 Academy Brixton',
   '211 Stockwell Road, London SW9 9SL',
-  'music',
   3000,
   30,
   'https://images.unsplash.com/photo-1501281668745-f7f57925c3b4?w=800&q=80',
@@ -825,7 +815,6 @@ Mini golf serves the same social function as axe throwing — it creates stakes 
   '2025-04-11 22:00:00+00',
   'Swingers Wild Golf',
   '8 Bishopsgate, London EC2M 4QJ',
-  'sport',
   1500,
   30,
   'https://images.unsplash.com/photo-1587174486073-ae5e5cff23aa?w=800&q=80',
@@ -848,7 +837,6 @@ Twenty pounds is a notable price point — within reach, but enough to suggest t
   '2025-05-06 22:30:00+00',
   'Union Theatre',
   '229 Union Street, Southwark, London SE1 0LR',
-  'cultural',
   2000,
   20,
   'https://images.unsplash.com/photo-1507676184212-d03ab07a01bf?w=800&q=80',
@@ -871,7 +859,6 @@ Grasmere village provided lunch and the gravitational pull of good cake in a tea
   '2025-05-25 18:00:00+00',
   'Lake District National Park',
   'Glenridding Car Park, Glenridding, Penrith CA11 0PB',
-  'sport',
   20000,
   20,
   'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&q=80',
@@ -894,7 +881,6 @@ A summer social event at a polo ground exists on the spectrum between sport and 
   '2025-06-07 18:30:00+00',
   'Guards Polo Club',
   'Smith''s Lawn, Windsor Great Park, Windsor SL4 2HT',
-  'sport',
   5500,
   30,
   'https://images.unsplash.com/photo-1536064479547-7ee40b74b807?w=800&q=80',
@@ -917,7 +903,6 @@ The afternoon stretched until the light changed and the park''s closing announce
   '2025-06-21 18:30:00+00',
   'Regent''s Park',
   'Chester Road, London NW1 4NR',
-  'cultural',
   0,
   80,
   'https://images.unsplash.com/photo-1488841714725-bb4c32d1ac94?w=800&q=80',
@@ -940,7 +925,6 @@ Paloma held the evening well. The cocktails were specific and properly made. The
   '2025-09-19 23:00:00+00',
   'Paloma',
   '46 Thurloe Place, South Kensington, London SW7 2HP',
-  'drinks',
   0,
   50,
   'https://images.unsplash.com/photo-1470337458703-46ad1756a187?w=800&q=80',
@@ -963,7 +947,6 @@ The music did what good DJs do at this kind of event: started at a tempo that le
   '2025-11-01 02:00:00+00',
   'Cubanista',
   '2a Kensington High Street, London W8 4PT',
-  'music',
   2500,
   60,
   'https://images.unsplash.com/photo-1508361727343-ca787442dcd7?w=800&q=80',
@@ -986,7 +969,6 @@ The dancing was vigorous. The donations were generous. Several attendees mention
   '2025-11-08 00:00:00+00',
   'XOYO',
   '32-37 Cowper Street, London EC2A 4AP',
-  'music',
   2500,
   80,
   'https://images.unsplash.com/photo-1501386761578-eee929a30db4?w=800&q=80',
@@ -1009,7 +991,6 @@ Sunday evening in November has a specific London texture: the city quiet enough 
   '2025-11-23 21:00:00+00',
   'Hyde Park Winter Wonderland',
   'Hyde Park, London W2 2UH',
-  'cultural',
   0,
   50,
   'https://images.unsplash.com/photo-1545239351-ef35f43d514b?w=800&q=80',
@@ -1034,7 +1015,6 @@ The bar suits The Social Seen''s register well — smart but not formal, interes
   '2026-04-18 22:30:00+00',
   'Gambit Bar',
   '21 Bateman Street, Soho, London W1D 3AL',
-  'drinks',
   0,
   40,
   'https://images.unsplash.com/photo-1560250097-0b93528c311a?w=800&q=80',
@@ -1057,7 +1037,6 @@ Sloane Square in April — the neighbourhood at its most confident, the King''s 
   '2026-05-02 23:30:00+00',
   'The Knox',
   '25 Sloane Square, London SW1W 8AX',
-  'dining',
   0,
   50,
   'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=800&q=80',
@@ -1080,13 +1059,110 @@ Expect the kitchen to deliver what the address has always promised. Expect the b
   '2026-06-20 23:30:00+00',
   'Upstairs at Langan''s',
   '1 Stratton Street, Mayfair, London W1J 8LB',
-  'dining',
   8500,
   60,
   'https://images.unsplash.com/photo-1559339352-11d035aa65de?w=800&q=80',
   'Smart casual',
   true, false
 );
+
+-- ── Step 4.5: Event tags (primary + secondaries) ─────────────────────────────
+-- Before F1b-schema (Migration 20260506000001), Migration 2's per-event
+-- backfill populated `event_tags` from `events.category` via the
+-- bidirectional sync trigger. F1b-schema dropped the trigger and the
+-- column. The seed must now establish event_tags rows explicitly so
+-- member-facing queries (F1a INNER JOIN on event_tags.is_primary) return
+-- non-empty results in any fresh `supabase db reset` environment (CI,
+-- new local Postgres, restored backup).
+--
+-- LOCKSTEP: this mapping mirrors Migration 2's per-event backfill at
+-- 20260504000001_create_tags_and_event_tags.sql lines 261–445 (Step 1
+-- per-event overrides + Step 2 default fallback + Step 3 secondaries).
+-- Any change to one MUST propagate to the other.
+
+-- Primary tags — exactly one per event (33 rows, is_primary = true).
+-- Order: events 1..33 ascending. Comment shows the original legacy
+-- `category` enum for diff readability against Migration 2's CASE.
+INSERT INTO public.event_tags (event_id, tag_id, is_primary)
+SELECT v.event_id::uuid, t.id, true
+FROM (VALUES
+  -- Events with audited per-event overrides (M2 Step 1, 22 rows)
+  ('e1000000-0000-0000-0000-000000000001', 'activities-social-games'),  -- 01 Fairgame & Pizza            (was drinks)
+  ('e1000000-0000-0000-0000-000000000003', 'activities-social-games'),  -- 03 Axe Throwing & Drinks       (was sport)
+  ('e1000000-0000-0000-0000-000000000007', 'activities-social-games'),  -- 07 Flight Club + Little Scarlet (was sport)
+  ('e1000000-0000-0000-0000-000000000008', 'weekends-travel'),          -- 08 Cotswolds Weekend           (was cultural)
+  ('e1000000-0000-0000-0000-000000000010', 'weekends-travel'),          -- 10 Hiking in Snowdonia         (was sport)
+  ('e1000000-0000-0000-0000-000000000011', 'themed-socials'),           -- 11 Black Tie Pall Mall         (was dining)
+  ('e1000000-0000-0000-0000-000000000012', 'festivals-seasonal'),       -- 12 Fireworks Night Totteridge  (was cultural)
+  ('e1000000-0000-0000-0000-000000000013', 'theatre-comedy'),           -- 13 Comedy & Dinner Angel       (was cultural)
+  ('e1000000-0000-0000-0000-000000000014', 'galleries-museums'),        -- 14 Tate Late                   (was cultural)
+  ('e1000000-0000-0000-0000-000000000015', 'nightlife-dancing'),        -- 15 Christmas Party Tonteria    (was drinks)
+  ('e1000000-0000-0000-0000-000000000016', 'charity-volunteering'),     -- 16 Christmas Eve Crisis        (was cultural)
+  ('e1000000-0000-0000-0000-000000000018', 'themed-socials'),           -- 18 Valentine's Singles         (was drinks)
+  ('e1000000-0000-0000-0000-000000000020', 'weekends-travel'),          -- 20 Skiing in St Moritz         (was sport)
+  ('e1000000-0000-0000-0000-000000000021', 'live-music-gigs'),          -- 21 Oliver Heldens at O2 Brixton (was music)
+  ('e1000000-0000-0000-0000-000000000022', 'activities-social-games'),  -- 22 Mini Golf & Drinks          (was sport)
+  ('e1000000-0000-0000-0000-000000000023', 'theatre-comedy'),           -- 23 Queen of Wands Union Theatre (was cultural)
+  ('e1000000-0000-0000-0000-000000000024', 'weekends-travel'),          -- 24 Hiking Lake District        (was sport)
+  ('e1000000-0000-0000-0000-000000000025', 'festivals-seasonal'),       -- 25 Polo in the Park            (was sport)
+  ('e1000000-0000-0000-0000-000000000026', 'outdoor-picnics'),          -- 26 Picnic in Regent's Park     (was cultural)
+  ('e1000000-0000-0000-0000-000000000028', 'nightlife-dancing'),        -- 28 Halloween at Cubanista      (was music)
+  ('e1000000-0000-0000-0000-000000000029', 'charity-volunteering'),     -- 29 Charity 80s/90s Night       (was music)
+  ('e1000000-0000-0000-0000-000000000030', 'festivals-seasonal'),       -- 30 Winter Wonderland           (was cultural)
+  -- Events via M2 Step 2 default fallback (11 rows, no override needed)
+  ('e1000000-0000-0000-0000-000000000002', 'drinks-bars'),              -- 02 London Cocktail Club        (drinks → drinks-bars)
+  ('e1000000-0000-0000-0000-000000000004', 'drinks-bars'),              -- 04 (drinks → drinks-bars)
+  ('e1000000-0000-0000-0000-000000000005', 'drinks-bars'),              -- 05 (drinks → drinks-bars)
+  ('e1000000-0000-0000-0000-000000000006', 'drinks-bars'),              -- 06 (drinks → drinks-bars)
+  ('e1000000-0000-0000-0000-000000000009', 'drinks-bars'),              -- 09 (drinks → drinks-bars)
+  ('e1000000-0000-0000-0000-000000000017', 'dining-supper-clubs'),      -- 17 (dining → dining-supper-clubs)
+  ('e1000000-0000-0000-0000-000000000019', 'dining-supper-clubs'),      -- 19 Meet Over Pizza Breadstall  (dining → dining-supper-clubs)
+  ('e1000000-0000-0000-0000-000000000027', 'drinks-bars'),              -- 27 (drinks → drinks-bars)
+  ('e1000000-0000-0000-0000-000000000031', 'drinks-bars'),              -- 31 (drinks → drinks-bars)
+  ('e1000000-0000-0000-0000-000000000032', 'dining-supper-clubs'),      -- 32 (dining → dining-supper-clubs)
+  ('e1000000-0000-0000-0000-000000000033', 'dining-supper-clubs')       -- 33 Summer Party Upstairs Langan's (dining → dining-supper-clubs)
+) AS v(event_id, slug)
+JOIN public.tags t ON t.slug = v.slug;
+
+-- Secondary tags — 17 rows across 14 events (verbatim from M2 Step 3
+-- at lines 408–438; the comment-prefixed event-id list mirrors that
+-- block's order so a side-by-side diff makes drift obvious).
+INSERT INTO public.event_tags (event_id, tag_id, is_primary)
+SELECT v.event_id::uuid, t.id, false
+FROM (VALUES
+  -- Event 01 (Fairgame & Pizza) → drinks-bars + dining-supper-clubs
+  ('e1000000-0000-0000-0000-000000000001', 'drinks-bars'),
+  ('e1000000-0000-0000-0000-000000000001', 'dining-supper-clubs'),
+  -- Event 03 (Axe Throwing) → drinks-bars
+  ('e1000000-0000-0000-0000-000000000003', 'drinks-bars'),
+  -- Event 07 (Flight Club) → drinks-bars
+  ('e1000000-0000-0000-0000-000000000007', 'drinks-bars'),
+  -- Event 10 (Hiking Snowdonia) → sport-fitness
+  ('e1000000-0000-0000-0000-000000000010', 'sport-fitness'),
+  -- Event 11 (Black Tie Pall Mall) → dining-supper-clubs
+  ('e1000000-0000-0000-0000-000000000011', 'dining-supper-clubs'),
+  -- Event 13 (Comedy & Dinner Angel) → dining-supper-clubs
+  ('e1000000-0000-0000-0000-000000000013', 'dining-supper-clubs'),
+  -- Event 15 (Christmas Party Tonteria) → festivals-seasonal + drinks-bars
+  ('e1000000-0000-0000-0000-000000000015', 'festivals-seasonal'),
+  ('e1000000-0000-0000-0000-000000000015', 'drinks-bars'),
+  -- Event 18 (Valentine's Singles) → drinks-bars
+  ('e1000000-0000-0000-0000-000000000018', 'drinks-bars'),
+  -- Event 20 (Skiing St Moritz) → sport-fitness
+  ('e1000000-0000-0000-0000-000000000020', 'sport-fitness'),
+  -- Event 22 (Mini Golf & Drinks) → drinks-bars
+  ('e1000000-0000-0000-0000-000000000022', 'drinks-bars'),
+  -- Event 24 (Hiking Lake District) → sport-fitness
+  ('e1000000-0000-0000-0000-000000000024', 'sport-fitness'),
+  -- Event 25 (Polo in the Park) → outdoor-picnics
+  ('e1000000-0000-0000-0000-000000000025', 'outdoor-picnics'),
+  -- Event 28 (Halloween Cubanista) → festivals-seasonal + themed-socials
+  ('e1000000-0000-0000-0000-000000000028', 'festivals-seasonal'),
+  ('e1000000-0000-0000-0000-000000000028', 'themed-socials'),
+  -- Event 29 (Charity 80s/90s Night) → nightlife-dancing
+  ('e1000000-0000-0000-0000-000000000029', 'nightlife-dancing')
+) AS v(event_id, slug)
+JOIN public.tags t ON t.slug = v.slug;
 
 -- ── Step 5: Bookings ─────────────────────────────────────────────────────────
 -- Confirmed bookings for past events (1–30) only.

@@ -1,19 +1,18 @@
 /**
  * Canonical taxonomy constants — Phase 3 Member Data Layer.
  *
- * Mirrors the seed in `supabase/migrations/20260504000001_create_tags_and_event_tags.sql`
- * and the slug→enum mapping in `_tag_slug_to_legacy_category()`.
+ * Mirrors the seed in `supabase/migrations/20260504000001_create_tags_and_event_tags.sql`.
  *
- * ⚠️ Lockstep — change here means change in three other places:
- *   1. Migration 2 tag seed
- *   2. Migration 2 `_tag_slug_to_legacy_category` function (slug→enum)
- *   3. Migration 2 sync trigger CASE expressions
- * Adding a new primary-eligible slug without updating the migration's
- * mapping function will cause Side B of the bidirectional trigger to
- * raise `'no legacy enum mapping for primary tag slug: <slug>'` on the
- * first event_tags INSERT/UPDATE that uses it.
+ * Post-F1b-schema (Migration 20260506000001), the legacy `events.category`
+ * enum and the `_tag_slug_to_legacy_category` SQL helper are gone. The
+ * 15-tag canonical taxonomy is the sole vocabulary for primary
+ * categorisation across DB, API, and UI.
+ *
+ * ⚠️ Lockstep — change here means change in Migration 2's tag seed. The
+ * old "three places" lockstep (seed + slug→enum SQL function + sync
+ * trigger CASE) collapsed to one when F1b-schema dropped the trigger
+ * + helper.
  */
-import type { EventCategory } from '@/types'
 
 /**
  * The 15 primary-eligible tag slugs. Admins can choose ANY of these as an
@@ -38,40 +37,6 @@ export const PRIMARY_ELIGIBLE_TAG_SLUGS = new Set<string>([
   'wellness-mindfulness',
   'workshops-masterclasses',
 ])
-
-/**
- * Static slug → legacy `event_category` enum mapping. Mirrors the
- * `_tag_slug_to_legacy_category()` SQL function shipped in Migration 2.
- *
- * Lossy 15→9 collapse — multiple primary slugs may map to the same enum
- * value (e.g. `theatre-comedy` and `galleries-museums` both → `'cultural'`).
- * That's fine: `events.category` is a "best-effort legacy display value"
- * during the dual-write window. Source of truth is `event_tags.is_primary`.
- *
- * Returns `null` for interest-only slugs and any unknown input. Callers
- * must treat null as a validation failure.
- */
-const SLUG_TO_LEGACY_CATEGORY: Record<string, EventCategory> = {
-  'drinks-bars':              'drinks',
-  'dining-supper-clubs':      'dining',
-  'activities-social-games':  'activity',
-  'nightlife-dancing':        'drinks',     // closest existing enum
-  'live-music-gigs':          'music',
-  'theatre-comedy':           'cultural',
-  'galleries-museums':        'cultural',
-  'festivals-seasonal':       'cultural',
-  'sport-fitness':            'sport',
-  'outdoor-picnics':          'activity',
-  'weekends-travel':          'activity',
-  'themed-socials':           'drinks',     // themed parties are typically drinks-led
-  'charity-volunteering':     'cultural',
-  'wellness-mindfulness':     'wellness',
-  'workshops-masterclasses':  'workshops',
-}
-
-export function legacyCategoryForSlug(slug: string): EventCategory | null {
-  return SLUG_TO_LEGACY_CATEGORY[slug] ?? null
-}
 
 /**
  * Member-facing display order + labels for the 15 primary-eligible tags.
@@ -104,10 +69,18 @@ export const PRIMARY_TAG_LABELS: ReadonlyArray<{ slug: string; label: string }> 
 
 /**
  * Reverse mapping for the `?category=` → `?tag=` soft fallback on the
- * events listing page. Mirrors Migration 2's "Step 2: default fallback"
- * SQL — each legacy enum value points to the most representative primary
+ * /events listing page. Mirrors Migration 2's "Step 2: default fallback"
+ * SQL — each legacy enum string points to the most representative primary
  * slug (the one a member who clicked the old chip would most plausibly
  * have meant).
+ *
+ * Post-F1b-schema, the `event_category` Postgres enum is gone — but the
+ * 9 string keys here remain valid as URL parameter values forever:
+ * external links from emails, Google search results, and social posts
+ * predating F1a still arrive with `?category=<old-enum-value>`. The
+ * helper below normalises those legacy strings to a canonical primary
+ * slug; the page redirects 307 to `?tag=<slug>` and the URL contract
+ * is restored.
  *
  * Lossy: an enum value that splits into multiple primary slugs (e.g.
  * `cultural` → theatre / galleries / festivals / charity) collapses to
@@ -119,7 +92,7 @@ export const PRIMARY_TAG_LABELS: ReadonlyArray<{ slug: string; label: string }> 
  * Returns the canonical primary slug, or null if the input isn't a known
  * legacy enum value (caller treats null as "ignore the param").
  */
-const LEGACY_CATEGORY_TO_PRIMARY_SLUG: Record<EventCategory, string> = {
+const LEGACY_CATEGORY_TO_PRIMARY_SLUG: Record<string, string> = {
   drinks:     'drinks-bars',
   dining:     'dining-supper-clubs',
   cultural:   'galleries-museums',     // see Migration 2 Step 2 fallback
@@ -131,10 +104,6 @@ const LEGACY_CATEGORY_TO_PRIMARY_SLUG: Record<EventCategory, string> = {
   activity:   'activities-social-games',
 }
 
-const LEGACY_CATEGORIES = new Set<string>(Object.keys(LEGACY_CATEGORY_TO_PRIMARY_SLUG))
-
 export function primarySlugForLegacyCategory(category: string): string | null {
-  return LEGACY_CATEGORIES.has(category)
-    ? LEGACY_CATEGORY_TO_PRIMARY_SLUG[category as EventCategory]
-    : null
+  return LEGACY_CATEGORY_TO_PRIMARY_SLUG[category] ?? null
 }

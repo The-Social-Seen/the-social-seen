@@ -163,7 +163,6 @@ export async function createTestEvent(
       venue_name: 'E2E Venue',
       venue_address: '1 Test Road, London',
       venue_revealed: true,
-      category: 'drinks',
       price,
       capacity,
       image_url: null,

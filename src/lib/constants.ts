@@ -1,5 +1,3 @@
-import type { EventCategory } from '@/types'
-
 // ── Site config ───────────────────────────────────────────────────────────────
 
 export const SITE_CONFIG = {
@@ -44,18 +42,12 @@ export const NAV_LINKS_MEMBER = [
 ] as const
 
 // ── Event categories ──────────────────────────────────────────────────────────
-
-export const CATEGORIES: Array<{ value: EventCategory; label: string }> = [
-  { value: 'drinks',     label: 'Drinks' },
-  { value: 'dining',     label: 'Dining' },
-  { value: 'cultural',   label: 'Cultural' },
-  { value: 'wellness',   label: 'Wellness' },
-  { value: 'sport',      label: 'Sport' },
-  { value: 'workshops',  label: 'Workshops' },
-  { value: 'music',      label: 'Music' },
-  { value: 'networking', label: 'Networking' },
-  { value: 'activity',   label: 'Activity' },
-]
+//
+// Removed in F1b-schema: the legacy `CATEGORIES` array (9 enum values) had
+// zero consumers after F1a's chip-bar migration. The 15-tag canonical
+// taxonomy lives in src/lib/constants/tags.ts (PRIMARY_TAG_LABELS) and is
+// the only enumeration the chip bar / admin picker / member-facing UI
+// reference now.
 
 // ── Interest options (used in registration Step 2) ────────────────────────────
 //

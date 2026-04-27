@@ -69,7 +69,7 @@ export async function getTopHomepageReviews(
 /** Columns returned for each reviewable event */
 type ReviewableEvent = Pick<
   Event,
-  'id' | 'slug' | 'title' | 'date_time' | 'venue_name' | 'image_url' | 'category'
+  'id' | 'slug' | 'title' | 'date_time' | 'venue_name' | 'image_url'
 >
 
 /**
@@ -92,7 +92,7 @@ export async function getReviewableEvents(): Promise<ReviewableEvent[]> {
     .from('bookings')
     .select(`
       event:events!inner(
-        id, slug, title, date_time, venue_name, image_url, category
+        id, slug, title, date_time, venue_name, image_url
       )
     `)
     .eq('user_id', user.id)
