@@ -1,9 +1,11 @@
 /**
  * Single source of truth for transactional email config.
  *
- * Two things to flip when production goes live:
- *   1. `FROM_ADDRESS` — switch from the Resend sandbox sender to your
- *      verified domain address. One-line change.
+ * Two production-discipline items:
+ *   1. `FROM_ADDRESS` — must remain on a Resend-verified domain.
+ *      Reverting to a Resend testing sender silently breaks delivery
+ *      to all non-account-owner recipients (see 2026-04-28 incident
+ *      and the comment block below).
  *   2. `SANDBOX_FALLBACK_RECIPIENT` — leave undefined in production so
  *      mail flows to real recipients. Resend's free-tier sandbox mode
  *      (no verified domain) rejects sends to anyone OTHER than the
@@ -13,12 +15,16 @@
  *      what gets sent.
  */
 
-// FROM address for all transactional email. While the Resend sending
-// domain isn't verified yet, sends MUST originate from `onboarding@resend.dev`
-// — Resend rejects sends from any other unverified domain. Once
-// the-social-seen.com is verified, change this to e.g.
-// `'The Social Seen <hello@the-social-seen.com>'`.
-export const FROM_ADDRESS = 'The Social Seen <onboarding@resend.dev>'
+// FROM address for all transactional email. MUST remain on a Resend-
+// verified domain — reverting to a Resend testing sender (e.g.
+// `onboarding@resend.dev`) silently breaks delivery to non-account-
+// owner recipients: Resend rejects with HTTP 403 / `validation_error`
+// and the send wrapper logs `status='failed'` to `notifications`
+// without throwing. This was the 2026-04-28 transactional-email
+// outage — every booking confirmation, waitlist confirmation, venue
+// reveal and welcome email silently bounced for non-owner recipients
+// between live-Stripe go-date and the fix.
+export const FROM_ADDRESS = 'The Social Seen <hello@the-social-seen.com>'
 
 /**
  * Where to redirect ALL transactional email recipients while the Resend
