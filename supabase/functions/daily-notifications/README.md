@@ -26,7 +26,7 @@ supabase functions deploy daily-notifications --no-verify-jwt
 ```bash
 supabase secrets set \
   RESEND_API_KEY=re_... \
-  FROM_ADDRESS='The Social Seen <onboarding@resend.dev>' \
+  FROM_ADDRESS='The Social Seen <hello@the-social-seen.com>' \
   REPLY_TO_ADDRESS=info@the-social-seen.com \
   SANDBOX_FALLBACK_RECIPIENT=mitesh@skillmeup.co \
   NEXT_PUBLIC_SITE_URL=https://the-social-seen.vercel.app

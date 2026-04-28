@@ -7,12 +7,12 @@
  *      to all non-account-owner recipients (see 2026-04-28 incident
  *      and the comment block below).
  *   2. `SANDBOX_FALLBACK_RECIPIENT` — leave undefined in production so
- *      mail flows to real recipients. Resend's free-tier sandbox mode
- *      (no verified domain) rejects sends to anyone OTHER than the
- *      account owner's email; until the cofounder has finished adding
- *      DNS records for the-social-seen.com, all dev/staging sends are
- *      rerouted to the account-owner address so we can manually inspect
- *      what gets sent.
+ *      mail flows to real recipients. In dev / staging, this redirects
+ *      every send to the developer's inbox so `pnpm dev` doesn't
+ *      accidentally email real members during local testing. The
+ *      send wrapper rewrites the `to:` field and prefixes the subject
+ *      with `[→ original@example.com]` so we can see what would have
+ *      gone where in production.
  */
 
 // FROM address for all transactional email. MUST remain on a Resend-
@@ -27,17 +27,16 @@
 export const FROM_ADDRESS = 'The Social Seen <hello@the-social-seen.com>'
 
 /**
- * Where to redirect ALL transactional email recipients while the Resend
- * sending domain isn't verified.
+ * Where to redirect ALL transactional email recipients in non-prod
+ * environments. Prevents `pnpm dev` from spamming real members during
+ * local testing or staging exercises.
  *
  * - In **production**: undefined → no redirect, real recipients receive
- *   their mail. Set this to undefined as soon as DNS verifies.
- * - In **dev / staging**: defaults to the Resend account owner so we can
- *   manually verify what gets sent. Resend sandbox restriction means
- *   anything else returns HTTP 403 `validation_error`.
- *
- * The send wrapper prefixes the subject with `[→ original@example.com]`
- * so we can see what address the email would have gone to in prod.
+ *   their mail.
+ * - In **dev / staging**: defaults to the developer's inbox. The send
+ *   wrapper rewrites the `to:` field and prefixes the subject with
+ *   `[→ original@example.com]` so we can see what address the email
+ *   would have gone to in prod.
  */
 export const SANDBOX_FALLBACK_RECIPIENT: string | undefined =
   process.env.NODE_ENV === 'production'

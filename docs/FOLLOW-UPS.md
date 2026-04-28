@@ -285,19 +285,6 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 **Action:** Follow the SUPABASE-CONFIG.md "Restoring to a fresh Supabase project" sequence.
 **Priority:** Blocker for prod launch.
 
-### Stale doc references to `onboarding@resend.dev` across the repo
-**Source:** PR #70 code review (broader sweep beyond the source-code change scope).
-**Rationale:** Five files still recommend the sandbox sender as the configured FROM_ADDRESS. None affect runtime, but they will mislead a future contributor setting up a fresh dev environment or copy-pasting examples. The `docs/SPRINT-1-HANDOVER.md:278` line is a curl health-check example using the sandbox sender — copy-paste hazard.
-**Files:** `.env.example:40`, `docs/SUPABASE-CONFIG.md:85` and `:174`, `docs/SPRINT-1-HANDOVER.md:57, :64, :278`, `docs/SPRINT-2-HANDOVER.md:104`, `supabase/functions/daily-notifications/README.md:29`.
-**Action:** Replace `onboarding@resend.dev` references with the verified-domain placeholder convention used in `.env.example` (e.g. `hello@your-verified-domain.com`). Either standalone PR or bundled with the auth-emails runbook entry below. ~10-minute chore commit, pure prose updates. Memory: `project_email_config_post_incident_tidy.md` (c).
-**Priority:** Low — cosmetic, but compounds on every fresh dev-env setup.
-
-### Auth-emails ops runbook in `docs/SUPABASE-CONFIG.md`
-**Source:** PR #70 code reviewer flag — ops commands shouldn't live only in PR descriptions (they degrade on squash-merge).
-**Rationale:** The 2026-04-28 fix required (a) verifying / setting `FROM_ADDRESS` in supabase secrets, (b) re-deploying the daily-notifications edge function, (c) running an expanded prod canary across both Next.js + edge function paths. These ops steps survive only in PR #70's body and the parking memory note. A future re-rotation of Resend keys or fresh-project spin-up needs the same sequence — better as a runbook than transient PR text.
-**Action:** Add an "Email FROM_ADDRESS / Auth SMTP" section to `docs/SUPABASE-CONFIG.md` with the exact `supabase secrets set`, `supabase functions deploy`, and canary-trigger commands. Cross-link from the parking memory note. Memory: `project_email_config_post_incident_tidy.md` (a)/(e).
-**Priority:** Low — captures already-applied ops; nothing's broken without it. Bundle with the stale-doc cleanup above for a single small chore PR.
-
 ### React Email migration
 **Source:** P2-4 backend.
 **Rationale:** Current templates use hand-written inline-style HTML. Works, but dev experience for rich emails (tables, columns, cross-client compat) is painful. `@react-email/components` gives JSX authoring.
