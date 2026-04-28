@@ -254,7 +254,11 @@ export function VerifyForm() {
                   Verify Your Email
                 </h1>
                 <p className="mt-2 text-sm text-text-secondary">
-                  Enter the 6-digit code we just sent to your inbox.
+                  Enter the 6-digit code we just sent you.
+                </p>
+                <p className="mt-3 text-xs text-text-tertiary">
+                  Don&apos;t see it? Check your spam folder. Gmail users:
+                  also check your Promotions tab and All Mail.
                 </p>
               </div>
 

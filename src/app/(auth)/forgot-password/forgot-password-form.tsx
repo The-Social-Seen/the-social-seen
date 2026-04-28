@@ -81,7 +81,8 @@ export function ForgotPasswordForm() {
                 Back to sign in
               </Link>
               <p className="mt-4 text-xs text-text-tertiary">
-                Didn&apos;t get the email? Check your spam folder, or{' '}
+                Didn&apos;t get the email? Check your spam folder — or in
+                Gmail, also check your Promotions tab and All Mail. Or{' '}
                 <button
                   type="button"
                   onClick={() => {
