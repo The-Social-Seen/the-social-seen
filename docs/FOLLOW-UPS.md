@@ -9,7 +9,7 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 2. Revisited at end of each sprint.
 3. When actioned → remove from this file and reference the PR in the commit message.
 
-**Last tidy:** after Phase 2.5 wrap (PR #39 — 25 shipped items removed, 5 feature items moved to PHASE-3-BACKLOG).
+**Last tidy:** 2026-04-28 — refresh after the 5-PR session (#69 admin events, #70 email FROM_ADDRESS, #71 image allowlist, #72 Gmail copy, #73 registration interests). 3 shipped items removed, 1 entry refined, 8 new entries added. Prior tidy: Phase 2.5 wrap (PR #39 — 25 shipped items removed, 5 feature items moved to PHASE-3-BACKLOG).
 
 ---
 
@@ -87,22 +87,28 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 **Priority:** Medium — do before any pipeline that rotates the service role key.
 
 ### Stripe `ensureStripeCustomer` defensive fix
-**Source:** 2026-04-27 outage post-mortem.
-**Rationale:** The customer-creation path in the paid-booking flow was implicated. Hardening should land after F1b-schema ships so the fix doesn't tangle with the data-layer migration sequence.
-**Action:** TBD by post-mortem write-up — likely retry with backoff, distinct error surface for "Stripe rejects vs Stripe unreachable", and a Sentry tag matching `surface: 'createPaidCheckout'` for filterable triage.
-**Priority:** **HIGH — production reliability** for the paid-booking path.
+**Source:** 2026-04-27 outage; post-mortem complete (`memory/project_stripe_customer_id_defensive_fix.md`).
+**Rationale:** Saved customer ids in `profiles.stripe_customer_id` are reused without validating they exist in the current Stripe account. Account/key rotation invalidates them silently — caused the 2026-04-27 production outage where every paid checkout threw `No such customer: cus_OLD` until the column was nulled in SQL.
+**Action:** Wrap the saved-id branch in `src/lib/stripe/checkout.ts` `ensureStripeCustomer` (lines 40-84) with `stripe.customers.retrieve(savedId)`. On `error.code === 'resource_missing'` (404): null the stored id, fall through to the create path, persist the new id. Other errors propagate (do NOT silently mask Stripe outages). Add Vitest cases for valid-reuse / stale-id / other-error paths. Full sequenced agent prompts in the memory note.
+**Priority:** **HIGH — production reliability.** Without this, the same outage recurs on every Stripe key rotation, account swap, or DB restore from a pre-rotation snapshot.
 
-### Stripe live-mode "Could not start checkout" — diagnose
-**Source:** Mid-session 2026-04-27 — user swapped Vercel Production env from test keys to live keys, paid-booking flow returned the generic "Could not start checkout" toast at the redirect step. Deferred to finish the Member Data Layer; never resumed.
-**Last known state:** Live `sk_live_*` + `pk_live_*` + a live-mode `whsec_*` configured on Vercel Production scope. Test keys still on Preview + local. Vercel redeployed. Booking attempt failed.
-**Rationale:** The catch block in `createPaidCheckout` already wires the underlying error into Sentry tagged `surface: 'createPaidCheckout'` (PR #51). The actual exception text from the failed live-mode attempt is in Sentry — open it, read the message, fix.
-**Likely causes (ranked):**
-1. **Live-mode account not fully activated.** Stripe rejects with `StripeInvalidRequestError: Your account cannot currently make live charges` until ID + bank details verification completes. Fix: complete activation in Stripe Dashboard.
-2. **Live webhook signing-secret mismatch.** Wouldn't fail at session creation though, only at the webhook receipt step — so unlikely this error.
-3. **Mixed key modes** — live `sk_` paired with test `pk_` (or vice versa). Stripe rejects with `StripeAuthenticationError`. Fix: reconcile env vars on Vercel Production.
-4. **Live-mode Stripe Dashboard branding/receipts not configured.** Cosmetic, doesn't fail the redirect itself but confirms separate-mode-config awareness.
-**Action:** Open Sentry → filter `surface:createPaidCheckout` → grab the most recent live-mode event → paste the exception name + message. From there the fix is almost certainly env-var or Stripe-dashboard-side, not code.
-**Priority:** **HIGH — blocks live paid bookings** (test mode still works fine).
+### Stripe orphan `pending_payment` reaper
+**Source:** 2026-04-28 incident — the same outage above also exposed this as a class of bug.
+**Rationale:** `book_event_paid` RPC's duplicate-check (migration `20260422000002`, line 88) blocks any non-cancelled booking — including `pending_payment`. The catch block at `src/app/events/[slug]/actions.ts:353` is the only cleanup path; if a user closes the tab mid-error (or the Server Action otherwise doesn't reach the catch), the orphan persists forever. It blocks future booking attempts AND is invisible to the user (the bookings page filters out `pending_payment`). Hit twice in a single day during the 2026-04-28 incident.
+**Action:** Cron-style reaper that cancels `bookings` where `status='pending_payment'` AND `created_at < now() - interval '35 minutes'` AND `stripe_payment_id IS NULL`. Two implementation paths to evaluate (recommendation: Vercel cron route over pg_cron — easier to test + observe). Decision and agent prompts in `memory/project_stripe_customer_id_defensive_fix.md`.
+**Priority:** **HIGH — silent footgun.** Pair with the defensive fix above.
+
+### Next.js 16 middleware propagation broken (CSP nonce silently disabled)
+**Source:** 2026-04-28 incident — diagnosed during the admin-events listing fix (PR #69).
+**Rationale:** `NextResponse.next({ request: { headers: requestHeaders } })` in `src/lib/supabase/middleware.ts` is not propagating modified request headers to Server Components in Next.js 16.2.4 + Turbopack. Verified via temporary `/api/diag-headers` route handler — `headers().get('x-csp-nonce')` returns null. The same propagation failure means `Content-Security-Policy` doesn't appear on dev responses (and possibly production). The CSP nonce path at `src/app/layout.tsx:87-112` (the inline theme-detect script tagged with `nonce={cspNonce}`) is silently broken: nonce is undefined, so under strict CSP the script either runs unrestricted (if CSP isn't applied) or gets blocked (if it is). Either way the security posture documented in `social-seen-safety-SKILL.md` ("nonce-based CSP") is fictional.
+**Action:** Two paths to evaluate (deferred — both larger than this branch's scope). (1) Migrate `middleware.ts` → `proxy.ts` (Next.js 16's deprecation path; Node.js runtime instead of Edge). Likely fixes propagation per the deprecation rationale but not verified. (2) Move CSP/nonce setting out of middleware into `src/app/layout.tsx` directly via a different pattern. Verify prod is also affected (Vercel may behave differently than local Turbopack dev) before deciding urgency. Memory: `project_nextjs16_middleware_propagation.md`.
+**Priority:** **HIGH — silent security degradation.** Real exposure even if no exploit lands today; CLAUDE.md and the safety skill describe a CSP that may not be applied.
+
+### Image allowlist multi-admin revisit
+**Source:** PR #71 (`fix(images): permit any HTTPS image source`) — explicit deferred decision.
+**Rationale:** The permissive-HTTPS image allowlist is contingent on the single-admin trust model. When multi-admin / delegated-host / UGC patterns land, the threat model changes (admin pastes URL → tracking pixels, referrer leaks, phishing images on member-visible pages).
+**Action:** When ANY trigger fires (second admin added, host-delegation pattern introduced, UGC URL submission gated by admin), re-evaluate. Four compensating-control options (hostname allowlist / server-side image proxy / referrer policy / hybrid) documented in `memory/project_image_allowlist_revisit_on_multi_admin.md`.
+**Priority:** Parked — not urgent under current single-admin operating model. Trigger-driven, not date-driven.
 
 ### `email_verified` reconciliation path
 **Source:** P2-3 backend handover.
@@ -201,6 +207,24 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 **Action:** Add a test case that mocks the array form and asserts the fallback resolves correctly. Or remove the array branch if `tag_id` NOT NULL FK + Supabase typegen guarantee the singular form (would require codegen confirmation).
 **Priority:** Very low.
 
+### Tag kind hardening — explicit `tag_kind` column on `tags`
+**Source:** PR #73 code review (closes the W5 cross-check gap).
+**Rationale:** `getRegistrationInterestTags` filters via `.not('slug', 'like', 'interest-%')` to exclude the 8 interest-only tags from registration + profile-edit. The convention is enforced by **naming discipline in the migration seed**, not by any DB column or constraint. Two failure modes if the convention slips: (a) a primary-eligible tag with slug starting `interest-` (e.g. `interest-rate-tracking`) silently disappears from registration, (b) an interest-only tag added without the prefix silently appears in registration.
+**Action:** Add a `tag_kind` enum column to `public.tags` with values `('primary_eligible', 'interest_only')`. Migrate existing rows; switch `getRegistrationInterestTags` from slug-prefix filter to `.eq('tag_kind', 'primary_eligible')`. Memory: `project_tag_kind_hardening.md` (a).
+**Priority:** Low — convention has held cleanly through three F1/F2 phases. Hardening for future-state, not a present bug.
+
+### Hard-retire the 8 interest-only tags (when product decides)
+**Source:** PR #73 — soft-retire only, hard-retire deferred.
+**Rationale:** PR #73 hid `interest-*` tags from user-facing flows but left them in the `tags` table as `is_active=true` rows; admin tag picker still sees the full 23 via `getActiveTags`. Existing `user_interests` rows pointing to interest-* tags survive UNTIL the user re-saves their profile (delete-then-insert in `updateInterests` wipes them at that point).
+**Action:** When/if the product team decides to fully retire the 8 interest-only tags, three deliberate decisions: (1) drop rows OR flip to `is_active=false` (recommended: deactivate first, drop later); (2) cascade-delete `user_interests` rows or leave them orphaned but harmless; (3) member comms or silent change. Memory: `project_tag_kind_hardening.md` (b).
+**Priority:** Parked — trigger-driven, not date-driven. Don't pick up speculatively.
+
+### `updateInterests` / `saveInterests` non-transactional delete-then-insert
+**Source:** PR #73 code reviewer flag (pre-existing tech debt; surfaces here because the new flow exercises the same pattern).
+**Rationale:** Both `saveInterests` (signup) and `updateInterests` (profile-edit) issue two PostgREST round-trips: `DELETE FROM user_interests WHERE user_id = X` then `INSERT INTO user_interests (...)`. PostgREST wraps each request in its own implicit transaction, so this is NOT atomic. If the delete succeeds and the insert fails (network blip, RLS denial mid-flight), the user is left with zero interests and no rollback.
+**Action:** Wrap the DELETE+INSERT in a Postgres function (RPC) that runs atomically. Same security posture (auth + active-tag validation), single round-trip. Same pattern as `set_my_demographics`.
+**Priority:** Low — only matters under network-flake or RLS-misconfiguration during the brief delete-insert window. Same shape as the existing `saveEventTags` atomicity entry above.
+
 ---
 
 ## 🧹 P2-5 / cron code-review follow-ups
@@ -255,23 +279,24 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 
 ## 📝 Documentation / operator
 
-### Resend domain verification (BLOCKS public email launch)
-**Source:** P2-4.
-**Rationale:** Resend sandbox-sends only to the account-owner email until DNS records (SPF/DKIM/DMARC) verify `the-social-seen.com`.
-**Action:** Cofounder adds the 3 DNS records. On verify, swap `FROM_ADDRESS` in `src/lib/email/config.ts` + `supabase secrets` to the new branded address.
-**Priority:** **HIGH — must ship before real emails go to real members.**
-
 ### Deploy `daily-notifications` edge function + configure cron (per environment)
 **Source:** P2-5 backend.
 **Rationale:** The cron schedule + edge function exist in code, but each Supabase project needs per-env wiring before they do anything. Captured in `docs/SUPABASE-CONFIG.md` §3. Apply on production spin-up.
 **Action:** Follow the SUPABASE-CONFIG.md "Restoring to a fresh Supabase project" sequence.
 **Priority:** Blocker for prod launch.
 
-### Wire Supabase OTP email through Resend
-**Source:** P2-4 backend.
-**Rationale:** Supabase's default OTP email still flows via Supabase's built-in mailer, not Resend. Means OTP emails aren't branded and aren't logged in our notifications audit.
-**Action:** Either configure Supabase SMTP via Management API to use Resend, or custom OTP issuance (generate code, store with TTL in a `verification_codes` table, send via our Resend wrapper).
-**Priority:** Medium.
+### Stale doc references to `onboarding@resend.dev` across the repo
+**Source:** PR #70 code review (broader sweep beyond the source-code change scope).
+**Rationale:** Five files still recommend the sandbox sender as the configured FROM_ADDRESS. None affect runtime, but they will mislead a future contributor setting up a fresh dev environment or copy-pasting examples. The `docs/SPRINT-1-HANDOVER.md:278` line is a curl health-check example using the sandbox sender — copy-paste hazard.
+**Files:** `.env.example:40`, `docs/SUPABASE-CONFIG.md:85` and `:174`, `docs/SPRINT-1-HANDOVER.md:57, :64, :278`, `docs/SPRINT-2-HANDOVER.md:104`, `supabase/functions/daily-notifications/README.md:29`.
+**Action:** Replace `onboarding@resend.dev` references with the verified-domain placeholder convention used in `.env.example` (e.g. `hello@your-verified-domain.com`). Either standalone PR or bundled with the auth-emails runbook entry below. ~10-minute chore commit, pure prose updates. Memory: `project_email_config_post_incident_tidy.md` (c).
+**Priority:** Low — cosmetic, but compounds on every fresh dev-env setup.
+
+### Auth-emails ops runbook in `docs/SUPABASE-CONFIG.md`
+**Source:** PR #70 code reviewer flag — ops commands shouldn't live only in PR descriptions (they degrade on squash-merge).
+**Rationale:** The 2026-04-28 fix required (a) verifying / setting `FROM_ADDRESS` in supabase secrets, (b) re-deploying the daily-notifications edge function, (c) running an expanded prod canary across both Next.js + edge function paths. These ops steps survive only in PR #70's body and the parking memory note. A future re-rotation of Resend keys or fresh-project spin-up needs the same sequence — better as a runbook than transient PR text.
+**Action:** Add an "Email FROM_ADDRESS / Auth SMTP" section to `docs/SUPABASE-CONFIG.md` with the exact `supabase secrets set`, `supabase functions deploy`, and canary-trigger commands. Cross-link from the parking memory note. Memory: `project_email_config_post_incident_tidy.md` (a)/(e).
+**Priority:** Low — captures already-applied ops; nothing's broken without it. Bundle with the stale-doc cleanup above for a single small chore PR.
 
 ### React Email migration
 **Source:** P2-4 backend.
