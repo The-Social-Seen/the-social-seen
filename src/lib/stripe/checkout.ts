@@ -36,6 +36,19 @@ export interface CheckoutSessionInput {
  * because profiles.update is locked down to the row owner, and we want
  * this to work whether the caller is the user themselves or a future
  * admin retry.
+ *
+ * Defensive validation of the saved id: on 2026-04-27 a Stripe account
+ * rotation produced a production outage — saved `stripe_customer_id`
+ * values from the previous account threw `No such customer` when reused
+ * here, blocking every paid checkout until the column was nulled out by
+ * hand. To prevent recurrence on any future account/key rotation or DB
+ * restore from a pre-rotation snapshot, we now retrieve the saved
+ * customer before reusing it. If Stripe responds with
+ * `code === 'resource_missing'` (or the Customer was deleted server-
+ * side) we null the column and fall through to the create path. Any
+ * other error (network, auth, rate limit) propagates — we must NOT
+ * silently mask a real Stripe outage as "stale id" or we'll wipe valid
+ * ids during a transient incident.
  */
 export async function ensureStripeCustomer(
   supabase: SupabaseClient,
@@ -53,7 +66,40 @@ export async function ensureStripeCustomer(
   }
 
   if (profile?.stripe_customer_id) {
-    return profile.stripe_customer_id
+    const stripe = getStripeClient()
+    let staleId = false
+    try {
+      const customer = await stripe.customers.retrieve(profile.stripe_customer_id)
+      if (!('deleted' in customer) || !customer.deleted) {
+        return profile.stripe_customer_id
+      }
+      // Stripe returned a DeletedCustomer — the id no longer points at a
+      // usable record. Null the column for cleanliness and fall through.
+      staleId = true
+    } catch (err) {
+      if (
+        err instanceof Error
+        && (err as { code?: string }).code === 'resource_missing'
+      ) {
+        // Stale id from a previous Stripe account / key rotation, or a
+        // DB restore from a pre-rotation snapshot.
+        staleId = true
+      } else {
+        // Network, auth error, rate limit, etc. Propagate so the caller
+        // sees the real Stripe outage instead of us masking it as a
+        // stale-id and wiping a valid column.
+        throw err
+      }
+    }
+
+    if (staleId) {
+      // Null the column before falling through to the create path so a
+      // future booking attempt won't repeat the Stripe round-trip.
+      await supabase
+        .from('profiles')
+        .update({ stripe_customer_id: null })
+        .eq('id', args.userId)
+    }
   }
 
   const stripe = getStripeClient()
@@ -128,6 +174,12 @@ export async function createBookingCheckoutSession(
         event_id: input.eventId,
       },
     },
+    // User can enter Stripe Dashboard-managed promotion codes at
+    // checkout. Codes are managed in Stripe Dashboard → Products →
+    // Coupons → Promotion codes, not in this app. Refunds and
+    // redemption tracking flow through Stripe's own pipeline — there
+    // is no app-side discount-code state, schema, or admin UI.
+    allow_promotion_codes: true,
     success_url: input.successUrl,
     cancel_url: input.cancelUrl,
     // Auto-expire sessions after 30 min so abandoned pending_payment
