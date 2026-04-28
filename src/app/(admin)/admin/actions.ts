@@ -9,6 +9,11 @@ import { adminAnnouncementTemplate } from '@/lib/email/templates/admin-announcem
 import { isRedacted } from '@/lib/notifications/redaction'
 import { z } from 'zod'
 import { PRIMARY_ELIGIBLE_TAG_SLUGS } from '@/lib/constants/tags'
+import {
+  PRIMARY_TAG_EMBED,
+  attachPrimaryTag,
+  type RowWithPrimaryTagEmbed,
+} from '@/lib/supabase/queries/events'
 import type {
   BookingStatus,
   EventWithStats,
@@ -779,19 +784,28 @@ export async function cancelEvent(eventId: string) {
 
 // ── Event CRUD Helpers ───────────────────────────────────────────────────────
 
-export async function getAdminEvents() {
+export async function getAdminEvents(): Promise<EventWithStats[]> {
   const { supabase } = await requireAdmin()
 
-  // Admin sees all events including drafts/cancelled via event_with_stats view
-  // RLS allows admin to see all events (including unpublished)
+  // Admin sees all events including drafts/cancelled. RLS on
+  // `event_with_stats` lets admins read past published-only.
+  //
+  // The `event_tags!inner` embed + `attachPrimaryTag` are imported from
+  // queries/events.ts so every reader of `event_with_stats` shares one
+  // JOIN definition. Routing through `attachPrimaryTag` also means a
+  // missing-embed mistake here surfaces as that helper's explicit
+  // throw, not a silent `undefined` on `event.primary_tag`.
   const { data, error } = await supabase
     .from('event_with_stats')
-    .select('*')
+    .select(`*, ${PRIMARY_TAG_EMBED}`)
+    .eq('event_tags.is_primary', true)
     .order('date_time', { ascending: false })
 
   if (error) throw new Error('Failed to fetch events')
 
-  return (data ?? []) as EventWithStats[]
+  return (data ?? []).map((row) =>
+    attachPrimaryTag(row as RowWithPrimaryTagEmbed),
+  ) as unknown as EventWithStats[]
 }
 
 export async function getAdminEventById(eventId: string) {

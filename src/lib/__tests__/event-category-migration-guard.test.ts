@@ -54,6 +54,10 @@ const SCAN_DIRS = [
   'src/components/profile',
   'src/lib/supabase/queries',
   'src/app/events',
+  // Admin route Server Components + Server Actions also read event
+  // rows; the guard's no-`event.category` rule applies here too. Test
+  // dirs are skipped by `walk()` as with every other scanned root.
+  'src/app/(admin)',
 ] as const
 
 // Allowlist — files where the WORD `category` legitimately appears for

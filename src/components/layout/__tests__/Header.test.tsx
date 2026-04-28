@@ -165,6 +165,40 @@ describe('Header (unauthenticated)', () => {
   })
 })
 
+describe('Header — admin route hiding', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetSession.mockResolvedValue({ data: { session: null } })
+    mockProfileSingle.mockResolvedValue({ data: null })
+  })
+
+  it('renders nothing when pathname starts with /admin', () => {
+    mockPathname = '/admin/events'
+    const { container } = render(<Header />)
+    expect(container.firstChild).toBeNull()
+    expect(container.querySelector('header')).toBeNull()
+  })
+
+  it('renders the public header on non-admin paths', () => {
+    mockPathname = '/events'
+    const { container } = render(<Header />)
+    expect(container.querySelector('header')).toBeTruthy()
+  })
+
+  // Pin the early-return placement: the `if (pathname.startsWith('/admin'))
+  // return null` guard sits AFTER all hooks. If a future contributor moves
+  // any hook below it, React logs "rendered fewer hooks than expected" via
+  // console.error. This test fails in that scenario.
+  it('does not violate Rules of Hooks on admin paths', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockPathname = '/admin/notifications'
+    render(<Header />)
+    const calls = errSpy.mock.calls.flat().map(String).join(' ')
+    expect(calls).not.toContain('rendered fewer hooks')
+    errSpy.mockRestore()
+  })
+})
+
 describe('Header (Server-Action login — pathname re-check)', () => {
   beforeEach(() => {
     vi.clearAllMocks()

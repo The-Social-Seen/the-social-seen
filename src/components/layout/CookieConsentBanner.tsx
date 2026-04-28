@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import { readConsent, writeConsent } from '@/lib/analytics/consent'
 
 /**
@@ -22,6 +23,7 @@ import { readConsent, writeConsent } from '@/lib/analytics/consent'
  * copy ("Help us improve").
  */
 export default function CookieConsentBanner() {
+  const pathname = usePathname()
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
@@ -38,6 +40,9 @@ export default function CookieConsentBanner() {
     }
   }, [])
 
+  // Hide on /admin/* — admin layout owns its own chrome. See Header.tsx
+  // for rationale (middleware-driven detection broken in Next 16).
+  if (pathname?.startsWith('/admin')) return null
   if (!visible) return null
 
   function decide(state: 'granted' | 'denied') {

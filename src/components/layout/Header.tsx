@@ -169,6 +169,14 @@ export function Header() {
     };
   }, [isMobileMenuOpen]);
 
+  // Hide the public Header on /admin/* routes — admin layout owns its own
+  // chrome (sidebar). Placed after all hooks to respect Rules of Hooks.
+  // Why client-side: middleware-set request headers don't reliably propagate
+  // to Server Components in Next.js 16 + Turbopack, so the previous
+  // server-side `headers().get('x-pathname')` approach left this Header
+  // rendering on /admin/* and covering top-right CTAs.
+  if (pathname?.startsWith("/admin")) return null;
+
   const closeMobileMenu = () => setIsMobileMenuOpen(false);
 
   const handleSignOut = async () => {
