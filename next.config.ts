@@ -9,15 +9,13 @@ import { withSentryConfig } from "@sentry/nextjs";
 
 const nextConfig: NextConfig = {
   images: {
+    // Single-admin trust model (2026-04-28 decision): the only person who
+    // can paste image URLs into events/profiles is the project owner, so
+    // an allowlist of specific hostnames is overcautious. `"**"` is
+    // Next.js's wildcard meaning "any hostname"; `protocol: "https"`
+    // keeps HTTP blocked (mixed-content + MitM).
     remotePatterns: [
-      {
-        protocol: "https",
-        hostname: "images.unsplash.com",
-      },
-      {
-        protocol: "https",
-        hostname: "*.supabase.co",
-      },
+      { protocol: "https", hostname: "**" },
     ],
   },
   async headers() {

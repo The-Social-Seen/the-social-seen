@@ -71,8 +71,12 @@ describe('buildCsp', () => {
     expect(csp).toContain('wss://*.supabase.co')
     // Sentry ingest (used by the /monitoring tunnel)
     expect(csp).toContain('https://*.sentry.io')
-    // Unsplash seed images
-    expect(csp).toContain('https://images.unsplash.com')
+    // img-src is intentionally permissive — single-admin trust model
+    // (2026-04-28). The directive emits the literal `https:` scheme-source
+    // token rather than enumerating CDNs. Token must appear as a discrete
+    // word in the directive — not as a substring of e.g. `https://...`.
+    const imgSrc = extractDirective(csp, 'img-src')
+    expect(imgSrc.split(' ')).toContain('https:')
   })
 
   it('sets frame-ancestors to none and object-src to none', () => {

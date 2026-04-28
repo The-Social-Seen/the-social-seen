@@ -1,63 +1,49 @@
 /**
- * Drift guard — ensures `ALLOWED_IMAGE_HOSTS` in src/lib/utils/images.ts
- * stays in sync with `images.remotePatterns` in next.config.ts.
+ * Drift guard — ensures `next.config.ts` `images.remotePatterns` and
+ * `isAllowedImageHost()` in `src/lib/utils/images.ts` agree on which
+ * protocols are allowed for image URLs.
  *
- * If someone adds a host to one but forgets the other:
- * - next.config only → `resolveEventImage()` filters the URL out at runtime,
- *   falling back to a placeholder (no crash, but silent "broken image" UX).
- * - images.ts only → runtime allows it through, but `next/image` throws
- *   at render time.
- *
- * This test parses next.config.ts as text (we can't import it directly —
- * it's compiled by the Next toolchain) and compares against the runtime
- * allowlist. Deliberately lenient about format (hostname on its own line).
+ * 2026-04-28: the previous host-allowlist drift check is gone — both
+ * sides are now permissive for any HTTPS source (single-admin trust
+ * model; see commit bc77eff). What remains shared between the two
+ * files is the protocol-level boundary: HTTPS in, HTTP out. If a
+ * future contributor narrows OR widens one side without the other
+ * (e.g. flips images.ts to accept `http:` but leaves `next.config.ts`
+ * https-only), seeded URLs would silently render as placeholders or
+ * crash next/image at render time. This test catches that.
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { isAllowedImageHost } from '../images'
 
 describe('image host allowlist drift', () => {
-  it('ALLOWED_IMAGE_HOSTS in images.ts matches remotePatterns in next.config.ts', async () => {
+  it('next.config.ts and isAllowedImageHost agree on which protocols are allowed', () => {
+    // Every entry in next.config.ts `remotePatterns` must use https.
+    // Parsed as text because next.config.ts is compiled by the Next
+    // toolchain and isn't directly importable in a unit test.
     const configPath = resolve(process.cwd(), 'next.config.ts')
     const configText = readFileSync(configPath, 'utf-8')
 
-    // Extract hostnames inside remotePatterns: `hostname: "<value>"`.
-    // Covers the small number of entries we have without pulling in a TS parser.
-    const remoteHostnames = Array.from(
-      configText.matchAll(/hostname:\s*["']([^"']+)["']/g),
-      (m) => m[1]
-    ).sort()
-
-    const imagesModule = await import('../images')
-    // Re-export is intentionally internal; read via the public isAllowedImageHost
-    // by probing each next.config hostname. If any is disallowed, they're
-    // out of sync.
-    for (const host of remoteHostnames) {
-      // Wildcard entries (e.g. "*.supabase.co") don't map to a real hostname
-      // we can probe — swap a plausible subdomain in for the probe.
-      const probeHost = host.startsWith('*.')
-        ? `foo${host.slice(1)}` // "*.supabase.co" → "foo.supabase.co"
-        : host
-      const allowed = imagesModule.isAllowedImageHost(`https://${probeHost}/x.jpg`)
-      expect(allowed, `next.config.ts allows "${host}" but images.ts does not`).toBe(true)
+    const protocols = Array.from(
+      configText.matchAll(/protocol:\s*["']([^"']+)["']/g),
+      (m) => m[1],
+    )
+    expect(
+      protocols.length,
+      'expected at least one remotePatterns entry in next.config.ts',
+    ).toBeGreaterThan(0)
+    for (const proto of protocols) {
+      expect(
+        proto,
+        `next.config.ts remotePatterns must be https-only; saw "${proto}"`,
+      ).toBe('https')
     }
 
-    // Inverse direction: read the literal ALLOWED_IMAGE_HOSTS text from
-    // images.ts and assert each appears in next.config.ts.
-    const imagesPath = resolve(process.cwd(), 'src/lib/utils/images.ts')
-    const imagesText = readFileSync(imagesPath, 'utf-8')
-    const allowlistMatch = imagesText.match(
-      /ALLOWED_IMAGE_HOSTS[\s\S]*?=\s*\[([\s\S]*?)\]/
-    )
-    expect(allowlistMatch, 'Could not parse ALLOWED_IMAGE_HOSTS').toBeTruthy()
-
-    const runtimeHosts = Array.from(
-      (allowlistMatch?.[1] ?? '').matchAll(/["']([^"']+)["']/g),
-      (m) => m[1]
-    ).sort()
-
-    expect(runtimeHosts, 'images.ts and next.config.ts disagree about allowed hosts').toEqual(
-      remoteHostnames
-    )
+    // isAllowedImageHost must agree: HTTPS allowed, HTTP rejected.
+    // Use a hostname that is not specially-cased anywhere — the contract
+    // under test is the protocol gate, not any host pattern.
+    expect(isAllowedImageHost('https://x.example.com/y')).toBe(true)
+    expect(isAllowedImageHost('http://x.example.com/y')).toBe(false)
   })
 })
