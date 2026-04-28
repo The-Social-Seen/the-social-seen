@@ -152,4 +152,28 @@ describe('ForgotPasswordForm', () => {
       expect(screen.getByLabelText(/email address/i)).toBeTruthy()
     })
   })
+
+  describe('email-deliverability guidance (submitted state)', () => {
+    // Pin the INTENT of the post-2026-04-28 copy fix (spam + Gmail
+    // Promotions tab + All Mail) so future copy edits don't silently
+    // drop the guidance. Regex-loose so phrasing tweaks don't break it.
+    it('shows spam + Gmail Promotions + All Mail guidance after submission', async () => {
+      mockRequestPasswordReset.mockResolvedValue({ success: true })
+
+      render(<ForgotPasswordForm />)
+      fireEvent.change(screen.getByLabelText(/email address/i), {
+        target: { value: 'test@test.com' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: /send reset link/i }))
+
+      // Drive into submitted state first.
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { name: /check your inbox/i })).toBeTruthy()
+      })
+
+      expect(screen.getByText(/spam/i)).toBeTruthy()
+      expect(screen.getByText(/promotions/i)).toBeTruthy()
+      expect(screen.getByText(/all mail/i)).toBeTruthy()
+    })
+  })
 })
