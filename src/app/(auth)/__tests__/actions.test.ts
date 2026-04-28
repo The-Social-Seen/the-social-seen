@@ -56,7 +56,7 @@ function mockSupabaseChain(response: { data?: unknown; error?: unknown }) {
   // Every method returns the chain itself, and the chain is also a thenable
   // so it resolves when awaited at any point in the chain.
   const chain: Record<string, ReturnType<typeof vi.fn>> = {}
-  const methods = ['select', 'insert', 'update', 'delete', 'eq', 'in', 'single']
+  const methods = ['select', 'insert', 'update', 'delete', 'eq', 'in', 'not', 'single']
   for (const m of methods) {
     chain[m] = vi.fn().mockReturnValue(chain)
   }
@@ -69,9 +69,10 @@ function mockSupabaseChain(response: { data?: unknown; error?: unknown }) {
 /**
  * Per-table mock — supports multiple from() calls in the same Server Action
  * dispatching to different chains. saveInterests now does:
- *   from('tags').select('id, slug').in(...)        → resolves tag rows
- *   from('user_interests').delete().eq(...)         → cleanup
- *   from('user_interests').insert(rows)             → write new rows
+ *   from('tags').select('id, slug').eq('is_active', true)
+ *     .not('slug', 'like', 'interest-%').in('slug', ...)  → resolves tag rows
+ *   from('user_interests').delete().eq(...)                → cleanup
+ *   from('user_interests').insert(rows)                    → write new rows
  *
  * Each table maps to its own chain object so assertions like
  * `tagsChain.in.toHaveBeenCalledWith(...)` can be made independently of
@@ -83,7 +84,7 @@ function mockSupabaseTables(
   const chains: Record<string, Record<string, ReturnType<typeof vi.fn>>> = {}
   for (const [table, response] of Object.entries(responses)) {
     const chain: Record<string, ReturnType<typeof vi.fn>> = {}
-    const methods = ['select', 'insert', 'update', 'delete', 'eq', 'in', 'single']
+    const methods = ['select', 'insert', 'update', 'delete', 'eq', 'in', 'not', 'single']
     for (const m of methods) {
       chain[m] = vi.fn().mockReturnValue(chain)
     }
@@ -463,13 +464,30 @@ describe('saveInterests', () => {
     expect(result).toHaveProperty('error')
   })
 
+  it('rejects label-shaped input that fails the slug regex (e.g. "Wine & Cocktails")', async () => {
+    // The schema runs before the auth check, so a malformed slug short-
+    // circuits without ever touching Supabase. Pinning this guards
+    // against a regression that loosens the regex (e.g. allowing
+    // spaces/ampersands), which would let stale label-pinned callers
+    // sneak past validation and hit the DB lookup with garbage.
+    const result = await saveInterests({
+      interestSlugs: ['Wine & Cocktails'],
+    })
+
+    expect(result).toHaveProperty('error')
+    if ('error' in result) {
+      expect(result.error).toContain('Invalid interest slug')
+    }
+    expect(mockGetUser).not.toHaveBeenCalled()
+  })
+
   it('returns error when user is not authenticated', async () => {
     mockGetUser.mockResolvedValue({
       data: { user: null },
       error: { message: 'Not authenticated' },
     })
 
-    const result = await saveInterests({ interestSlugs: ['Wine & Cocktails'] })
+    const result = await saveInterests({ interestSlugs: ['drinks-bars'] })
 
     expect(result).toHaveProperty('error')
     if ('error' in result) {
@@ -483,11 +501,10 @@ describe('saveInterests', () => {
       error: null,
     })
 
-    // After F2-schema dropped the legacy `interest` text column,
-    // saveInterests resolves each interest label to its canonical tag
-    // slug, looks up the matching tag UUIDs, and INSERTs (user_id, tag_id).
-    // The mock returns two tag rows matching the slugs in
-    // src/lib/constants.ts INTEREST_OPTIONS.
+    // saveInterests now accepts canonical slugs directly from the form
+    // (the registration chip grid persists tag.slug). The action looks
+    // up the matching tag UUIDs via an active+primary-eligible filter
+    // and INSERTs (user_id, tag_id) rows.
     const chains = mockSupabaseTables({
       tags: {
         data: [
@@ -500,7 +517,7 @@ describe('saveInterests', () => {
     })
 
     const result = await saveInterests({
-      interestSlugs: ['Wine & Cocktails', 'Fine Dining'],
+      interestSlugs: ['drinks-bars', 'dining-supper-clubs'],
     })
 
     expect(result).toEqual({ success: true })
@@ -522,6 +539,88 @@ describe('saveInterests', () => {
     ])
   })
 
+  it('applies the active+primary-eligible DB filter when looking up tag rows', async () => {
+    // The active/non-`interest-%` filter is the security boundary that
+    // makes interest-only or retired slugs unsavable from the
+    // registration flow. Pinning the filter shape stops a future
+    // contributor from quietly dropping it.
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'user-1' } },
+      error: null,
+    })
+
+    const chains = mockSupabaseTables({
+      tags: {
+        data: [{ id: 'tag-uuid-drinks-bars', slug: 'drinks-bars' }],
+        error: null,
+      },
+      user_interests: { data: null, error: null },
+    })
+
+    await saveInterests({ interestSlugs: ['drinks-bars'] })
+
+    expect(chains.tags.eq).toHaveBeenCalledWith('is_active', true)
+    expect(chains.tags.not).toHaveBeenCalledWith('slug', 'like', 'interest-%')
+  })
+
+  it('rejects an unknown slug (DB lookup returns short row count)', async () => {
+    // 'totally-fake-slug' parses as a valid slug shape but doesn't
+    // exist in the canonical taxonomy. The DB returns zero rows,
+    // tagRows.length !== requestedSlugs.length, and the action refuses
+    // to write user_interests with a missing tag_id.
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'user-1' } },
+      error: null,
+    })
+
+    const chains = mockSupabaseTables({
+      tags: { data: [], error: null },
+      user_interests: { data: null, error: null },
+    })
+
+    const result = await saveInterests({
+      interestSlugs: ['totally-fake-slug'],
+    })
+
+    expect(result).toHaveProperty('error')
+    if ('error' in result) {
+      expect(result.error).toContain('Failed to save interests')
+    }
+    // Critical: must NOT proceed to the delete/insert side. A bug here
+    // would wipe the user's existing interests before discovering the
+    // tag lookup was incomplete.
+    expect(chains.user_interests.delete).not.toHaveBeenCalled()
+    expect(chains.user_interests.insert).not.toHaveBeenCalled()
+  })
+
+  it('rejects an interest-only slug (filtered out by NOT LIKE \'interest-%\')', async () => {
+    // The interest-only taxonomy is soft-retired from registration.
+    // Even though the row exists in `tags`, the `not('slug', 'like',
+    // 'interest-%')` filter excludes it from the lookup, so the row
+    // count comes back short and the action refuses the write.
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'user-1' } },
+      error: null,
+    })
+
+    const chains = mockSupabaseTables({
+      // Filter excludes 'interest-technology' → empty result set.
+      tags: { data: [], error: null },
+      user_interests: { data: null, error: null },
+    })
+
+    const result = await saveInterests({
+      interestSlugs: ['interest-technology'],
+    })
+
+    expect(result).toHaveProperty('error')
+    if ('error' in result) {
+      expect(result.error).toContain('Failed to save interests')
+    }
+    expect(chains.user_interests.delete).not.toHaveBeenCalled()
+    expect(chains.user_interests.insert).not.toHaveBeenCalled()
+  })
+
   it('deletes existing interests before inserting new ones', async () => {
     mockGetUser.mockResolvedValue({
       data: { user: { id: 'user-1' } },
@@ -530,13 +629,13 @@ describe('saveInterests', () => {
 
     const chains = mockSupabaseTables({
       tags: {
-        data: [{ id: 'tag-uuid-interest-technology', slug: 'interest-technology' }],
+        data: [{ id: 'tag-uuid-drinks-bars', slug: 'drinks-bars' }],
         error: null,
       },
       user_interests: { data: null, error: null },
     })
 
-    await saveInterests({ interestSlugs: ['Technology'] })
+    await saveInterests({ interestSlugs: ['drinks-bars'] })
 
     expect(chains.user_interests.delete).toHaveBeenCalled()
     expect(chains.user_interests.eq).toHaveBeenCalledWith('user_id', 'user-1')
