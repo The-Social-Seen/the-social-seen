@@ -53,10 +53,17 @@ describe('resolveEventImage', () => {
     expect(resolveEventImage(url)).toBe(url)
   })
 
-  it('returns null for a disallowed external host (next/image would crash)', () => {
-    // Seed data includes these; without the allowlist guard next/image would
-    // throw and the global error boundary would replace the whole page.
-    expect(resolveEventImage('https://res.dayoutwiththekids.co.uk/x.jpg')).toBeNull()
+  it('returns an arbitrary HTTPS URL as-is', () => {
+    // 2026-04-28: hostname allowlist removed in favour of a single
+    // protocol check. Any HTTPS host is passed through to next/image,
+    // which now permits any HTTPS origin (next.config.ts wildcard).
+    expect(resolveEventImage('https://res.dayoutwiththekids.co.uk/x.jpg'))
+      .toBe('https://res.dayoutwiththekids.co.uk/x.jpg')
+    expect(resolveEventImage('https://cdn.example.com/y.jpg'))
+      .toBe('https://cdn.example.com/y.jpg')
+  })
+
+  it('returns null for an http:// URL (mixed-content; next/image would also reject)', () => {
     expect(resolveEventImage('http://example.com/image.jpg')).toBeNull()
   })
 
@@ -95,8 +102,13 @@ describe('resolveAvatarUrl', () => {
     expect(resolveAvatarUrl(url)).toBe(url)
   })
 
-  it('returns null for a disallowed host', () => {
-    expect(resolveAvatarUrl('https://cdn.example.com/avatar.png')).toBeNull()
+  it('returns an arbitrary HTTPS URL as-is', () => {
+    expect(resolveAvatarUrl('https://cdn.example.com/avatar.png'))
+      .toBe('https://cdn.example.com/avatar.png')
+  })
+
+  it('returns null for an http:// URL', () => {
+    expect(resolveAvatarUrl('http://example.com/avatar.png')).toBeNull()
   })
 
   it('resolves a storage path to the avatars bucket', () => {
@@ -128,8 +140,13 @@ describe('resolveStorageUrl', () => {
     expect(resolveStorageUrl(url, 'docs')).toBe(url)
   })
 
-  it('returns null for a disallowed external host', () => {
-    expect(resolveStorageUrl('https://cdn.example.com/file.pdf', 'docs')).toBeNull()
+  it('returns an arbitrary HTTPS URL as-is', () => {
+    expect(resolveStorageUrl('https://cdn.example.com/file.pdf', 'docs'))
+      .toBe('https://cdn.example.com/file.pdf')
+  })
+
+  it('returns null for an http:// URL', () => {
+    expect(resolveStorageUrl('http://example.com/file.pdf', 'docs')).toBeNull()
   })
 
   it('uses the provided bucket name in the URL', () => {
@@ -142,30 +159,22 @@ describe('resolveStorageUrl', () => {
 // ── isAllowedImageHost ────────────────────────────────────────────────────────
 
 describe('isAllowedImageHost', () => {
-  it('allows images.unsplash.com (literal match)', () => {
+  it('allows images.unsplash.com', () => {
     expect(isAllowedImageHost('https://images.unsplash.com/photo-x')).toBe(true)
   })
 
-  it('allows subdomains of supabase.co (wildcard match)', () => {
+  it('allows subdomains of supabase.co', () => {
     expect(isAllowedImageHost('https://project.supabase.co/file.jpg')).toBe(true)
     expect(isAllowedImageHost('https://another-project.supabase.co/x')).toBe(true)
   })
 
-  it('rejects the bare wildcard suffix itself', () => {
-    // "*.supabase.co" should NOT match "supabase.co" with no subdomain —
-    // next/image wildcard semantics require at least one label.
-    expect(isAllowedImageHost('https://supabase.co/x')).toBe(false)
-  })
-
-  it('rejects disallowed hosts', () => {
-    expect(isAllowedImageHost('https://cdn.example.com/x.jpg')).toBe(false)
-    expect(isAllowedImageHost('https://res.dayoutwiththekids.co.uk/x.jpg')).toBe(false)
-    expect(isAllowedImageHost('https://ca-times.brightspotcdn.com/x.jpg')).toBe(false)
-  })
-
-  it('rejects similar-looking but distinct hosts', () => {
-    // Guards against `endsWith` matching "evil-images.unsplash.com.attacker.com"
-    expect(isAllowedImageHost('https://images.unsplash.com.attacker.com/x')).toBe(false)
+  it('accepts arbitrary HTTPS CDN hostnames', () => {
+    // 2026-04-28: hostname allowlist removed (single-admin trust
+    // model). The contract is now "any HTTPS source is allowed" —
+    // these example hostnames are deliberately non-special.
+    expect(isAllowedImageHost('https://res.dayoutwiththekids.co.uk/x.jpg')).toBe(true)
+    expect(isAllowedImageHost('https://cdn.example.com/y.jpg')).toBe(true)
+    expect(isAllowedImageHost('https://ca-times.brightspotcdn.com/x.jpg')).toBe(true)
   })
 
   it('returns false for a malformed URL', () => {
@@ -173,16 +182,13 @@ describe('isAllowedImageHost', () => {
     expect(isAllowedImageHost('')).toBe(false)
   })
 
-  it('rejects http:// even on an allowlisted host (https-only per next.config)', () => {
-    // Phase 2.5 Batch 8: explicitly disallow insecure protocols. A
-    // seeded http://images.unsplash.com URL used to slip through the
-    // hostname match only to be rejected later by next/image itself.
-    expect(
-      isAllowedImageHost('http://images.unsplash.com/photo-x'),
-    ).toBe(false)
-    expect(
-      isAllowedImageHost('http://project.supabase.co/x.jpg'),
-    ).toBe(false)
+  it('rejects http:// (mixed-content + MitM)', () => {
+    // HTTP is the only protocol-level rejection the helper still
+    // enforces. Cover both previously-allowlisted hosts and an
+    // arbitrary one to make the protocol-only contract obvious.
+    expect(isAllowedImageHost('http://images.unsplash.com/photo-x')).toBe(false)
+    expect(isAllowedImageHost('http://project.supabase.co/x.jpg')).toBe(false)
+    expect(isAllowedImageHost('http://example.com/x.jpg')).toBe(false)
   })
 })
 
