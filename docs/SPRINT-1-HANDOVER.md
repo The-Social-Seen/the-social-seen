@@ -275,5 +275,5 @@ supabase migration list           # last applied: 20260421000001
 curl -s -X POST "https://api.resend.com/emails" \
   -H "Authorization: Bearer $RESEND_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"from":"The Social Seen <onboarding@resend.dev>","to":["mitesh@skillmeup.co"],"subject":"Health check","text":"Sprint 1 wrap-up health check."}'
+  -d '{"from":"The Social Seen <hello@the-social-seen.com>","to":["mitesh@skillmeup.co"],"subject":"Health check","text":"Sprint 1 wrap-up health check."}'
 ```

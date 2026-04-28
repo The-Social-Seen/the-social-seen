@@ -5,7 +5,7 @@ Management API. **These live outside git** — re-apply them when creating
 the production project or restoring from a backup, otherwise core flows
 (OTP, cron-driven emails, SMS) break or behave inconsistently.
 
-Last reviewed: 2026-04-22.
+Last reviewed: 2026-04-28.
 
 ---
 
@@ -82,7 +82,7 @@ supabase link --project-ref "$SUPABASE_PROJECT_REF"
 # SANDBOX_* lines for production.
 supabase secrets set \
   RESEND_API_KEY='re_...' \
-  FROM_ADDRESS='The Social Seen <onboarding@resend.dev>' \
+  FROM_ADDRESS='The Social Seen <hello@the-social-seen.com>' \
   REPLY_TO_ADDRESS='info@the-social-seen.com' \
   SANDBOX_FALLBACK_RECIPIENT='mitesh@skillmeup.co' \
   NEXT_PUBLIC_SITE_URL='https://the-social-seen.com' \
@@ -157,26 +157,85 @@ Customers Write.
 
 ---
 
-## 5. Resend domain verification (Sprint 1, P2-4)
+## 5. Email FROM_ADDRESS — current state + rotation runbook
 
-Resend dashboard → Domains → add `the-social-seen.com` → copy the
-three DNS records (SPF, DKIM, DMARC) to the domain registrar.
-Verification typically takes 5 min – 48 h.
+**Status (2026-04-28):** Domain `the-social-seen.com` is verified at
+Resend (SPF / DKIM / DMARC / MX records at the domain registrar).
+FROM_ADDRESS is `'The Social Seen <hello@the-social-seen.com>'` in
+both code paths:
 
-While unverified, Resend only sends to the account-owner address
-(`mitesh@skillmeup.co`) and the codebase's `SANDBOX_FALLBACK_RECIPIENT`
-auto-redirects all sends there.
+- Next.js app — `src/lib/email/config.ts:27` (constant; pinned by
+  Vitest regression test at `src/lib/email/__tests__/config.test.ts`)
+- Supabase Edge Function — `supabase/functions/daily-notifications/index.ts`
+  fallback (overridden by the `FROM_ADDRESS` supabase secret when set;
+  setting the secret takes precedence)
 
-Post-verification, update the FROM address:
+**Supabase Auth SMTP** is also routed through Resend (verified by
+checking the `From` header on a signup-verification email — reads
+`hello@the-social-seen.com`, not the Supabase default
+`noreply@mail.app.supabase.io`). Configured in Supabase dashboard →
+Authentication → SMTP Settings (host `smtp.resend.com`, port 465,
+username `resend`, password = a Resend API key).
 
-```diff
-// src/lib/email/config.ts
-- export const FROM_ADDRESS = 'The Social Seen <onboarding@resend.dev>'
-+ export const FROM_ADDRESS = 'The Social Seen <hello@the-social-seen.com>'
+### Rotation runbook (Resend account swap, key rotation, fresh project)
+
+When you rotate the Resend API key, swap to a new Resend account, or
+spin up a fresh Supabase project, run these steps in order:
+
+```bash
+# 1. Verify the current state of supabase secrets:
+supabase secrets list --project-ref "$SUPABASE_PROJECT_REF"
+# Look for FROM_ADDRESS. The env var takes precedence over the in-code
+# fallback when set; if it's set to anything @resend.dev or unset,
+# step 2 is required.
+
+# 2. Set FROM_ADDRESS to the verified-domain sender:
+supabase secrets set \
+  "FROM_ADDRESS=The Social Seen <hello@the-social-seen.com>" \
+  --project-ref "$SUPABASE_PROJECT_REF"
+
+# 3. Re-deploy the edge function so the in-code fallback is current
+#    AND the env var change takes effect on next invocation:
+supabase functions deploy daily-notifications --project-ref "$SUPABASE_PROJECT_REF"
+
+# 4. Verify both code paths actually deliver in production (the canary
+#    is the only thing that proves rotation worked end-to-end —
+#    unit tests pin format, not delivery):
+#    Path A — Next.js webhook side (booking confirmation):
+#      Sign up as a non-account-owner inbox → book a free event →
+#      check inbox + Resend → Logs status='delivered'
+#    Path B — Edge Function side (cron / manual invoke):
+#      Supabase dashboard → Functions → daily-notifications → Invoke
+#      with `{}` payload → check Resend → Logs status='delivered'
+
+# 5. Also re-paste the Resend API key into Supabase Auth SMTP settings
+#    if it was rotated — that's a separate password field in the
+#    dashboard, not part of `supabase secrets`.
 ```
 
-Also update `FROM_ADDRESS` in Supabase secrets (§2 above) so the
-edge function uses the verified domain.
+### Why this exists
+
+The 2026-04-28 incident silently broke transactional email for ~24h
+because `FROM_ADDRESS` was hardcoded to `onboarding@resend.dev`
+(Resend's sandbox sender — only delivers to the account owner).
+Anyone rotating Stripe / Resend / any other third-party account
+should walk the broader rotation checklist in
+`memory/project_account_rotation_cascade_pattern.md` (item #3 covers
+Auth SMTP specifically).
+
+### Adding a fresh sending domain (one-time per project)
+
+For a brand-new Supabase / Resend project:
+
+1. Resend dashboard → Domains → add `the-social-seen.com` → copy the
+   SPF, DKIM, DMARC, and MX records to the domain registrar.
+2. Wait for all four checks to go green (typically 5 min – 48 h).
+3. Run the rotation runbook above with the new project ref.
+4. Update the `FROM_ADDRESS` constant in `src/lib/email/config.ts`
+   AND the Edge Function fallback in
+   `supabase/functions/daily-notifications/index.ts` if the verified
+   domain differs from `the-social-seen.com`. The Vitest config-shape
+   regression test will fail otherwise.
 
 ---
 
