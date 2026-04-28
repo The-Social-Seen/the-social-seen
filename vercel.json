@@ -3,7 +3,7 @@
   "crons": [
     {
       "path": "/api/admin/cron/reap-stale-bookings",
-      "schedule": "*/15 * * * *"
+      "schedule": "0 3 * * *"
     }
   ]
 }
