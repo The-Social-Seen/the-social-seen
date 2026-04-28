@@ -280,4 +280,19 @@ describe('VerifyForm', () => {
   // The initial state ("Resend in 60s" rendered, button hidden) is already
   // covered above; the per-second countdown logic is simple enough that
   // the regression surface is small. Tracked in docs/FOLLOW-UPS.md.
+
+  describe('email-deliverability guidance', () => {
+    // Pin the INTENT of the post-2026-04-28 copy fix (spam + Gmail
+    // Promotions tab + All Mail) so future copy edits don't silently
+    // drop the guidance. Regex-loose so phrasing tweaks don't break it.
+    it('shows spam + Gmail Promotions + All Mail guidance on the OTP-entry screen', async () => {
+      mockSendVerificationOtp.mockResolvedValue({ success: true })
+      render(<VerifyForm />)
+      await waitForReady()
+
+      expect(screen.getByText(/spam/i)).toBeTruthy()
+      expect(screen.getByText(/promotions/i)).toBeTruthy()
+      expect(screen.getByText(/all mail/i)).toBeTruthy()
+    })
+  })
 })
