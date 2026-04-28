@@ -27,6 +27,32 @@ export async function getActiveTags(): Promise<Tag[]> {
   return (data ?? []) as Tag[]
 }
 
+/**
+ * Tags shown to users in registration + profile-edit interest selectors.
+ * Primary-eligible only (event-tagging tags); excludes the interest-only
+ * taxonomy (slugs prefixed with 'interest-'). Same is_active filter and
+ * sort_order as getActiveTags.
+ *
+ * 2026-04-28: introduced to source registration interests from the tags
+ * table directly, replacing the hardcoded INTEREST_OPTIONS constant in
+ * src/lib/constants.ts.
+ */
+export async function getRegistrationInterestTags(): Promise<Tag[]> {
+  const supabase = await createServerClient()
+  const { data, error } = await supabase
+    .from('tags')
+    .select('id, slug, label, parent_id, sort_order, is_active, created_at, updated_at')
+    .eq('is_active', true)
+    .not('slug', 'like', 'interest-%')
+    .order('sort_order', { ascending: true })
+
+  if (error) {
+    console.error('[getRegistrationInterestTags]', error.message)
+    return []
+  }
+  return (data ?? []) as Tag[]
+}
+
 export interface EventTagSelection {
   /** Primary tag slug (exactly one per event after Migration 2). Null for legacy events that haven't been re-saved through the new picker. */
   primary: string | null

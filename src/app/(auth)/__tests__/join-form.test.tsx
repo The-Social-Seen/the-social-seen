@@ -54,6 +54,59 @@ vi.mock('../actions', () => ({
 }))
 
 import { JoinForm } from '../join/join-form'
+import type { Tag } from '@/types'
+
+// ── Fixtures ───────────────────────────────────────────────────────────────
+
+/**
+ * Representative slice of the 15 primary-eligible tags. Picked deliberately
+ * to be small (assertions don't need to enumerate the full taxonomy) and
+ * to span sort_order so the prop-driven tests still see a meaningful set
+ * to click through. Keep this in step with the 15-tag list in
+ * supabase/migrations/20260504000001_create_tags_and_event_tags.sql.
+ */
+const MOCK_INTEREST_TAGS: Tag[] = [
+  {
+    id: 'tag-uuid-drinks-bars',
+    slug: 'drinks-bars',
+    label: 'Drinks & Bars',
+    parent_id: null,
+    sort_order: 10,
+    is_active: true,
+    created_at: '2026-04-01T00:00:00Z',
+    updated_at: '2026-04-01T00:00:00Z',
+  },
+  {
+    id: 'tag-uuid-theatre-comedy',
+    slug: 'theatre-comedy',
+    label: 'Theatre & Comedy',
+    parent_id: null,
+    sort_order: 60,
+    is_active: true,
+    created_at: '2026-04-01T00:00:00Z',
+    updated_at: '2026-04-01T00:00:00Z',
+  },
+  {
+    id: 'tag-uuid-sport-fitness',
+    slug: 'sport-fitness',
+    label: 'Sport & Fitness',
+    parent_id: null,
+    sort_order: 90,
+    is_active: true,
+    created_at: '2026-04-01T00:00:00Z',
+    updated_at: '2026-04-01T00:00:00Z',
+  },
+  {
+    id: 'tag-uuid-wellness-mindfulness',
+    slug: 'wellness-mindfulness',
+    label: 'Wellness & Mindfulness',
+    parent_id: null,
+    sort_order: 140,
+    is_active: true,
+    created_at: '2026-04-01T00:00:00Z',
+    updated_at: '2026-04-01T00:00:00Z',
+  },
+]
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -84,12 +137,12 @@ describe('JoinForm — Step 1 (Account)', () => {
   })
 
   it('renders "Create Your Account" heading', () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     expect(screen.getByRole('heading', { name: /create your account/i })).toBeTruthy()
   })
 
   it('renders all required form fields', () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     expect(screen.getByLabelText(/full name/i)).toBeTruthy()
     expect(screen.getByLabelText(/email address/i)).toBeTruthy()
     expect(screen.getByLabelText(/^password$/i)).toBeTruthy()
@@ -97,19 +150,19 @@ describe('JoinForm — Step 1 (Account)', () => {
   })
 
   it('renders phone number field with helper text', () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     expect(screen.getByLabelText(/phone number/i)).toBeTruthy()
     expect(screen.getByText(/for event reminders & venue details/i)).toBeTruthy()
   })
 
   it('caps phone input at maxLength=24 (paste-attack defence)', () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     const phone = screen.getByLabelText(/phone number/i) as HTMLInputElement
     expect(phone.getAttribute('maxLength')).toBe('24')
   })
 
   it('renders email consent checkbox unchecked by default (GDPR)', () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     const checkbox = screen.getByRole('checkbox', {
       name: /keep me updated with new events/i,
     })
@@ -119,7 +172,7 @@ describe('JoinForm — Step 1 (Account)', () => {
   })
 
   it('toggles email consent checkbox when clicked', () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     const checkbox = screen.getByRole('checkbox', {
       name: /keep me updated/i,
     })
@@ -133,38 +186,38 @@ describe('JoinForm — Step 1 (Account)', () => {
   })
 
   it('renders the "How did you hear about us?" optional dropdown', () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     expect(screen.getByLabelText(/how did you hear/i)).toBeTruthy()
   })
 
   it('renders step indicator with Account, Interests, Welcome labels', () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     expect(screen.getByText('Account')).toBeTruthy()
     expect(screen.getByText('Interests')).toBeTruthy()
     expect(screen.getByText('Welcome')).toBeTruthy()
   })
 
   it('renders disabled Google OAuth button', () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     const googleBtn = screen.getByRole('button', { name: /continue with google/i })
     expect(googleBtn).toBeTruthy()
     expect(googleBtn.hasAttribute('disabled')).toBe(true)
   })
 
   it('renders "Coming soon" tooltip for Google button', () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     expect(screen.getByText('Coming soon')).toBeTruthy()
   })
 
   it('renders "Already a member? Sign In" link', () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     const signInLink = screen.getByRole('link', { name: /sign in/i })
     expect(signInLink.getAttribute('href')).toBe('/login')
   })
 
   // Amendment 4.4 validation messages
   it('shows "We\'ll need your name to get started" when name is empty', async () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await waitFor(() => {
       expect(screen.getByText("We'll need your name to get started")).toBeTruthy()
@@ -172,7 +225,7 @@ describe('JoinForm — Step 1 (Account)', () => {
   })
 
   it('shows "Enter your email to create your account" when email is empty', async () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await waitFor(() => {
       expect(screen.getByText('Enter your email to create your account')).toBeTruthy()
@@ -180,7 +233,7 @@ describe('JoinForm — Step 1 (Account)', () => {
   })
 
   it('shows "Choose a password (at least 8 characters)" when password is too short', async () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     fireEvent.change(screen.getByLabelText(/full name/i), { target: { value: 'Test' } })
     fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: 'test@test.com' } })
     fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'short' } })
@@ -195,7 +248,7 @@ describe('JoinForm — Step 1 (Account)', () => {
       error: "Looks like you're already a member — sign in instead?",
     })
 
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     fillStep1Valid({ email: 'existing@test.com', name: 'Test User' })
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
@@ -207,7 +260,7 @@ describe('JoinForm — Step 1 (Account)', () => {
   it('advances to Step 2 on successful signup', async () => {
     mockSignUp.mockResolvedValue({ success: true })
 
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     fillStep1Valid()
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
@@ -218,7 +271,7 @@ describe('JoinForm — Step 1 (Account)', () => {
 
   // ── Phone number validation ──────────────────────────────────────────────
   it('shows "Enter a valid phone number" when phone is empty', async () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     fireEvent.change(screen.getByLabelText(/full name/i), { target: { value: 'Test User' } })
     fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: 'test@test.com' } })
     fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'password123' } })
@@ -231,7 +284,7 @@ describe('JoinForm — Step 1 (Account)', () => {
   })
 
   it('shows "Enter a valid phone number" when phone contains letters', async () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     fillStep1Valid({ phoneNumber: 'abc' })
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
@@ -242,7 +295,7 @@ describe('JoinForm — Step 1 (Account)', () => {
   })
 
   it('shows "Enter a valid phone number" when phone is too short', async () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     fillStep1Valid({ phoneNumber: '12345' })
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
@@ -255,7 +308,7 @@ describe('JoinForm — Step 1 (Account)', () => {
   it('accepts UK phone with whitespace and strips it before submit', async () => {
     mockSignUp.mockResolvedValue({ success: true })
 
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     fillStep1Valid({ phoneNumber: '07123 456 789' })
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
@@ -269,7 +322,7 @@ describe('JoinForm — Step 1 (Account)', () => {
   it('accepts +44 international format', async () => {
     mockSignUp.mockResolvedValue({ success: true })
 
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     fillStep1Valid({ phoneNumber: '+44 7123 456789' })
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
@@ -284,7 +337,7 @@ describe('JoinForm — Step 1 (Account)', () => {
   it('passes emailConsent: false to signUp when checkbox left unchecked', async () => {
     mockSignUp.mockResolvedValue({ success: true })
 
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     fillStep1Valid()
     // Do NOT click the checkbox
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
@@ -299,7 +352,7 @@ describe('JoinForm — Step 1 (Account)', () => {
   it('passes emailConsent: true to signUp when checkbox is checked', async () => {
     mockSignUp.mockResolvedValue({ success: true })
 
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     fillStep1Valid()
     fireEvent.click(
       screen.getByRole('checkbox', { name: /keep me updated/i }),
@@ -320,8 +373,8 @@ describe('JoinForm — Step 2 (Interests)', () => {
     mockSignUp.mockResolvedValue({ success: true })
   })
 
-  async function advanceToStep2() {
-    render(<JoinForm />)
+  async function advanceToStep2(interestTags: Tag[] = MOCK_INTEREST_TAGS) {
+    render(<JoinForm interestTags={interestTags} />)
     fillStep1Valid({ name: 'Test User', email: 'test@test.com' })
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await waitFor(() => {
@@ -329,11 +382,36 @@ describe('JoinForm — Step 2 (Interests)', () => {
     })
   }
 
-  it('renders interest tags from INTEREST_OPTIONS', async () => {
+  it('renders a chip for each tag passed via the interestTags prop', async () => {
     await advanceToStep2()
-    expect(screen.getByRole('button', { name: 'Wine & Cocktails' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Fine Dining' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Art & Culture' })).toBeTruthy()
+    // Sample 3 of the 4 fixture labels — the assertion is "an interest
+    // chip exists for each prop entry", not "the full canonical list".
+    expect(screen.getByRole('button', { name: 'Drinks & Bars' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Theatre & Comedy' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Wellness & Mindfulness' })).toBeTruthy()
+  })
+
+  it('renders ONLY the labels in interestTags (does not fall back to a hardcoded list)', async () => {
+    // Pin the prop-driven contract: a future contributor reverting the
+    // chip grid to a hardcoded INTEREST_OPTIONS-style array would fail
+    // this test because the fake label can't be sourced from anywhere
+    // else.
+    const fakeTag: Tag = {
+      id: 'tag-uuid-fake',
+      slug: 'fake-tag-for-test',
+      label: 'Fake Tag For Test',
+      parent_id: null,
+      sort_order: 999,
+      is_active: true,
+      created_at: '2026-04-01T00:00:00Z',
+      updated_at: '2026-04-01T00:00:00Z',
+    }
+    await advanceToStep2([fakeTag])
+
+    expect(screen.getByRole('button', { name: 'Fake Tag For Test' })).toBeTruthy()
+    // Old hardcoded labels should not appear unless the prop carried them.
+    expect(screen.queryByRole('button', { name: 'Wine & Cocktails' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Drinks & Bars' })).toBeNull()
   })
 
   it('shows error when continuing without selecting any interest', async () => {
@@ -360,7 +438,7 @@ describe('JoinForm — Step 2 (Interests)', () => {
 
   it('toggles interest selection on click', async () => {
     await advanceToStep2()
-    const tag = screen.getByRole('button', { name: 'Wine & Cocktails' })
+    const tag = screen.getByRole('button', { name: 'Drinks & Bars' })
 
     // First click selects
     fireEvent.click(tag)
@@ -372,15 +450,22 @@ describe('JoinForm — Step 2 (Interests)', () => {
     expect(tag.className).not.toContain('bg-gold text-white')
   })
 
-  it('advances to Step 3 on successful interest save', async () => {
+  it('advances to Step 3 on successful interest save and persists by slug', async () => {
     mockSaveInterests.mockResolvedValue({ success: true })
 
     await advanceToStep2()
-    fireEvent.click(screen.getByRole('button', { name: 'Wine & Cocktails' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Drinks & Bars' }))
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /you're in/i })).toBeTruthy()
+    })
+
+    // saveInterests must receive canonical slugs from the prop, not
+    // labels — backend validation rejects label-shaped strings via the
+    // slug regex.
+    expect(mockSaveInterests).toHaveBeenCalledWith({
+      interestSlugs: ['drinks-bars'],
     })
   })
 
@@ -403,7 +488,7 @@ describe('JoinForm — Step 3 (Welcome)', () => {
   })
 
   async function advanceToStep3() {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={MOCK_INTEREST_TAGS} />)
     // Step 1
     fillStep1Valid()
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
@@ -411,7 +496,7 @@ describe('JoinForm — Step 3 (Welcome)', () => {
       expect(screen.getByRole('heading', { name: /what interests you/i })).toBeTruthy()
     })
     // Step 2
-    fireEvent.click(screen.getByRole('button', { name: 'Wine & Cocktails' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Drinks & Bars' }))
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /you're in/i })).toBeTruthy()
@@ -459,7 +544,7 @@ describe('JoinForm — Step 3 (Welcome)', () => {
 
 describe('JoinForm — Amendment 4.1 (removed fields)', () => {
   it('does NOT render job title, company, industry, LinkedIn, bio, or photo upload', () => {
-    render(<JoinForm />)
+    render(<JoinForm interestTags={[]} />)
     expect(screen.queryByLabelText(/job title/i)).toBeNull()
     expect(screen.queryByLabelText(/company/i)).toBeNull()
     expect(screen.queryByLabelText(/industry/i)).toBeNull()

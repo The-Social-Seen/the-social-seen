@@ -3,7 +3,6 @@
 import { z } from 'zod'
 import { revalidatePath } from 'next/cache'
 import { createServerClient } from '@/lib/supabase/server'
-import { interestSlugFor } from '@/lib/constants'
 
 // ── Validation schemas ──────────────────────────────────────────────────────
 
@@ -33,8 +32,17 @@ const profileSchema = z.object({
     ),
 })
 
+// Slug shape matches the canonical taxonomy in `public.tags`: lowercase
+// alphanumerics + hyphens, no leading/trailing hyphen. The runtime check
+// against the active, primary-eligible tag set happens inside updateInterests.
+const slugSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'Invalid interest slug')
+
 const interestsSchema = z.object({
-  interests: z.array(z.string().min(1)).min(1, 'Select at least one interest'),
+  interestSlugs: z.array(slugSchema).min(1, 'Select at least one interest'),
 })
 
 const ALLOWED_AVATAR_TYPES = ['image/jpeg', 'image/png', 'image/webp']
@@ -161,13 +169,14 @@ export async function updateAvatar(
 // ── Update interests ────────────────────────────────────────────────────────
 
 export async function updateInterests(
-  interests: string[],
+  interestSlugs: string[],
 ): Promise<{ success: boolean; error?: string }> {
-  const parsed = interestsSchema.safeParse({ interests })
+  const parsed = interestsSchema.safeParse({ interestSlugs })
   if (!parsed.success) {
     return { success: false, error: parsed.error.issues[0].message }
   }
 
+  const requestedSlugs = Array.from(new Set(parsed.data.interestSlugs))
   const supabase = await createServerClient()
 
   const {
@@ -178,32 +187,22 @@ export async function updateInterests(
     return { success: false, error: 'Authentication required' }
   }
 
-  // Resolve each interest label (from INTEREST_OPTIONS) to its canonical
-  // tag slug. Off-list input here means INTEREST_OPTIONS and the form
-  // drifted out of sync — refuse rather than write an unmappable row.
-  const slugMap = new Map<string, string>()
-  for (const interestLabel of parsed.data.interests) {
-    const slug = interestSlugFor(interestLabel)
-    if (!slug) {
-      console.error('[updateInterests:slug]', `no slug for interest "${interestLabel}"`)
-      return { success: false, error: 'Failed to save interests' }
-    }
-    slugMap.set(interestLabel, slug)
-  }
-
-  // Batch lookup: resolve all required tag slugs to UUIDs in a single query.
-  // After F2-schema dropped the legacy `interest` text column,
-  // user_interests.tag_id is the SOLE carrier of interest semantics.
-  const requiredSlugs = Array.from(new Set(slugMap.values()))
+  // Validate every slug resolves to an active, registration-eligible tag
+  // (primary-eligible only; interest-* slugs are retired from this flow).
+  // The DB-level check covers both existence and the `is_active` /
+  // `not like 'interest-%'` filter — if the row count comes back short,
+  // some slug was off-list or retired and we refuse the write.
   const { data: tagRows, error: tagsError } = await supabase
     .from('tags')
     .select('id, slug')
-    .in('slug', requiredSlugs)
+    .eq('is_active', true)
+    .not('slug', 'like', 'interest-%')
+    .in('slug', requestedSlugs)
 
-  if (tagsError || !tagRows || tagRows.length !== requiredSlugs.length) {
+  if (tagsError || !tagRows || tagRows.length !== requestedSlugs.length) {
     console.error(
       '[updateInterests:tags]',
-      tagsError?.message ?? `expected ${requiredSlugs.length} tag rows, got ${tagRows?.length ?? 0}`,
+      tagsError?.message ?? `expected ${requestedSlugs.length} tag rows, got ${tagRows?.length ?? 0}`,
     )
     return { success: false, error: 'Failed to save interests' }
   }
@@ -222,9 +221,9 @@ export async function updateInterests(
 
   // Insert new interests as (user_id, tag_id) — F2-schema dropped the
   // legacy `interest` text column.
-  const rows = parsed.data.interests.map((interestLabel) => ({
+  const rows = requestedSlugs.map((slug) => ({
     user_id: user.id,
-    tag_id: slugToTagId.get(slugMap.get(interestLabel)!)!,
+    tag_id: slugToTagId.get(slug)!,
   }))
 
   const { error: insertError } = await supabase

@@ -33,7 +33,7 @@ import {
 
 function mockSupabaseChain(response: { data?: unknown; error?: unknown }) {
   const chain: Record<string, ReturnType<typeof vi.fn>> = {}
-  const methods = ['select', 'insert', 'update', 'delete', 'eq', 'in', 'single']
+  const methods = ['select', 'insert', 'update', 'delete', 'eq', 'in', 'not', 'single']
   for (const m of methods) {
     chain[m] = vi.fn().mockReturnValue(chain)
   }
@@ -45,9 +45,10 @@ function mockSupabaseChain(response: { data?: unknown; error?: unknown }) {
 /**
  * Per-table mock — supports multiple from() calls in the same Server Action
  * dispatching to different chains. updateInterests now does:
- *   from('tags').select('id, slug').in(...)        → resolves tag rows
- *   from('user_interests').delete().eq(...)         → cleanup
- *   from('user_interests').insert(rows)             → write new rows
+ *   from('tags').select('id, slug').eq('is_active', true)
+ *     .not('slug', 'like', 'interest-%').in('slug', ...)  → resolves tag rows
+ *   from('user_interests').delete().eq(...)                → cleanup
+ *   from('user_interests').insert(rows)                    → write new rows
  */
 function mockSupabaseTables(
   responses: Record<string, { data?: unknown; error?: unknown }>,
@@ -55,7 +56,7 @@ function mockSupabaseTables(
   const chains: Record<string, Record<string, ReturnType<typeof vi.fn>>> = {}
   for (const [table, response] of Object.entries(responses)) {
     const chain: Record<string, ReturnType<typeof vi.fn>> = {}
-    const methods = ['select', 'insert', 'update', 'delete', 'eq', 'in', 'single']
+    const methods = ['select', 'insert', 'update', 'delete', 'eq', 'in', 'not', 'single']
     for (const m of methods) {
       chain[m] = vi.fn().mockReturnValue(chain)
     }
@@ -271,10 +272,21 @@ describe('updateInterests', () => {
     expect(result.error).toBeDefined()
   })
 
+  it('rejects label-shaped input that fails the slug regex', async () => {
+    // The schema runs first — a label string with spaces/ampersands
+    // never reaches the auth check or the DB lookup. Pinning this
+    // catches a regression that loosens the regex.
+    const result = await updateInterests(['Wine & Cocktails'])
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Invalid interest slug')
+    expect(mockGetUser).not.toHaveBeenCalled()
+  })
+
   it('rejects when user is not authenticated', async () => {
     unauthenticateUser()
 
-    const result = await updateInterests(['Wine & Cocktails'])
+    const result = await updateInterests(['drinks-bars'])
 
     expect(result.success).toBe(false)
     expect(result.error).toContain('Authentication required')
@@ -283,30 +295,28 @@ describe('updateInterests', () => {
   it('deletes existing interests and inserts new ones (resolves tag_id from slug)', async () => {
     authenticateUser()
 
-    // After F2-schema dropped the legacy `interest` text column,
-    // updateInterests resolves each interest label to its canonical tag
-    // slug, looks up the matching tag UUIDs, and INSERTs (user_id, tag_id).
-    // The mock returns two tag rows matching the slugs in
-    // src/lib/constants.ts INTEREST_OPTIONS.
+    // updateInterests now accepts canonical slugs directly from the
+    // EditProfileForm chip grid. The action looks up matching tag UUIDs
+    // via an active+primary-eligible filter and INSERTs (user_id, tag_id).
     const chains = mockSupabaseTables({
       tags: {
         data: [
           { id: 'tag-uuid-drinks-bars', slug: 'drinks-bars' },
-          { id: 'tag-uuid-interest-technology', slug: 'interest-technology' },
+          { id: 'tag-uuid-theatre-comedy', slug: 'theatre-comedy' },
         ],
         error: null,
       },
       user_interests: { data: null, error: null },
     })
 
-    const result = await updateInterests(['Wine & Cocktails', 'Technology'])
+    const result = await updateInterests(['drinks-bars', 'theatre-comedy'])
 
     expect(result.success).toBe(true)
     expect(mockFrom).toHaveBeenCalledWith('tags')
     expect(mockFrom).toHaveBeenCalledWith('user_interests')
     expect(chains.tags.in).toHaveBeenCalledWith(
       'slug',
-      expect.arrayContaining(['drinks-bars', 'interest-technology']),
+      expect.arrayContaining(['drinks-bars', 'theatre-comedy']),
     )
     expect(chains.user_interests.delete).toHaveBeenCalled()
     expect(chains.user_interests.insert).toHaveBeenCalledWith([
@@ -316,9 +326,96 @@ describe('updateInterests', () => {
       },
       {
         user_id: 'user-1',
-        tag_id: 'tag-uuid-interest-technology',
+        tag_id: 'tag-uuid-theatre-comedy',
       },
     ])
+  })
+
+  it('applies the active+primary-eligible DB filter when looking up tag rows', async () => {
+    // The active/non-`interest-%` filter is what makes interest-only or
+    // retired slugs unsavable from the profile-edit flow. Pinning the
+    // filter shape stops a future contributor from quietly dropping it.
+    authenticateUser()
+
+    const chains = mockSupabaseTables({
+      tags: {
+        data: [{ id: 'tag-uuid-drinks-bars', slug: 'drinks-bars' }],
+        error: null,
+      },
+      user_interests: { data: null, error: null },
+    })
+
+    await updateInterests(['drinks-bars'])
+
+    expect(chains.tags.eq).toHaveBeenCalledWith('is_active', true)
+    expect(chains.tags.not).toHaveBeenCalledWith('slug', 'like', 'interest-%')
+  })
+
+  it('wipes existing user_interests rows on save (intended soft-retire pattern)', async () => {
+    // Deliberate behaviour per the soft-retire decision: if a user has
+    // legacy interest-* rows in user_interests, saving with the new
+    // primary-eligible chip set wipes them. Pinning this guards against
+    // a refactor that introduces an "upsert" or "preserve unmapped"
+    // path, which would contradict the design.
+    authenticateUser()
+
+    const chains = mockSupabaseTables({
+      tags: {
+        data: [{ id: 'tag-uuid-drinks-bars', slug: 'drinks-bars' }],
+        error: null,
+      },
+      user_interests: { data: null, error: null },
+    })
+
+    await updateInterests(['drinks-bars'])
+
+    // Delete must happen first — the action does delete-then-insert so
+    // the user's row set always matches their current chip selection.
+    expect(chains.user_interests.delete).toHaveBeenCalled()
+    expect(chains.user_interests.eq).toHaveBeenCalledWith('user_id', 'user-1')
+    expect(chains.user_interests.insert).toHaveBeenCalledWith([
+      { user_id: 'user-1', tag_id: 'tag-uuid-drinks-bars' },
+    ])
+  })
+
+  it('rejects an unknown slug (DB lookup returns short row count)', async () => {
+    // Valid slug shape but nonexistent in the canonical taxonomy. DB
+    // returns zero rows, length mismatch triggers refusal — and crucially
+    // the user's existing rows must NOT be deleted before the failure
+    // is detected.
+    authenticateUser()
+
+    const chains = mockSupabaseTables({
+      tags: { data: [], error: null },
+      user_interests: { data: null, error: null },
+    })
+
+    const result = await updateInterests(['totally-fake-slug'])
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Failed to save interests')
+    expect(chains.user_interests.delete).not.toHaveBeenCalled()
+    expect(chains.user_interests.insert).not.toHaveBeenCalled()
+  })
+
+  it('rejects an interest-only slug (filtered out by NOT LIKE \'interest-%\')', async () => {
+    // The NOT LIKE filter makes interest-* rows invisible to this query
+    // even though they exist in the DB. The row count comes back short
+    // and the action refuses the write — and the user's existing rows
+    // are preserved.
+    authenticateUser()
+
+    const chains = mockSupabaseTables({
+      tags: { data: [], error: null },
+      user_interests: { data: null, error: null },
+    })
+
+    const result = await updateInterests(['interest-photography'])
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Failed to save interests')
+    expect(chains.user_interests.delete).not.toHaveBeenCalled()
+    expect(chains.user_interests.insert).not.toHaveBeenCalled()
   })
 })
 

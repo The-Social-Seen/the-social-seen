@@ -9,7 +9,6 @@ import { welcomeTemplate } from '@/lib/email/templates/welcome'
 import { upsertContact } from '@/lib/brevo/sync'
 import { peekAttempts, recordAttempt } from '@/lib/rate-limit'
 import { getCallerIp } from '@/lib/utils/caller-ip'
-import { interestSlugFor } from '@/lib/constants'
 
 // ── Validation schemas ──────────────────────────────────────────────────────
 
@@ -61,8 +60,17 @@ const signInSchema = z.object({
     ),
 })
 
+// Slug shape matches the canonical taxonomy in `public.tags`: lowercase
+// alphanumerics + hyphens, no leading/trailing hyphen. The runtime check
+// against the active, primary-eligible tag set happens inside saveInterests.
+const slugSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'Invalid interest slug')
+
 const saveInterestsSchema = z.object({
-  interests: z.array(z.string().min(1)).min(1, 'Select at least one interest'),
+  interestSlugs: z.array(slugSchema).min(1, 'Select at least one interest'),
 })
 
 const requestPasswordResetSchema = z.object({
@@ -228,14 +236,14 @@ export async function signOut(): Promise<void> {
 }
 
 export async function saveInterests(input: {
-  interests: string[]
+  interestSlugs: string[]
 }): Promise<{ success: true } | { error: string }> {
   const parsed = saveInterestsSchema.safeParse(input)
   if (!parsed.success) {
     return { error: parsed.error.issues[0].message }
   }
 
-  const { interests } = parsed.data
+  const requestedSlugs = Array.from(new Set(parsed.data.interestSlugs))
   const supabase = await createServerClient()
 
   const { data: { user }, error: authError } = await supabase.auth.getUser()
@@ -243,28 +251,19 @@ export async function saveInterests(input: {
     return { error: 'You must be signed in to save interests' }
   }
 
-  // Resolve each interest label (from INTEREST_OPTIONS) to its canonical
-  // tag slug. Off-list input here means INTEREST_OPTIONS and the form
-  // drifted out of sync — refuse rather than write an unmappable row.
-  const slugMap = new Map<string, string>()
-  for (const interestLabel of interests) {
-    const slug = interestSlugFor(interestLabel)
-    if (!slug) {
-      return { error: 'Failed to save interests' }
-    }
-    slugMap.set(interestLabel, slug)
-  }
-
-  // Batch lookup: resolve all required tag slugs to UUIDs in a single query.
-  // After F2-schema dropped the legacy `interest` text column,
-  // user_interests.tag_id is the SOLE carrier of interest semantics.
-  const requiredSlugs = Array.from(new Set(slugMap.values()))
+  // Validate every slug resolves to an active, registration-eligible tag
+  // (primary-eligible only; interest-* slugs are retired from this flow).
+  // The DB-level check covers both existence and the `is_active` /
+  // `not like 'interest-%'` filter — if the row count comes back short,
+  // some slug was off-list or retired and we refuse the write.
   const { data: tagRows, error: tagsError } = await supabase
     .from('tags')
     .select('id, slug')
-    .in('slug', requiredSlugs)
+    .eq('is_active', true)
+    .not('slug', 'like', 'interest-%')
+    .in('slug', requestedSlugs)
 
-  if (tagsError || !tagRows || tagRows.length !== requiredSlugs.length) {
+  if (tagsError || !tagRows || tagRows.length !== requestedSlugs.length) {
     return { error: 'Failed to save interests' }
   }
   const slugToTagId = new Map(tagRows.map((t) => [t.slug, t.id]))
@@ -281,9 +280,9 @@ export async function saveInterests(input: {
 
   // Insert new interests as (user_id, tag_id) — F2-schema dropped the
   // legacy `interest` text column.
-  const rows = interests.map((interestLabel) => ({
+  const rows = requestedSlugs.map((slug) => ({
     user_id: user.id,
-    tag_id: slugToTagId.get(slugMap.get(interestLabel)!)!,
+    tag_id: slugToTagId.get(slug)!,
   }))
 
   const { error: insertError } = await supabase
