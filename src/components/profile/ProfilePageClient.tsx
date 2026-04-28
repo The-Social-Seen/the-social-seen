@@ -19,6 +19,7 @@ import type {
   BookingWithEvent,
   Gender,
   Profile,
+  Tag,
 } from '@/types'
 
 interface ProfilePageClientProps {
@@ -31,6 +32,8 @@ interface ProfilePageClientProps {
   smsPreferences: SmsPreferences | null
   /** Caller's own demographics — fetched via SECURITY DEFINER RPC server-side. Never derived from member-facing reads. */
   demographics: { gender: Gender | null; age_range: AgeRange | null }
+  /** Registration-eligible (primary, non interest-only) tags shown in the EditProfileForm chip grid. */
+  interestTags: Tag[]
 }
 
 export function ProfilePageClient({
@@ -42,6 +45,7 @@ export function ProfilePageClient({
   emailPreferences,
   smsPreferences,
   demographics,
+  interestTags,
 }: ProfilePageClientProps) {
   const [editOpen, setEditOpen] = useState(false)
 
@@ -114,7 +118,12 @@ export function ProfilePageClient({
 
       <DataPrivacySection />
 
-      <EditProfileForm profile={profile} open={editOpen} onOpenChange={setEditOpen} />
+      <EditProfileForm
+        profile={profile}
+        interestTags={interestTags}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+      />
     </>
   )
 }

@@ -459,7 +459,7 @@ describe('saveInterests', () => {
   })
 
   it('returns error when interests array is empty', async () => {
-    const result = await saveInterests({ interests: [] })
+    const result = await saveInterests({ interestSlugs: [] })
     expect(result).toHaveProperty('error')
   })
 
@@ -469,7 +469,7 @@ describe('saveInterests', () => {
       error: { message: 'Not authenticated' },
     })
 
-    const result = await saveInterests({ interests: ['Wine & Cocktails'] })
+    const result = await saveInterests({ interestSlugs: ['Wine & Cocktails'] })
 
     expect(result).toHaveProperty('error')
     if ('error' in result) {
@@ -500,7 +500,7 @@ describe('saveInterests', () => {
     })
 
     const result = await saveInterests({
-      interests: ['Wine & Cocktails', 'Fine Dining'],
+      interestSlugs: ['Wine & Cocktails', 'Fine Dining'],
     })
 
     expect(result).toEqual({ success: true })
@@ -536,7 +536,7 @@ describe('saveInterests', () => {
       user_interests: { data: null, error: null },
     })
 
-    await saveInterests({ interests: ['Technology'] })
+    await saveInterests({ interestSlugs: ['Technology'] })
 
     expect(chains.user_interests.delete).toHaveBeenCalled()
     expect(chains.user_interests.eq).toHaveBeenCalledWith('user_id', 'user-1')

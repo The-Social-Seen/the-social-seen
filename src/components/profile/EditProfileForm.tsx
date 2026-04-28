@@ -1,24 +1,25 @@
 'use client'
 
-import { useState, useRef, useTransition } from 'react'
+import { useMemo, useState, useRef, useTransition } from 'react'
 import Image from 'next/image'
 import * as Dialog from '@radix-ui/react-dialog'
 import { X, Camera, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { resolveAvatarUrl, getInitials } from '@/lib/utils/images'
-import { INTEREST_OPTIONS } from '@/lib/constants'
 import { updateProfile, updateAvatar, updateInterests } from '@/app/(member)/profile/actions'
-import type { Profile } from '@/types'
+import type { Profile, Tag } from '@/types'
 
 interface EditProfileFormProps {
   profile: Profile & { interests: string[] }
+  /** Registration-eligible tags rendered as the chip grid. Server-fetched via getRegistrationInterestTags(). */
+  interestTags: Tag[]
   open: boolean
   onOpenChange: (open: boolean) => void
 }
 
 const LINKEDIN_REGEX = /^https?:\/\/(www\.)?linkedin\.com\/.*$/
 
-export function EditProfileForm({ profile, open, onOpenChange }: EditProfileFormProps) {
+export function EditProfileForm({ profile, interestTags, open, onOpenChange }: EditProfileFormProps) {
   const [fullName, setFullName] = useState(profile.full_name)
   const [jobTitle, setJobTitle] = useState(profile.job_title ?? '')
   const [company, setCompany] = useState(profile.company ?? '')
@@ -26,7 +27,23 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
   const [bio, setBio] = useState(profile.bio ?? '')
   const [linkedinUrl, setLinkedinUrl] = useState(profile.linkedin_url ?? '')
   const [phoneNumber, setPhoneNumber] = useState(profile.phone_number ?? '')
-  const [selectedInterests, setSelectedInterests] = useState<string[]>(profile.interests)
+  // `profile.interests` arrives as labels (joined from `tags.label`).
+  // Map to the canonical slug via interestTags. Labels that don't resolve
+  // are legacy interest-only selections (now retired from the chip grid)
+  // — they're dropped from the initial selection and won't be re-saved
+  // unless the user picks a visible tag.
+  const labelToSlug = useMemo(
+    () => new Map(interestTags.map((t) => [t.label, t.slug])),
+    [interestTags],
+  )
+  const initialSelectedSlugs = useMemo(
+    () =>
+      profile.interests
+        .map((label) => labelToSlug.get(label))
+        .filter((slug): slug is string => typeof slug === 'string'),
+    [profile.interests, labelToSlug],
+  )
+  const [selectedSlugs, setSelectedSlugs] = useState<string[]>(initialSelectedSlugs)
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null)
   const [avatarFile, setAvatarFile] = useState<File | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -66,9 +83,9 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
     onOpenChange(nextOpen)
   }
 
-  function toggleInterest(value: string) {
-    setSelectedInterests((prev) =>
-      prev.includes(value) ? prev.filter((i) => i !== value) : [...prev, value],
+  function toggleInterest(slug: string) {
+    setSelectedSlugs((prev) =>
+      prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug],
     )
   }
 
@@ -88,7 +105,7 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
       newErrors.phone_number = 'Enter a valid phone number'
     }
 
-    if (selectedInterests.length === 0) {
+    if (selectedSlugs.length === 0) {
       newErrors.interests = 'Select at least one interest'
     }
 
@@ -129,7 +146,7 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
       }
 
       // Update interests
-      const interestsResult = await updateInterests(selectedInterests)
+      const interestsResult = await updateInterests(selectedSlugs)
       if (!interestsResult.success) {
         setErrors((prev) => ({ ...prev, interests: interestsResult.error ?? 'Update failed' }))
         return
@@ -298,13 +315,13 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
                 Interests
               </label>
               <div className="flex flex-wrap gap-2">
-                {INTEREST_OPTIONS.map((interest) => {
-                  const isSelected = selectedInterests.includes(interest.value)
+                {interestTags.map((tag) => {
+                  const isSelected = selectedSlugs.includes(tag.slug)
                   return (
                     <button
-                      key={interest.value}
+                      key={tag.slug}
                       type="button"
-                      onClick={() => toggleInterest(interest.value)}
+                      onClick={() => toggleInterest(tag.slug)}
                       className={cn(
                         'rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-200',
                         isSelected
@@ -312,7 +329,7 @@ export function EditProfileForm({ profile, open, onOpenChange }: EditProfileForm
                           : 'border-gold/20 bg-transparent text-gold hover:border-gold/50 hover:bg-gold/5',
                       )}
                     >
-                      {interest.label}
+                      {tag.label}
                     </button>
                   )
                 })}

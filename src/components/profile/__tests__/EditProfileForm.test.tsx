@@ -51,6 +51,7 @@ describe('EditProfileForm', () => {
     render(
       <EditProfileForm
         profile={mockProfile}
+        interestTags={[]}
         open={true}
         onOpenChange={vi.fn()}
       />
@@ -64,6 +65,7 @@ describe('EditProfileForm', () => {
     render(
       <EditProfileForm
         profile={mockProfile}
+        interestTags={[]}
         open={true}
         onOpenChange={vi.fn()}
       />
@@ -84,6 +86,7 @@ describe('EditProfileForm', () => {
     render(
       <EditProfileForm
         profile={{ ...mockProfile, phone_number: '07123456789' }}
+        interestTags={[]}
         open={true}
         onOpenChange={vi.fn()}
       />,
@@ -98,6 +101,7 @@ describe('EditProfileForm', () => {
     render(
       <EditProfileForm
         profile={mockProfile}
+        interestTags={[]}
         open={true}
         onOpenChange={vi.fn()}
       />,
@@ -122,6 +126,7 @@ describe('EditProfileForm', () => {
     render(
       <EditProfileForm
         profile={mockProfile}
+        interestTags={[]}
         open={true}
         onOpenChange={vi.fn()}
       />,

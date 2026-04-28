@@ -7,6 +7,7 @@ import {
   getMyPhone,
 } from '@/lib/supabase/queries/profile'
 import { getReviewableEvents } from '@/lib/supabase/queries/reviews'
+import { getRegistrationInterestTags } from '@/lib/supabase/queries/tags'
 import { splitBookings } from '@/lib/utils/bookings'
 import { ProfilePageClient } from '@/components/profile/ProfilePageClient'
 import { getMyEmailPreferences, getMySmsPreferences } from './preferences-actions'
@@ -39,6 +40,7 @@ export default async function ProfilePage() {
     reviewableEvents,
     emailPreferences,
     smsPreferences,
+    interestTags,
   ] = await Promise.all([
     getProfile(user.id),
     getMyPhone(),
@@ -47,6 +49,7 @@ export default async function ProfilePage() {
     getReviewableEvents(),
     getMyEmailPreferences(),
     getMySmsPreferences(),
+    getRegistrationInterestTags(),
   ])
 
   if (!profile) redirect('/login')
@@ -69,6 +72,7 @@ export default async function ProfilePage() {
           emailPreferences={emailPreferences}
           smsPreferences={smsPreferences}
           demographics={demographics}
+          interestTags={interestTags}
         />
       </div>
     </div>

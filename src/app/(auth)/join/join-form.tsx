@@ -8,9 +8,10 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
 import * as Checkbox from '@radix-ui/react-checkbox'
 import { cn } from '@/lib/utils/cn'
-import { INTEREST_OPTIONS, HEAR_ABOUT_OPTIONS } from '@/lib/constants'
+import { HEAR_ABOUT_OPTIONS } from '@/lib/constants'
 import { track } from '@/lib/analytics/track'
 import { signUp, saveInterests, completeOnboarding } from '../actions'
+import type { Tag } from '@/types'
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -366,15 +367,16 @@ function StepAccount({
 /* ------------------------------------------------------------------ */
 
 interface StepInterestsProps {
+  interestTags: Tag[]
   selected: string[]
-  onToggle: (interest: string) => void
+  onToggle: (slug: string) => void
   error: string | null
   loading: boolean
   onSubmit: () => void
   onBack: () => void
 }
 
-function StepInterests({ selected, onToggle, error, loading, onSubmit, onBack }: StepInterestsProps) {
+function StepInterests({ interestTags, selected, onToggle, error, loading, onSubmit, onBack }: StepInterestsProps) {
   return (
     <div className="space-y-6">
       <div className="mb-2">
@@ -387,14 +389,14 @@ function StepInterests({ selected, onToggle, error, loading, onSubmit, onBack }:
       </div>
 
       <div className="flex flex-wrap gap-3">
-        {INTEREST_OPTIONS.map((interest) => {
-          const isSelected = selected.includes(interest.value)
+        {interestTags.map((tag) => {
+          const isSelected = selected.includes(tag.slug)
           return (
             <button
-              key={interest.value}
+              key={tag.slug}
               type="button"
               data-testid="interest-pill"
-              onClick={() => onToggle(interest.value)}
+              onClick={() => onToggle(tag.slug)}
               className={cn(
                 'rounded-full border px-4 py-2 text-sm font-medium transition-all duration-200',
                 isSelected
@@ -402,7 +404,7 @@ function StepInterests({ selected, onToggle, error, loading, onSubmit, onBack }:
                   : 'border-gold/20 bg-transparent text-gold hover:border-gold/50 hover:bg-gold/5'
               )}
             >
-              {interest.label}
+              {tag.label}
             </button>
           )
         })}
@@ -512,7 +514,11 @@ function StepWelcome({ name }: StepWelcomeProps) {
 /*  Main Form Component                                                */
 /* ------------------------------------------------------------------ */
 
-export function JoinForm() {
+interface JoinFormProps {
+  interestTags: Tag[]
+}
+
+export function JoinForm({ interestTags }: JoinFormProps) {
   const searchParams = useSearchParams()
 
   const stepParam = searchParams.get('step')
@@ -533,8 +539,8 @@ export function JoinForm() {
   const [accountErrors, setAccountErrors] = useState<Record<string, string>>({})
   const [accountLoading, setAccountLoading] = useState(false)
 
-  // Step 2 state
-  const [selectedInterests, setSelectedInterests] = useState<string[]>([])
+  // Step 2 state — selected slugs (canonical taxonomy keys), not labels.
+  const [selectedSlugs, setSelectedSlugs] = useState<string[]>([])
   const [interestError, setInterestError] = useState<string | null>(null)
   const [interestLoading, setInterestLoading] = useState(false)
 
@@ -613,7 +619,7 @@ export function JoinForm() {
 
   /* ---- Step 2 submit ---- */
   async function handleInterestsSubmit() {
-    if (selectedInterests.length === 0) {
+    if (selectedSlugs.length === 0) {
       setInterestError("Pick at least one — we'll use this to show you events you'll love")
       return
     }
@@ -621,7 +627,7 @@ export function JoinForm() {
     setInterestError(null)
     setInterestLoading(true)
 
-    const result = await saveInterests({ interests: selectedInterests })
+    const result = await saveInterests({ interestSlugs: selectedSlugs })
 
     setInterestLoading(false)
 
@@ -630,15 +636,15 @@ export function JoinForm() {
       return
     }
 
-    track('sign_up_completed', { interests_count: selectedInterests.length })
+    track('sign_up_completed', { interests_count: selectedSlugs.length })
     goToStep(2)
   }
 
-  function toggleInterest(interest: string) {
-    setSelectedInterests((prev) =>
-      prev.includes(interest)
-        ? prev.filter((i) => i !== interest)
-        : [...prev, interest]
+  function toggleInterest(slug: string) {
+    setSelectedSlugs((prev) =>
+      prev.includes(slug)
+        ? prev.filter((s) => s !== slug)
+        : [...prev, slug]
     )
     setInterestError(null)
   }
@@ -703,7 +709,8 @@ export function JoinForm() {
                 )}
                 {step === 1 && (
                   <StepInterests
-                    selected={selectedInterests}
+                    interestTags={interestTags}
+                    selected={selectedSlugs}
                     onToggle={toggleInterest}
                     error={interestError}
                     loading={interestLoading}
