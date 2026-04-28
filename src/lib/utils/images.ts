@@ -18,45 +18,21 @@ function isAbsoluteUrl(value: string): boolean {
 }
 
 /**
- * Hosts allowed through `next/image`. Must stay in sync with
- * `next.config.ts` `images.remotePatterns`. If a seeded or admin-entered
- * `image_url` points to a host not on this list, `next/image` would throw
- * a runtime error — the `<GlobalError>` boundary would then replace the
- * whole page. The resolve helpers below return `null` for disallowed
- * hosts so the UI falls back to the placeholder instead.
+ * Whether a URL is acceptable to feed into `next/image`. Must stay in
+ * sync with `next.config.ts` `images.remotePatterns` and the CSP
+ * `img-src` directive in `src/lib/security/csp.ts`.
  *
- * Entries are either a literal hostname or a `*.suffix` wildcard.
- *
- * Reason this lives here and not imported from `next.config.ts`: the Next
- * config is not easily consumable at runtime (it's transformed by the
- * Next build), and this file runs on both server and client.
+ * Policy (2026-04-28): any HTTPS URL is allowed. Single-admin trust
+ * model — the only person pasting image URLs is the project owner, so
+ * a hostname allowlist is overcautious. HTTP is rejected to avoid
+ * mixed-content warnings and MitM tampering of the image bytes.
+ * Malformed URLs return false so callers fall through to the
+ * placeholder consistently.
  */
-const ALLOWED_IMAGE_HOSTS: ReadonlyArray<string> = [
-  'images.unsplash.com',
-  '*.supabase.co',
-]
-
 export function isAllowedImageHost(url: string): boolean {
   try {
-    const parsed = new URL(url)
-    // next/image remotePatterns defaults to https-only. Any http:// URL
-    // would pass this hostname check but be rejected by next/image at
-    // render time — a different failure mode than this module addresses
-    // but still broken. Reject at the allowlist layer so callers fall
-    // through to the placeholder consistently.
-    if (parsed.protocol !== 'https:') return false
-    const { hostname } = parsed
-    return ALLOWED_IMAGE_HOSTS.some((pattern) => {
-      if (pattern.startsWith('*.')) {
-        // "*.supabase.co" matches "foo.supabase.co" but NOT "supabase.co"
-        // itself (consistent with next/image wildcard semantics).
-        const suffix = pattern.slice(1) // ".supabase.co"
-        return hostname.endsWith(suffix) && hostname.length > suffix.length
-      }
-      return hostname === pattern
-    })
+    return new URL(url).protocol === 'https:'
   } catch {
-    // Malformed URL — treat as not allowed so the caller falls back.
     return false
   }
 }

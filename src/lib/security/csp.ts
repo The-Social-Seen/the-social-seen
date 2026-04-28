@@ -30,10 +30,15 @@ const ALLOWED_SCRIPT_ORIGINS = [
   'https://*.posthog.com',
 ] as const
 
+// `img-src` is intentionally permissive for any HTTPS source. The only
+// person who can supply an image URL (event covers, gallery photos,
+// avatars) is the project owner — there is no untrusted-admin case in
+// the threat model, so a hostname allowlist is overcautious and breaks
+// the legitimate use-case of pasting any external image. HTTP remains
+// blocked (mixed-content + MitM). 2026-04-28 decision; see also
+// next.config.ts remotePatterns and src/lib/utils/images.ts.
 const ALLOWED_IMG_ORIGINS = [
-  'https://images.unsplash.com',
-  'https://*.supabase.co',
-  'https://*.posthog.com',
+  'https:', // Permit any HTTPS source. Single-admin trust model.
 ] as const
 
 const ALLOWED_CONNECT_ORIGINS = [
