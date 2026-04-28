@@ -32,7 +32,12 @@
 //
 // Required env (set via `supabase secrets set ...`):
 //   RESEND_API_KEY               — Resend API key
-//   FROM_ADDRESS                 — "The Social Seen <onboarding@resend.dev>"
+//   FROM_ADDRESS                 — e.g. "The Social Seen <hello@the-social-seen.com>"
+//                                  MUST be on a Resend-verified domain. Reverting
+//                                  to a Resend testing sender (e.g.
+//                                  onboarding@resend.dev) silently breaks delivery
+//                                  to non-account-owner recipients (HTTP 403 /
+//                                  validation_error). See 2026-04-28 incident.
 //   REPLY_TO_ADDRESS             — info@the-social-seen.com
 //   SANDBOX_FALLBACK_RECIPIENT   — optional; if set, all mail is redirected
 //                                  to this address (dev/staging sandbox)
@@ -69,7 +74,7 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') ?? ''
 const FROM_ADDRESS =
-  Deno.env.get('FROM_ADDRESS') ?? 'The Social Seen <onboarding@resend.dev>'
+  Deno.env.get('FROM_ADDRESS') ?? 'The Social Seen <hello@the-social-seen.com>'
 const REPLY_TO_ADDRESS =
   Deno.env.get('REPLY_TO_ADDRESS') ?? 'info@the-social-seen.com'
 const SANDBOX_FALLBACK_RECIPIENT =
