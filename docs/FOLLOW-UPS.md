@@ -9,7 +9,7 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 2. Revisited at end of each sprint.
 3. When actioned → remove from this file and reference the PR in the commit message.
 
-**Last tidy:** 2026-04-28 — refresh after the 5-PR session (#69 admin events, #70 email FROM_ADDRESS, #71 image allowlist, #72 Gmail copy, #73 registration interests). 3 shipped items removed, 1 entry refined, 8 new entries added. Prior tidy: Phase 2.5 wrap (PR #39 — 25 shipped items removed, 5 feature items moved to PHASE-3-BACKLOG).
+**Last tidy:** 2026-04-29 — refresh after the 9-PR session that closed the 2026-04-27 Stripe incident class end-to-end. Removed 4 shipped items (Stripe defensive fix shipped #76, orphan reaper shipped #77, stale doc cleanup #75, auth-emails runbook #75) and added 3 new ones (flaky Playwright E2E, `@resend.dev` lint guardrail, Brevo orphan-opt-in backfill). Prior tidy: 2026-04-28 (PR #74 — initial post-session refresh adding 8 entries). Earlier baseline: Phase 2.5 wrap (PR #39 — 25 shipped items removed, 5 feature items moved to PHASE-3-BACKLOG).
 
 ---
 
@@ -86,17 +86,11 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 **Action:** Mint a dedicated 32+ byte random secret, set `UNSUBSCRIBE_TOKEN_SECRET` in Vercel (Preview + Production) + `supabase secrets set` on the edge function. One-line code change; already supported.
 **Priority:** Medium — do before any pipeline that rotates the service role key.
 
-### Stripe `ensureStripeCustomer` defensive fix
-**Source:** 2026-04-27 outage; post-mortem complete (`memory/project_stripe_customer_id_defensive_fix.md`).
-**Rationale:** Saved customer ids in `profiles.stripe_customer_id` are reused without validating they exist in the current Stripe account. Account/key rotation invalidates them silently — caused the 2026-04-27 production outage where every paid checkout threw `No such customer: cus_OLD` until the column was nulled in SQL.
-**Action:** Wrap the saved-id branch in `src/lib/stripe/checkout.ts` `ensureStripeCustomer` (lines 40-84) with `stripe.customers.retrieve(savedId)`. On `error.code === 'resource_missing'` (404): null the stored id, fall through to the create path, persist the new id. Other errors propagate (do NOT silently mask Stripe outages). Add Vitest cases for valid-reuse / stale-id / other-error paths. Full sequenced agent prompts in the memory note.
-**Priority:** **HIGH — production reliability.** Without this, the same outage recurs on every Stripe key rotation, account swap, or DB restore from a pre-rotation snapshot.
-
-### Stripe orphan `pending_payment` reaper
-**Source:** 2026-04-28 incident — the same outage above also exposed this as a class of bug.
-**Rationale:** `book_event_paid` RPC's duplicate-check (migration `20260422000002`, line 88) blocks any non-cancelled booking — including `pending_payment`. The catch block at `src/app/events/[slug]/actions.ts:353` is the only cleanup path; if a user closes the tab mid-error (or the Server Action otherwise doesn't reach the catch), the orphan persists forever. It blocks future booking attempts AND is invisible to the user (the bookings page filters out `pending_payment`). Hit twice in a single day during the 2026-04-28 incident.
-**Action:** Cron-style reaper that cancels `bookings` where `status='pending_payment'` AND `created_at < now() - interval '35 minutes'` AND `stripe_payment_id IS NULL`. Two implementation paths to evaluate (recommendation: Vercel cron route over pg_cron — easier to test + observe). Decision and agent prompts in `memory/project_stripe_customer_id_defensive_fix.md`.
-**Priority:** **HIGH — silent footgun.** Pair with the defensive fix above.
+### Lint guardrail against `@resend.dev` sandbox-sender literals
+**Source:** PR #70 code-review follow-up (parking note `project_email_config_post_incident_tidy.md` (b)).
+**Rationale:** PR #70 fixed the 2026-04-27 transactional-email outage where `FROM_ADDRESS` was hardcoded to `onboarding@resend.dev` (Resend's sandbox sender — only delivers to the account owner). The fix added a Vitest config-shape regression test + comment block naming the trap. Both work but can be silently disabled (test deleted, comment ignored). A second layer prevents re-introduction at PR-CI time across the entire repo.
+**Action:** ESLint `no-restricted-syntax` rule against the `@resend.dev` literal in source code. Scope MUST cover BOTH `src/` AND `supabase/functions/` (the 2026-04-28 incident's Edge Function fallback was the second code path; lint scoped only to `src/` would miss it). Memory note (b) details the rule shape.
+**Priority:** Low — hardening, not blocking. Existing Vitest assertion + comment block is enough for now. Worth doing if/when this class of issue recurs.
 
 ### Next.js 16 middleware propagation broken (CSP nonce silently disabled)
 **Source:** 2026-04-28 incident — diagnosed during the admin-events listing fix (PR #69).
@@ -239,6 +233,15 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 
 ## 🧪 Testing gaps
 
+### Playwright E2E flakiness — 30s timeout under slow-CI conditions
+**Source:** PR #74 + PR #77 — observed across multiple session merges.
+**Rationale:** Multiple Playwright tests time out at 30s when CI (especially the `pull_request` runner — slower than `push`) is under load. Same commit can pass one run and fail the next. Affected tests vary: `auth.spec.ts:34` (register happy path, `page.waitForURL` timeout) and `daily-notifications.spec.ts:50` (venue-reveal, polls for notifications row). Both depend on real systems (Edge Function, Supabase, Resend, Vercel preview) all completing within 30s. Memory: `project_flaky_e2e_daily_notifications.md` for full diagnostic + same-commit smoking-gun evidence.
+**Action — three paths, pick when annoyance > effort:**
+1. Bump per-test timeout 30s → 60s in `playwright.config.ts`. One-line. Closes the failure mode for the slow-runner case.
+2. `test.describe.configure({ retries: 1 })` at the suite level. Auto-retry once before flagging. Doesn't fix root cause but stops merge noise.
+3. Mock Resend in the Edge Function path for E2E (env var gate). Tightest, most deterministic. Bigger change.
+**Priority:** Low — doesn't gate merges (re-running CI usually works), doesn't break production. Add when the noise becomes annoying.
+
 ### Playwright E2E for `book_event` / `book_event_paid` / `claim_waitlist_spot` RPCs
 **Source:** Phase 2.5 Batch 8.
 **Rationale:** The three booking RPCs enforce security-critical invariants (email-verified, active-status, capacity race-safety, waitlist transitions). Vitest can't exercise plpgsql. Manual 12-scenario checklist documented in `docs/BOOKING-RPCS-TEST-PLAN.md`.
@@ -290,6 +293,12 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 **Rationale:** Current templates use hand-written inline-style HTML. Works, but dev experience for rich emails (tables, columns, cross-client compat) is painful. `@react-email/components` gives JSX authoring.
 **Action:** Add the deps, migrate templates to JSX. Revisit once we have 5+ templates — we now have 7+, so justifiable.
 **Priority:** Low.
+
+### Brevo orphan-opt-in backfill
+**Source:** 2026-04-29 — discovered during the post-Stripe-fix session that `BREVO_API_KEY` was missing from Vercel env, so every consenting signup since the integration shipped was a silent no-op via `isBrevoConfigured()`. There's currently 1 affected user. Code at `src/app/(auth)/actions.ts:425-426` even pre-anticipated this scenario in a comment: "A Phase-3 reconciler can backfill orphan opt-ins."
+**Rationale:** Right now it's one row — manual add in the Brevo dashboard is faster than building a tool. But if Vercel env ever drifts again, OR a Resend / Brevo account rotation invalidates a key, the next discovery could be N>1 orphans.
+**Action:** Small one-shot Server Action or admin route that (a) selects all profiles where `email_consent = true AND deleted_at IS NULL AND email IS NOT NULL`, (b) calls `upsertContact` for each, (c) reports `{ added, failed, errors }`. Gate behind admin-only RLS as usual. Build when orphan count crosses ~5 OR another silent-drift incident surfaces. Memory cross-ref: `project_account_rotation_cascade_pattern.md` item #1 (Vercel env drift checklist).
+**Priority:** Low — bounded blast radius today (one user). Becomes Medium if a second orphan surfaces.
 
 ---
 
