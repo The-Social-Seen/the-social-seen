@@ -714,26 +714,16 @@ describe('SmsPreferencesSection — disabled-without-phone contract', () => {
 // ════════════════════════════════════════════════════════════════════════════
 
 describe('No new user-scoped select(\'*\') on profiles', () => {
-  // Existing call sites that use `select('*')` on profiles and are
-  // accepted as safe under the post-W1 GRANT model. Each entry needs
-  // a comment explaining WHY — keep this small and reviewed.
-  const ALLOWLIST = new Set<string>([
-    // Pre-existing admin-page query. Uses createServerClient (with the
-    // admin user's auth session, not the service_role admin client),
-    // so it goes through the same column GRANTs as any other
-    // authenticated caller. PostgREST's `select=*` is role-aware: it
-    // expands to the columns the role has SELECT on, silently
-    // omitting revoked columns (verified empirically — the page has
-    // worked since `stripe_customer_id` and
-    // `profile_nudge_email_sent_at` were revoked from authenticated).
-    // After W1 it also silently omits gender + age_range + phone_number,
-    // which is the desired admin-list-page behaviour. Flagged in the
-    // W1 handover as a pre-existing pattern; if the admin page ever
-    // needs to display those columns it must switch to the per-row
-    // SECURITY DEFINER fns (admin_get_demographics /
-    // admin_get_user_phone) and enumerate the safe columns explicitly.
-    'src/app/(admin)/admin/actions.ts',
-  ])
+  // ALLOWLIST is empty by design — every user-scoped `select('*')` on
+  // profiles must be replaced with an explicit column list per the W1
+  // GRANT narrowing. PostgREST does NOT silently omit ungranted columns;
+  // it raises permission-denied (42501). The previous allowlist entry
+  // (`src/app/(admin)/admin/actions.ts`) was based on an incorrect
+  // "silently omits" claim that didn't survive the demographics
+  // migration — /admin/members threw on every load between PR #61 and
+  // its fix. Demographics and phone reads must go through the SECURITY
+  // DEFINER helpers (admin_get_demographics, admin_get_user_phone).
+  const ALLOWLIST = new Set<string>([])
 
   function walk(dir: string, out: string[] = []): string[] {
     for (const entry of readdirSync(dir)) {
