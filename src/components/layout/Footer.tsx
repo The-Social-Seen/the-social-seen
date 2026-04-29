@@ -9,10 +9,13 @@ import NewsletterSignupForm from "@/components/layout/NewsletterSignupForm";
 
 // Split into two thematic groups so a single scanning pass is obvious
 // on mobile and doesn't leave one column at 8 vertical entries.
+// 2026-04-29: "Gallery" removed from the footer alongside the nav while
+// the upload UI is paused. The /gallery route still resolves to a
+// "coming soon" page for external bookmarks. Restore here when the
+// upload flow ships — see memory/project_event_gallery_hidden.md.
 const discoverLinks = [
   { label: "Events", href: "/events" },
   { label: "Past Events", href: "/events/past" },
-  { label: "Gallery", href: "/gallery" },
   { label: "About", href: "/about" },
 ];
 

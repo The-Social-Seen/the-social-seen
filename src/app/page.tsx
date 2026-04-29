@@ -5,7 +5,9 @@ import { AboutSection } from "@/components/landing/AboutSection";
 import { UpcomingEventsSection } from "@/components/landing/UpcomingEventsSection";
 import { SocialProofSection } from "@/components/landing/SocialProofSection";
 import { TestimonialsSection } from "@/components/landing/TestimonialsSection";
-import { GalleryPreviewSection } from "@/components/landing/GalleryPreviewSection";
+// 2026-04-29: GalleryPreviewSection hidden until upload UI ships. Restore the
+// import + render below when ready — see memory/project_event_gallery_hidden.md.
+// import { GalleryPreviewSection } from "@/components/landing/GalleryPreviewSection";
 import { CTASection } from "@/components/landing/CTASection";
 import { getPublishedEvents } from "@/lib/supabase/queries/events";
 import { getTopHomepageReviews } from "@/lib/supabase/queries/reviews";
@@ -31,7 +33,7 @@ export default async function Home() {
       <UpcomingEventsSection events={upcomingEvents} />
       <SocialProofSection />
       <TestimonialsSection reviews={topReviews} />
-      <GalleryPreviewSection />
+      {/* GalleryPreviewSection hidden until upload UI ships — see imports above */}
       <CTASection />
     </main>
   );

@@ -111,11 +111,14 @@ describe('Header (unauthenticated)', () => {
     expect(hasRouteLink).toBe(true)
   })
 
-  it('renders Gallery nav link with route href /gallery', () => {
+  // 2026-04-29: Gallery removed from public nav until upload UI ships.
+  // Pinning the absence so a future contributor restoring it has to
+  // also flip this test back — see memory/project_event_gallery_hidden.md
+  // for the full restoration checklist.
+  it('does not render a Gallery nav link (hidden until upload UI ships)', () => {
     render(<Header />)
-    const links = screen.getAllByRole('link', { name: /^gallery$/i })
-    const hasRouteLink = links.some((l) => l.getAttribute('href') === '/gallery')
-    expect(hasRouteLink).toBe(true)
+    const links = screen.queryAllByRole('link', { name: /^gallery$/i })
+    expect(links).toHaveLength(0)
   })
 
   it('renders Join nav link with route href /join', () => {

@@ -54,9 +54,12 @@ const mockUser = {
   email: 'test@example.com',
 } as unknown as User
 
+// MobileMenu is a generic component that renders whatever navLinks prop it
+// receives — these are test fixtures, not the real production nav. Using
+// two real public-nav entries keeps the test readable.
 const navLinks = [
   { label: 'Events', href: '/events' },
-  { label: 'Gallery', href: '/gallery' },
+  { label: 'Contact', href: '/contact' },
 ] as const
 
 const baseProps = {
@@ -86,7 +89,7 @@ describe('MobileMenu — visibility', () => {
   it('renders nav links when isOpen=true', () => {
     render(<MobileMenu {...baseProps} />)
     expect(screen.getByRole('link', { name: /^events$/i })).toBeTruthy()
-    expect(screen.getByRole('link', { name: /^gallery$/i })).toBeTruthy()
+    expect(screen.getByRole('link', { name: /^contact$/i })).toBeTruthy()
   })
 
   it('renders a close button', () => {
@@ -166,6 +169,6 @@ describe('MobileMenu — isAdmin conditional rendering', () => {
   it('still renders regular nav links when isAdmin=true', () => {
     render(<MobileMenu {...baseProps} isAdmin={true} />)
     expect(screen.getByRole('link', { name: /^events$/i })).toBeTruthy()
-    expect(screen.getByRole('link', { name: /^gallery$/i })).toBeTruthy()
+    expect(screen.getByRole('link', { name: /^contact$/i })).toBeTruthy()
   })
 })

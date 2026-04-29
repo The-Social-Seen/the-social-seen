@@ -25,9 +25,13 @@ export const LONDON_TZ = 'Europe/London'
 
 // ── Navigation ────────────────────────────────────────────────────────────────
 
+// 2026-04-29: Gallery removed from nav until the upload UI ships.
+// The `/gallery` route still exists as a soft "coming soon" page to
+// preserve external bookmarks (no 404). Restore the entry below to
+// both arrays when the upload flow is ready — see
+// memory/project_event_gallery_hidden.md.
 export const NAV_LINKS_PUBLIC = [
   { label: 'Events',      href: '/events' },
-  { label: 'Gallery',     href: '/gallery' },
   { label: 'Contact',     href: '/contact' },
   { label: 'Collaborate', href: '/collaborate' },
   { label: 'Join',        href: '/join' },
@@ -36,7 +40,6 @@ export const NAV_LINKS_PUBLIC = [
 
 export const NAV_LINKS_MEMBER = [
   { label: 'Events',      href: '/events' },
-  { label: 'Gallery',     href: '/gallery' },
   { label: 'My Bookings', href: '/bookings' },
   { label: 'Contact',     href: '/contact' },
 ] as const
