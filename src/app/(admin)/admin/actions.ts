@@ -1058,9 +1058,26 @@ export async function getAdminMembers(search?: string, sort?: string) {
 
   // Get profiles with booking counts
   // We'll fetch profiles then compute booking stats
+  //
+  // Columns enumerated explicitly because migration 20260503000001
+  // (add_profile_demographics) narrowed the `authenticated` SELECT GRANT on
+  // `public.profiles` to a column allow-list, and 20260503000002
+  // (narrow_phone_number_grant) revoked phone_number from it. `select('*')`
+  // would now raise 42501 (permission-denied) — PostgREST does NOT silently
+  // omit ungranted columns. The list below is the full post-W1 allow-list
+  // for the `authenticated` role; if a column is added to or removed from
+  // the GRANT, mirror it here. Demographics + phone reads (when needed)
+  // must go through the SECURITY DEFINER helpers
+  // (`admin_get_demographics`, `admin_get_user_phone`).
   let query = supabase
     .from('profiles')
-    .select('*')
+    .select(`
+      id, email, full_name, avatar_url, job_title, company, industry, bio,
+      linkedin_url, role, onboarding_complete, referral_source, status,
+      email_consent, email_verified, sms_consent,
+      moderation_reason, moderation_at, moderation_by,
+      created_at, updated_at, deleted_at
+    `)
     .is('deleted_at', null)
 
   if (search && search.trim()) {
@@ -1114,12 +1131,19 @@ export async function getAdminMembers(search?: string, sort?: string) {
 
   const result: MemberWithStats[] = profiles.map((p) => {
     const stats = statsMap.get(p.id) ?? { attended: 0, confirmed: 0, waitlisted: 0 }
+    // `phone_number` is intentionally absent from the explicit select() above
+    // (revoked from the `authenticated` GRANT in 20260503000002), so the
+    // narrowed row type doesn't include it — but `MemberWithStats extends
+    // Profile` still requires it. Cast through `unknown` to widen explicitly:
+    // MembersTable does not read `phone_number`, and any caller that ever
+    // does should switch to `admin_get_user_phone()` instead of relying on
+    // this list-view payload.
     return {
       ...p,
       events_attended: stats.attended,
       events_confirmed: stats.confirmed,
       events_waitlisted: stats.waitlisted,
-    } as MemberWithStats
+    } as unknown as MemberWithStats
   })
 
   // Re-sort by most_active if needed (by events_attended desc)
