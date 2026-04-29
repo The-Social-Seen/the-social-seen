@@ -1481,12 +1481,19 @@ INSERT INTO public.event_reviews (user_id, event_id, rating, review_text, is_vis
   ('a0000000-0000-0000-0000-000000000002', 'e1000000-0000-0000-0000-000000000030', 5, 'I''ve done Winter Wonderland solo and it''s fine. I''ve done it with the Social Seen and it''s wonderful. The difference is entirely the people. The collective decision to enjoy the kitsch without apology made the whole evening.', true, '2025-11-26 10:00:00+00');
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- Step 8: Event Photos
--- 3 photos per event for all 30 past events (events 1–30).
+-- Step 8: Event Photos — DISABLED 2026-04-29
+-- 3 photos per event for all 30 past events (events 1–30) were seeded as
+-- demo polish. The gallery feature is paused until a real upload UI ships
+-- (see memory/project_event_gallery_hidden.md), so this block is wrapped
+-- in /* */ to prevent fresh `supabase db reset` runs from repopulating
+-- fake photos. To restore: remove the /* and */ markers below AND restore
+-- the gallery surfaces (nav links, /gallery page, GalleryPreviewSection,
+-- per-event render — see the memory note for the full checklist).
 -- Captions are exact from prompts/seed-content-events-reviews-photos.md PART 3.
 -- Unsplash URLs chosen to match each event's vibe.
 -- ─────────────────────────────────────────────────────────────────────────────
 
+/*
 INSERT INTO public.event_photos (event_id, image_url, caption, sort_order) VALUES
 
   -- Event 1: Fairgame gaming bar, Canary Wharf
@@ -1638,6 +1645,7 @@ INSERT INTO public.event_photos (event_id, image_url, caption, sort_order) VALUE
   ('e1000000-0000-0000-0000-000000000030', 'https://images.unsplash.com/photo-1519615165324-88374aa3a5b1?w=800&h=600&fit=crop', 'Winter Wonderland from the entrance: the lights, the market, the Hyde Park darkness behind it all.', 1),
   ('e1000000-0000-0000-0000-000000000030', 'https://images.unsplash.com/photo-1513297887119-d46091b24bbb?w=800&h=600&fit=crop', 'Mulled wine by the stalls: the group warming their hands, November doing its best.', 2),
   ('e1000000-0000-0000-0000-000000000030', 'https://images.unsplash.com/photo-1544889456-63a166ec6dea?w=800&h=600&fit=crop', 'The ice rink: spectating from the boards, the skaters circling, the city''s seasonal ritual in full effect.', 3);
+*/
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Step 9: Event Hosts

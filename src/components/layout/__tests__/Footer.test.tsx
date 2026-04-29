@@ -53,10 +53,12 @@ describe('Footer', () => {
     expect(link.getAttribute('href')).toBe('/events')
   })
 
-  it('renders Gallery link with route href /gallery', () => {
+  // 2026-04-29: Gallery removed from footer until upload UI ships.
+  // See memory/project_event_gallery_hidden.md for the restoration checklist.
+  it('does not render a Gallery link (hidden until upload UI ships)', () => {
     render(<Footer />)
-    const link = screen.getByRole('link', { name: /^gallery$/i })
-    expect(link.getAttribute('href')).toBe('/gallery')
+    const link = screen.queryByRole('link', { name: /^gallery$/i })
+    expect(link).toBeNull()
   })
 
   it('renders Join link with route href /join', () => {

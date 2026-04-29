@@ -2,7 +2,11 @@ import { notFound } from "next/navigation";
 import {
   getEventBySlug,
   getEventReviews,
-  getEventPhotos,
+  // 2026-04-29: getEventPhotos retained in the query module but not
+  // imported here while the per-event gallery is hidden. Restore this
+  // import + the call site at line ~77 when the upload UI ships — see
+  // memory/project_event_gallery_hidden.md.
+  // getEventPhotos,
   getRelatedEvents,
   getUserBookingForEvent,
 } from "@/lib/supabase/queries/events";
@@ -74,7 +78,11 @@ export default async function EventDetailPage({ params }: PageProps) {
     await Promise.all([
       supabase.auth.getUser(),
       isPast ? getEventReviews(event.id) : Promise.resolve([] as ReviewWithAuthor[]),
-      isPast ? getEventPhotos(event.id) : Promise.resolve([] as EventPhoto[]),
+      // 2026-04-29: per-event gallery hidden until upload UI ships.
+      // The render gate (`hasGallery = photos.length > 0`) inside
+      // EventDetailClient does the actual hiding when this is empty.
+      // See memory/project_event_gallery_hidden.md for the full plan.
+      Promise.resolve([] as EventPhoto[]),
       getRelatedEvents(event.primary_tag.slug, event.id),
       getUserBookingForEvent(event.id),
     ]);
