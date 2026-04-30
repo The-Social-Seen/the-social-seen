@@ -16,7 +16,7 @@ const values = [
   {
     icon: Users,
     title: "Curated, Not Open",
-    body: "Every member is here because someone vouched for them. Quality connections over vanity numbers.",
+    body: "Quality connections over vanity numbers.",
   },
   {
     icon: Sparkles,
