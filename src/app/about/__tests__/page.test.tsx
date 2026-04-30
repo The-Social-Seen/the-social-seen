@@ -71,7 +71,7 @@ describe('About page', () => {
     expect(screen.getByText('1,000+')).toBeTruthy()
     expect(screen.getByText('200+')).toBeTruthy()
     expect(screen.getByText('4.8')).toBeTruthy()
-    expect(screen.getByText('12+')).toBeTruthy()
+    expect(screen.getByText('1+')).toBeTruthy()
   })
 
   it('renders founder note signed by Mitesh', () => {

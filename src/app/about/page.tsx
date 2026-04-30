@@ -26,7 +26,7 @@ const values = [
   {
     icon: Heart,
     title: "Community First",
-    body: "We host 12+ events a month because our members keep asking for more. That\u2019s the only metric that matters.",
+    body: "We host regular events because our members keep asking for more. That\u2019s the only metric that matters.",
   },
 ];
 
@@ -34,7 +34,7 @@ const stats = [
   { value: "1,000+", label: "Members" },
   { value: "200+", label: "Events Hosted" },
   { value: "4.8", label: "Average Rating" },
-  { value: "12+", label: "Events This Month" },
+  { value: "1+", label: "Events This Month" },
 ];
 
 export default function AboutPage() {
