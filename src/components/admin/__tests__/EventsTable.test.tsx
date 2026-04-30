@@ -47,6 +47,7 @@ const baseEvent = (overrides: Partial<EventWithStats> = {}): EventWithStats => (
   updated_at: '2026-04-01T00:00:00.000Z',
   deleted_at: null,
   confirmed_count: 12,
+  revenue_collected: 0,
   avg_rating: 0,
   review_count: 0,
   spots_left: 18,
@@ -142,5 +143,125 @@ describe('EventsTable — mobile pass', () => {
     )
     const mobileCard = container.querySelector('ul.md\\:hidden article') as HTMLElement
     expect(mobileCard.textContent).toContain('Cancelled')
+  })
+})
+
+describe('EventsTable — Revenue column', () => {
+  it('renders revenue_collected (formatted GBP) for a paid event in the desktop table', () => {
+    const { container } = render(
+      <EventsTable
+        events={[
+          baseEvent({
+            title: 'Paid Wine Night',
+            price: 3500,         // £35 ticket
+            confirmed_count: 12,
+            revenue_collected: 42000, // £420 — the truth from Stripe
+          }),
+        ]}
+      />
+    )
+
+    // Desktop table cell. revenue_collected is in pence; formatPrice → £420.
+    const desktopWrapper = container.querySelector('div.hidden.md\\:block') as HTMLElement
+    expect(desktopWrapper.textContent).toContain('£420')
+    // Sanity: the heading column exists.
+    expect(desktopWrapper.textContent).toContain('Revenue')
+  })
+
+  it('renders "Free" for an event with price 0, even if confirmed_count > 0', () => {
+    const { container } = render(
+      <EventsTable
+        events={[
+          baseEvent({
+            title: 'Free Run Club',
+            price: 0,
+            confirmed_count: 25,
+            revenue_collected: 0,
+          }),
+        ]}
+      />
+    )
+
+    const desktopWrapper = container.querySelector('div.hidden.md\\:block') as HTMLElement
+    // No accidental £0 rendered in the revenue column for free events.
+    expect(desktopWrapper.textContent).not.toMatch(/£0\b/)
+    // "Free" appears at least once (could appear in price + revenue cells).
+    expect(desktopWrapper.textContent).toContain('Free')
+  })
+
+  it('uses revenue_collected verbatim — does NOT compute confirmed_count × price', () => {
+    // Guards against a regression to the approximation. We deliberately
+    // pass a revenue_collected that diverges from confirmed_count × price
+    // (price drift scenario): if the code multiplies, this test fails.
+    const { container } = render(
+      <EventsTable
+        events={[
+          baseEvent({
+            title: 'Drift Event',
+            price: 5000,         // current price £50
+            confirmed_count: 10, // would imply £500 if multiplied
+            revenue_collected: 38000, // truth: only £380 actually collected
+          }),
+        ]}
+      />
+    )
+
+    const desktopWrapper = container.querySelector('div.hidden.md\\:block') as HTMLElement
+    expect(desktopWrapper.textContent).toContain('£380')
+    expect(desktopWrapper.textContent).not.toContain('£500')
+  })
+
+  it('mobile card surfaces a "Revenue" label/value pair', () => {
+    const { container } = render(
+      <EventsTable
+        events={[
+          baseEvent({
+            price: 3500,
+            confirmed_count: 12,
+            revenue_collected: 42000,
+          }),
+        ]}
+      />
+    )
+    const mobileCard = container.querySelector('ul.md\\:hidden article') as HTMLElement
+    const labels = [...mobileCard.querySelectorAll('dt')].map((l) => l.textContent)
+    expect(labels).toContain('Revenue')
+    expect(mobileCard.textContent).toContain('£420')
+  })
+
+  it('renders em-dash placeholder (not "£0", not "Free") when paid event has revenue_collected: null', () => {
+    // Defensive: the event_with_stats view always populates revenue_collected
+    // as a number, but EventWithStats.revenue_collected is `number | null` so
+    // any future caller passing null on the admin path must not crash and
+    // must not render a misleading "£0" or "Free". Em-dash is the explicit
+    // "not aggregated" placeholder. Asserting both surfaces (desktop +
+    // mobile) in one test because the rendering logic is duplicated.
+    const { container } = render(
+      <EventsTable
+        events={[
+          baseEvent({
+            title: 'Null Revenue Event',
+            price: 5000,         // paid → "Free" branch must NOT trigger
+            confirmed_count: 7,
+            revenue_collected: null,
+          }),
+        ]}
+      />
+    )
+
+    // Desktop table cell.
+    const desktopWrapper = container.querySelector('div.hidden.md\\:block') as HTMLElement
+    expect(desktopWrapper.textContent).toContain('—')
+    expect(desktopWrapper.textContent).not.toContain('£0')
+    // "Free" appears nowhere because price > 0 — confirm it's not in the row.
+    expect(desktopWrapper.querySelector('table')!.textContent).not.toContain('Free')
+
+    // Mobile card surface.
+    const mobileCard = container.querySelector('ul.md\\:hidden article') as HTMLElement
+    expect(mobileCard.textContent).toContain('—')
+    expect(mobileCard.textContent).not.toContain('£0')
+    // The Revenue dt/dd pair still exists; the dd's value is the em-dash.
+    const dts = [...mobileCard.querySelectorAll('dt')].map((d) => d.textContent)
+    expect(dts).toContain('Revenue')
   })
 })

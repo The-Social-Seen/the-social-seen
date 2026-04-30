@@ -337,6 +337,12 @@ export async function getEventBySlug(slug: string): Promise<EventDetail | null> 
   return {
     ...eventFields,
     confirmed_count: confirmed,
+    // revenue_collected exists on EventWithStats for admin consumers (read
+    // from event_with_stats view). Public detail page doesn't display it,
+    // and aggregating bookings.price_at_booking on a public path would
+    // expose admin-only data. NULL is the explicit "not aggregated" signal
+    // — distinct from a real £0 figure on an admin-fetched row.
+    revenue_collected: null,
     avg_rating: avgRating,
     review_count: reviewCount,
     spots_left: spotsLeft,

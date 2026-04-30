@@ -192,12 +192,14 @@ describe('getMonthlyBookings', () => {
     vi.useRealTimers()
   })
 
-  it('T3-5: returns exactly 12 entries with month and count keys', async () => {
+  it('T3-5: returns 14 entries (12 past months + 2 future) with month and count keys', async () => {
     mockAdminWithSequence([{ data: [], error: null }])
 
     const result = await getMonthlyBookings()
 
-    expect(result).toHaveLength(12)
+    // 12 trailing months + current + 2 future months so admins can see
+    // bookings for upcoming events grouped by event date.
+    expect(result).toHaveLength(14)
     for (const entry of result) {
       expect(entry).toHaveProperty('month')
       expect(entry).toHaveProperty('count')
@@ -208,6 +210,65 @@ describe('getMonthlyBookings', () => {
   it('T3-6: throws for member role (not admin)', async () => {
     mockMemberUser()
     await expect(getMonthlyBookings()).rejects.toThrow('Admin access required')
+  })
+
+  it('T3-5b: buckets bookings by event date, not booking creation date', async () => {
+    // System time = 2026-04-11. A booking placed in April for an event
+    // that happens in May 2026 must show up in the May bucket — that's
+    // the whole point of the event-date pivot.
+    mockAdminWithSequence([
+      {
+        data: [
+          // 2x bookings whose events are in May 2026
+          { event: { date_time: '2026-05-04T19:00:00.000Z' } },
+          { event: { date_time: '2026-05-20T19:00:00.000Z' } },
+          // 1x booking whose event is in March 2026
+          { event: { date_time: '2026-03-12T19:00:00.000Z' } },
+        ],
+        error: null,
+      },
+    ])
+
+    const result = await getMonthlyBookings()
+
+    const may = result.find((e) => e.month === 'May 2026')
+    const march = result.find((e) => e.month === 'Mar 2026')
+    const april = result.find((e) => e.month === 'Apr 2026')
+
+    expect(may?.count).toBe(2)
+    expect(march?.count).toBe(1)
+    // April is the current month and should remain at 0 — bookings do not
+    // belong to April just because they were created there.
+    expect(april?.count).toBe(0)
+  })
+
+  it('T3-5c: filters by events.date_time (joined column), not bookings.created_at', async () => {
+    // Guards against a regression to the old behaviour. The function must
+    // join events!inner and apply date-window filters on events.date_time.
+    let capturedChain: ReturnType<typeof mockChain> | null = null
+
+    authenticateAdmin()
+    let callCount = 0
+    mockFrom.mockImplementation(() => {
+      callCount++
+      if (callCount === 1) {
+        return mockChain({ data: { role: 'admin' } })
+      }
+      const chain = mockChain({ data: [], error: null })
+      capturedChain = chain
+      return chain
+    })
+
+    await getMonthlyBookings()
+
+    expect(capturedChain).not.toBeNull()
+    const gteCalls = capturedChain!.gte.mock.calls
+    const lteCalls = capturedChain!.lte.mock.calls
+    // Both date-window bounds must reference the joined events.date_time,
+    // never the bookings table's own created_at.
+    expect(gteCalls.some((c) => c[0] === 'events.date_time')).toBe(true)
+    expect(lteCalls.some((c) => c[0] === 'events.date_time')).toBe(true)
+    expect(gteCalls.some((c) => c[0] === 'created_at')).toBe(false)
   })
 })
 

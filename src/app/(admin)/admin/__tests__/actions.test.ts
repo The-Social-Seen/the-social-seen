@@ -529,3 +529,47 @@ describe('sendNotification', () => {
     expect(result.error).toBeDefined()
   })
 })
+
+// ════════════════════════════════════════════════════════════════════════════
+// getDashboardStats — revenue this month
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('getDashboardStats — revenue this month', () => {
+  it('filters revenue by booking created_at (money collected this month), not event date', async () => {
+    // The KPI represents *cash collected this calendar month*. Filtering
+    // by event date_time gave £0 when no events happened this month even
+    // though paid bookings had landed — this test guards against that
+    // regression.
+    let bookingsChain: ReturnType<typeof mockChain> | null = null
+
+    authenticateAdmin()
+    let callCount = 0
+    mockFrom.mockImplementation((table: string) => {
+      callCount++
+      // Call 1: requireAdmin → profiles.role
+      if (callCount === 1) return mockChain({ data: { role: 'admin' } })
+      // Subsequent calls run via Promise.all so order is by `from(...)` arg.
+      if (table === 'bookings') {
+        const chain = mockChain({ data: [{ price_at_booking: 2500 }, { price_at_booking: 1500 }], error: null })
+        bookingsChain = chain
+        return chain
+      }
+      // profiles count, events count, event_reviews select — return empty.
+      return mockChain({ data: [], count: 0, error: null })
+    })
+
+    const stats = await getDashboardStats()
+
+    expect(bookingsChain).not.toBeNull()
+    const gteCalls = bookingsChain!.gte.mock.calls
+    const lteCalls = bookingsChain!.lte.mock.calls
+    // Both window bounds must reference bookings.created_at, never the
+    // joined events.date_time column the old query used.
+    expect(gteCalls.some((c) => c[0] === 'created_at')).toBe(true)
+    expect(lteCalls.some((c) => c[0] === 'created_at')).toBe(true)
+    expect(gteCalls.some((c) => c[0] === 'events.date_time')).toBe(false)
+
+    // And the sum of price_at_booking flows through to the KPI value.
+    expect(stats.revenueThisMonth).toBe(4000)
+  })
+})
