@@ -43,8 +43,9 @@ export function Header() {
   const { theme, toggleTheme } = useTheme();
   const router = useRouter();
   const pathname = usePathname();
-  // Only use white-on-transparent styling on the home page (dark hero background)
-  const isHeroPage = pathname === "/";
+  // White-on-transparent styling on pages with a dark hero background.
+  // Add new dark-hero routes here as they're built.
+  const isHeroPage = pathname === "/" || pathname === "/about";
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [user, setUser] = useState<User | null>(null);
