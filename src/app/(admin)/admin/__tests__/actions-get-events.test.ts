@@ -87,6 +87,7 @@ function adminEventRow(overrides: Record<string, unknown> = {}) {
     is_cancelled: false,
     deleted_at: null,
     confirmed_count: 4,
+    revenue_collected: 0,
     avg_rating: 0,
     review_count: 0,
     spots_left: 16,
@@ -186,6 +187,50 @@ describe('getAdminEvents — missing-primary throw', () => {
     await expect(getAdminEvents()).rejects.toThrow(
       'Event row missing primary tag (F1a data integrity)',
     )
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// Test: revenue_collected from event_with_stats survives the row decoder
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('getAdminEvents — revenue_collected pass-through', () => {
+  it('preserves revenue_collected on the returned EventWithStats (no field drop)', async () => {
+    // Guard against a future "row decoder" change accidentally stripping
+    // revenue_collected. The migration exposes this column on the
+    // event_with_stats view; getAdminEvents must surface it untouched so
+    // the admin EventsTable can render the per-event Revenue figure.
+    authenticateAdmin()
+
+    const row = adminEventRow({
+      revenue_collected: 47500, // £475.00 in pence — distinct from 0 / null
+      event_tags: [
+        {
+          is_primary: true,
+          tags: { slug: 'galleries-museums', label: 'Galleries & Museums' },
+        },
+      ],
+    })
+
+    let firstCall = true
+    mockFrom.mockImplementation((table: string) => {
+      if (firstCall) {
+        firstCall = false
+        return mockChain({ data: { role: 'admin' } })
+      }
+      if (table === 'event_with_stats') {
+        return mockChain({ data: [row], error: null })
+      }
+      return mockChain({ data: null, error: null })
+    })
+
+    const events = await getAdminEvents()
+
+    expect(events).toHaveLength(1)
+    // Strict-equal: it's a number, not null; the value matches what the
+    // view returned. Catches both "field dropped" and "coerced to 0"
+    // regressions.
+    expect(events[0].revenue_collected).toBe(47500)
   })
 })
 

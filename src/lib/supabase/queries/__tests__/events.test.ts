@@ -118,6 +118,7 @@ const mockEventWithStats = {
   updated_at: '2026-04-01T00:00:00Z',
   deleted_at: null,
   confirmed_count: 12,
+  revenue_collected: 0,
   avg_rating: 4.5,
   review_count: 8,
   spots_left: 18,
@@ -393,6 +394,30 @@ describe('getEventBySlug', () => {
 
     expect(result!.hosts).toEqual([])
     expect(result!.inclusions).toEqual([])
+  })
+
+  it('returns revenue_collected as strict null (not 0) — public path does not aggregate', async () => {
+    // The public detail page must not display a fictional £0 revenue. The
+    // type signals "not aggregated" via null; this test fails loudly if a
+    // future cleanup defaults the field to 0 again.
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve(mockEventRow)
+    fromBuilders['events'] = eventsBuilder
+
+    const bookingsBuilder = createQueryBuilder()
+    bookingsBuilder.mockResolve(null, 5)
+    fromBuilders['bookings'] = bookingsBuilder
+
+    const reviewsBuilder = createQueryBuilder()
+    reviewsBuilder.mockResolve([])
+    fromBuilders['event_reviews'] = reviewsBuilder
+
+    const result = await getEventBySlug('wine-and-wisdom')
+
+    expect(result).not.toBeNull()
+    // Strict equality — toBe(null) catches `0`, `undefined`, and `'null'`
+    // string regressions that toBeFalsy() would silently allow.
+    expect(result!.revenue_collected).toBe(null)
   })
 })
 

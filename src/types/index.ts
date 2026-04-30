@@ -228,10 +228,15 @@ export interface PrimaryTag {
 }
 
 export interface EventWithStats extends Event {
-  confirmed_count: number
-  avg_rating:      number
-  review_count:    number
-  spots_left:      number | null  // null when capacity is null (unlimited)
+  confirmed_count:   number
+  /**
+   * Sum of price_at_booking (pence) for confirmed bookings on this event.
+   * NULL when not aggregated (e.g. public read paths that don't need it).
+   */
+  revenue_collected: number | null
+  avg_rating:        number
+  review_count:      number
+  spots_left:        number | null  // null when capacity is null (unlimited)
   /**
    * Primary tag from `event_tags` + `tags` join. Non-nullable —
    * every event has exactly one primary by the partial unique index.

@@ -206,14 +206,15 @@ export async function getDashboardStats() {
       .gt('date_time', now.toISOString()),
 
     // Revenue this month: sum price_at_booking for confirmed bookings
-    // where the event date_time falls in the current month
+    // created this calendar month (i.e. money actually collected this month,
+    // regardless of when the event takes place).
     supabase
       .from('bookings')
-      .select('price_at_booking, event:events!inner(date_time)')
+      .select('price_at_booking')
       .eq('status', 'confirmed')
       .is('deleted_at', null)
-      .gte('events.date_time', startOfMonth)
-      .lte('events.date_time', endOfMonth),
+      .gte('created_at', startOfMonth)
+      .lte('created_at', endOfMonth),
 
     // Average rating across all visible reviews
     supabase
@@ -240,23 +241,27 @@ export async function getDashboardStats() {
 export async function getMonthlyBookings() {
   const { supabase } = await requireAdmin()
 
-  // Get bookings from last 12 months
+  // Group by event date so upcoming bookings appear in their event's month,
+  // not the month the booking was made. Include 2 future months so admins
+  // can see attendance booked for upcoming events.
   const twelveMonthsAgo = new Date()
   twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12)
 
+  const twoMonthsAhead = new Date()
+  twoMonthsAhead.setMonth(twoMonthsAhead.getMonth() + 3)
+  twoMonthsAhead.setDate(1)
+
   const { data: bookings } = await supabase
     .from('bookings')
-    .select('created_at')
+    .select('event:events!inner(date_time)')
     .eq('status', 'confirmed')
     .is('deleted_at', null)
-    .gte('created_at', twelveMonthsAgo.toISOString())
-    .order('created_at', { ascending: true })
+    .gte('events.date_time', twelveMonthsAgo.toISOString())
+    .lte('events.date_time', twoMonthsAhead.toISOString())
 
-  // Group by month
+  // Pre-fill last 12 months + next 2 months with zeros
   const monthCounts = new Map<string, number>()
-
-  // Pre-fill last 12 months with zeros
-  for (let i = 11; i >= 0; i--) {
+  for (let i = 11; i >= -2; i--) {
     const d = new Date()
     d.setMonth(d.getMonth() - i)
     const key = d.toLocaleDateString('en-GB', { year: 'numeric', month: 'short' })
@@ -264,9 +269,12 @@ export async function getMonthlyBookings() {
   }
 
   for (const b of bookings ?? []) {
-    const d = new Date(b.created_at)
-    const key = d.toLocaleDateString('en-GB', { year: 'numeric', month: 'short' })
-    monthCounts.set(key, (monthCounts.get(key) ?? 0) + 1)
+    const eventDate = extractField<{ date_time: string }>(b.event, 'date_time')
+    if (!eventDate) continue
+    const key = new Date(eventDate).toLocaleDateString('en-GB', { year: 'numeric', month: 'short' })
+    if (monthCounts.has(key)) {
+      monthCounts.set(key, (monthCounts.get(key) ?? 0) + 1)
+    }
   }
 
   return Array.from(monthCounts.entries()).map(([month, count]) => ({ month, count }))

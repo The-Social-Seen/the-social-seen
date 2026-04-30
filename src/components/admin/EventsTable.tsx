@@ -64,6 +64,7 @@ export default function EventsTable({ events }: EventsTableProps) {
               <th className="pb-3 font-medium text-text-tertiary hidden lg:table-cell">Category</th>
               <th className="pb-3 font-medium text-text-tertiary">Price</th>
               <th className="pb-3 font-medium text-text-tertiary hidden lg:table-cell">Booked</th>
+              <th className="pb-3 font-medium text-text-tertiary hidden lg:table-cell">Revenue</th>
               <th className="pb-3 font-medium text-text-tertiary">Status</th>
               <th className="pb-3 font-medium text-text-tertiary text-right">Actions</th>
             </tr>
@@ -113,6 +114,13 @@ export default function EventsTable({ events }: EventsTableProps) {
                 </td>
                 <td className="py-3 pr-4 text-text-secondary hidden lg:table-cell">
                   {event.confirmed_count}/{event.capacity ?? '∞'}
+                </td>
+                <td className="py-3 pr-4 text-text-secondary hidden lg:table-cell">
+                  {event.price > 0
+                    ? (event.revenue_collected !== null
+                        ? formatPrice(event.revenue_collected)
+                        : <span className="text-text-tertiary text-xs">—</span>)
+                    : <span className="text-text-tertiary text-xs">Free</span>}
                 </td>
                 <td className="py-3 pr-4">
                   {statusBadge(event)}
@@ -214,6 +222,16 @@ export default function EventsTable({ events }: EventsTableProps) {
                     <dt className="text-text-tertiary">Booked</dt>
                     <dd className="text-text-secondary">
                       {event.confirmed_count}/{event.capacity ?? '∞'}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <dt className="text-text-tertiary">Revenue</dt>
+                    <dd className="text-text-secondary">
+                      {event.price > 0
+                        ? (event.revenue_collected !== null
+                            ? formatPrice(event.revenue_collected)
+                            : <span className="text-text-tertiary">—</span>)
+                        : <span className="text-text-tertiary">Free</span>}
                     </dd>
                   </div>
                 </dl>
