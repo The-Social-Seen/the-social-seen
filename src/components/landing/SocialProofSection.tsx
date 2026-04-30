@@ -92,7 +92,7 @@ export function SocialProofSection() {
         </motion.p>
 
         <div className="grid grid-cols-1 gap-12 sm:grid-cols-3 sm:gap-8">
-          <AnimatedCounter end={200} suffix="+" label="Events Hosted" />
+          <AnimatedCounter end={40} suffix="+" label="Events Hosted" />
           <AnimatedCounter
             end={4.8}
             decimals={1}

@@ -32,7 +32,7 @@ const values = [
 
 const stats = [
   { value: "1,000+", label: "Members" },
-  { value: "200+", label: "Events Hosted" },
+  { value: "40+", label: "Events Hosted" },
   { value: "4.8", label: "Average Rating" },
   { value: "12+", label: "Events This Month" },
 ];
@@ -71,23 +71,24 @@ export default function AboutPage() {
               </h2>
               <div className="space-y-6 font-sans text-base leading-relaxed text-text-secondary md:text-lg">
                 <p>
-                  In 2022, a supper club for twelve friends-of-friends sold out
-                  in two hours. The WhatsApp group that organised it grew from
-                  20 to 200 within weeks. Something had struck a nerve.
+                  In 2024, two friends booked out a Fairgame in London for an
+                  evening with people from their wider network. By the end of
+                  the night, the WhatsApp thread to organise the next one had
+                  already started.
                 </p>
                 <p>
                   London professionals in their 30s and 40s were tired of
                   awkward networking events and surface-level small talk.
-                  They wanted wine tastings, gallery openings, rooftop drinks
-                  — experiences designed to spark genuine conversation, not
+                  They wanted nice bars, dining experiences, rooftop drinks -
+                  experiences designed to spark genuine conversation, not
                   collect business cards.
                 </p>
                 <p>
                   So we kept going. We curated the guest list, chose venues
                   with character, and let the evenings speak for themselves.
-                  Now 1,000+ members strong, The Social Seen isn&apos;t a
-                  platform — it&apos;s a community built on a simple
-                  philosophy: stop networking, start living.
+                  Now 1,000+ members strong and 40+ events later, The Social
+                  Seen isn&apos;t a platform - it&apos;s a community built on
+                  a simple philosophy: stop networking, start living.
                 </p>
               </div>
             </div>
@@ -161,13 +162,13 @@ export default function AboutPage() {
         <div className="mx-auto max-w-2xl border-t border-border pt-16 text-center">
           <p className="mb-6 font-serif text-5xl text-gold/30">&ldquo;</p>
           <p className="mb-8 font-serif text-xl leading-relaxed text-text-primary italic md:text-2xl">
-            I started this because I was tired of networking events where
-            nobody actually talked. The best evenings I&apos;ve had in London
-            weren&apos;t at conferences — they were at dinner tables with
+            We started this because we were tired of networking events where
+            nobody actually talked. The best evenings we&apos;ve had in London
+            weren&apos;t at conferences - they were at dinner tables with
             strangers who became friends by dessert.
           </p>
           <p className="font-sans text-sm font-medium text-text-secondary">
-            — Mitesh, Co-Founder
+            - The Social Seen Co-Founders
           </p>
         </div>
       </section>

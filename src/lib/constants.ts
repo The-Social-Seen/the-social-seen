@@ -6,7 +6,7 @@ export const SITE_CONFIG = {
   description: "Supper clubs. Gallery openings. Rooftop drinks. London's most interesting professionals, one unforgettable evening at a time.",
   url:         'https://thesocialseen.com',
   memberCount: '1,000+',
-  eventsHosted: '200+',
+  eventsHosted: '40+',
   avgRating:   '4.9',
 } as const
 

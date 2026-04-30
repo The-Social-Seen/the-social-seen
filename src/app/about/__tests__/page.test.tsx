@@ -69,14 +69,14 @@ describe('About page', () => {
   it('renders stat numbers', () => {
     render(<AboutPage />)
     expect(screen.getByText('1,000+')).toBeTruthy()
-    expect(screen.getByText('200+')).toBeTruthy()
+    expect(screen.getByText('40+')).toBeTruthy()
     expect(screen.getByText('4.8')).toBeTruthy()
     expect(screen.getByText('12+')).toBeTruthy()
   })
 
-  it('renders founder note signed by Mitesh', () => {
+  it('renders founder note signed by the co-founders', () => {
     render(<AboutPage />)
-    expect(screen.getByText(/mitesh, co-founder/i)).toBeTruthy()
+    expect(screen.getByText(/the social seen co-founders/i)).toBeTruthy()
   })
 
   it('renders an image with alt text', () => {
