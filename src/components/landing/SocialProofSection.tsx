@@ -101,7 +101,7 @@ export function SocialProofSection() {
               <Star className="h-8 w-8 fill-gold text-gold md:h-10 md:w-10" />
             }
           />
-          <AnimatedCounter end={12} suffix="+" label="Events This Month" />
+          <AnimatedCounter end={1} suffix="+" label="Events This Month" />
         </div>
       </div>
     </section>
