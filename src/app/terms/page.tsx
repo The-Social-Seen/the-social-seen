@@ -35,9 +35,16 @@ export default function TermsPage() {
           </h2>
           <p>
             The Social Seen is a curated social events platform for
-            London-based professionals, operated by The Social Seen
-            Ltd. By joining or booking an event you agree to these
-            terms.
+            London-based professionals, operated as a sole-trader
+            business in the United Kingdom. The operator&rsquo;s legal
+            name and contact address are available on request from{' '}
+            <a
+              href="mailto:info@the-social-seen.com"
+              className="font-medium text-gold hover:text-gold-hover"
+            >
+              info@the-social-seen.com
+            </a>
+            . By joining or booking an event you agree to these terms.
           </p>
         </section>
 
@@ -79,27 +86,38 @@ export default function TermsPage() {
           <h2 className="font-serif text-xl font-bold text-text-primary">
             4. Payment, cancellation and refunds
           </h2>
+          <p>
+            Each paid event displays its own refund policy at the
+            booking step &mdash; please read it before paying.
+          </p>
+          <p>Where an event doesn&rsquo;t override the default, the rules are:</p>
           <ul className="list-disc space-y-1 pl-5">
             <li>
               <strong>Free events:</strong> you can cancel any time up
               to the event start with no penalty.
             </li>
             <li>
-              <strong>Paid events &mdash; more than 48 hours before the
-              event start:</strong> full refund to your original payment
+              <strong>Paid events, more than 48 hours before the event
+              start:</strong> full refund to your original payment
               method. Stripe processing fees are the only exception
               (see your receipt for the net amount).
             </li>
             <li>
-              <strong>Paid events &mdash; within 48 hours of the event
+              <strong>Paid events, within 48 hours of the event
               start:</strong> no refund. The seat is released so a
               waitlister can claim it.
             </li>
-            <li>
-              If we cancel an event ourselves you get a full refund
-              regardless of timing.
-            </li>
           </ul>
+          <p>
+            Individual events may set a longer refund window (for
+            example 72 hours or 7 days) or be marked non-refundable
+            from the moment of booking. Whichever policy applies is
+            shown on the event page before you pay.
+          </p>
+          <p>
+            If we cancel an event ourselves you get a full refund
+            regardless of which per-event policy was in force.
+          </p>
         </section>
 
         <section>

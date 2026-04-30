@@ -41,9 +41,17 @@ export default function PrivacyPolicyPage() {
           </h2>
           <p>
             The Social Seen is a curated social events platform for
-            London professionals, operated by The Social Seen Ltd
-            (company to be registered). We&rsquo;re the data controller
-            for the personal data described below.
+            London professionals, operated as a sole-trader business in
+            the United Kingdom. The operator&rsquo;s legal name and
+            contact address are available on request from{' '}
+            <a
+              href="mailto:info@the-social-seen.com"
+              className="font-medium text-gold hover:text-gold-hover"
+            >
+              info@the-social-seen.com
+            </a>
+            . The operator is the data controller for the personal data
+            described below.
           </p>
           <p>
             Contact us at{' '}
