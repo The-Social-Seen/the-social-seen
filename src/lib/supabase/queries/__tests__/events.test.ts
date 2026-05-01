@@ -262,10 +262,13 @@ describe('getEventBySlug', () => {
     eventsBuilder.mockResolve(mockEventRow)
     fromBuilders['events'] = eventsBuilder
 
-    // bookings builder returns count
-    const bookingsBuilder = createQueryBuilder()
-    bookingsBuilder.mockResolve(null, 5)
-    fromBuilders['bookings'] = bookingsBuilder
+    // event_with_stats builder returns the confirmed count (RLS-safe path —
+    // the view aggregates with definer privileges so anon + members + admins
+    // all see the same number; bookings table is no longer queried directly
+    // for this count).
+    const statsBuilder = createQueryBuilder()
+    statsBuilder.mockResolve({ confirmed_count: 5 })
+    fromBuilders['event_with_stats'] = statsBuilder
 
     // reviews builder returns ratings
     const reviewsBuilder = createQueryBuilder()
@@ -295,9 +298,9 @@ describe('getEventBySlug', () => {
     eventsBuilder.mockResolve(unlimitedEvent)
     fromBuilders['events'] = eventsBuilder
 
-    const bookingsBuilder = createQueryBuilder()
-    bookingsBuilder.mockResolve(null, 50)
-    fromBuilders['bookings'] = bookingsBuilder
+    const statsBuilder = createQueryBuilder()
+    statsBuilder.mockResolve({ confirmed_count: 50 })
+    fromBuilders['event_with_stats'] = statsBuilder
 
     const reviewsBuilder = createQueryBuilder()
     reviewsBuilder.mockResolve([])
@@ -314,9 +317,9 @@ describe('getEventBySlug', () => {
     eventsBuilder.mockResolve({ ...mockEventRow, capacity: 10 })
     fromBuilders['events'] = eventsBuilder
 
-    const bookingsBuilder = createQueryBuilder()
-    bookingsBuilder.mockResolve(null, 15) // 15 confirmed, capacity 10
-    fromBuilders['bookings'] = bookingsBuilder
+    const statsBuilder = createQueryBuilder()
+    statsBuilder.mockResolve({ confirmed_count: 15 }) // 15 confirmed, capacity 10
+    fromBuilders['event_with_stats'] = statsBuilder
 
     const reviewsBuilder = createQueryBuilder()
     reviewsBuilder.mockResolve([])
@@ -358,9 +361,9 @@ describe('getEventBySlug', () => {
     eventsBuilder.mockResolve(mockEventRow)
     fromBuilders['events'] = eventsBuilder
 
-    const bookingsBuilder = createQueryBuilder()
-    bookingsBuilder.mockResolve(null, 0)
-    fromBuilders['bookings'] = bookingsBuilder
+    const statsBuilder = createQueryBuilder()
+    statsBuilder.mockResolve({ confirmed_count: 0 })
+    fromBuilders['event_with_stats'] = statsBuilder
 
     const reviewsBuilder = createQueryBuilder()
     reviewsBuilder.mockResolve([])
@@ -382,9 +385,9 @@ describe('getEventBySlug', () => {
     eventsBuilder.mockResolve(eventWithNulls)
     fromBuilders['events'] = eventsBuilder
 
-    const bookingsBuilder = createQueryBuilder()
-    bookingsBuilder.mockResolve(null, 0)
-    fromBuilders['bookings'] = bookingsBuilder
+    const statsBuilder = createQueryBuilder()
+    statsBuilder.mockResolve({ confirmed_count: 0 })
+    fromBuilders['event_with_stats'] = statsBuilder
 
     const reviewsBuilder = createQueryBuilder()
     reviewsBuilder.mockResolve([])
@@ -404,9 +407,9 @@ describe('getEventBySlug', () => {
     eventsBuilder.mockResolve(mockEventRow)
     fromBuilders['events'] = eventsBuilder
 
-    const bookingsBuilder = createQueryBuilder()
-    bookingsBuilder.mockResolve(null, 5)
-    fromBuilders['bookings'] = bookingsBuilder
+    const statsBuilder = createQueryBuilder()
+    statsBuilder.mockResolve({ confirmed_count: 5 })
+    fromBuilders['event_with_stats'] = statsBuilder
 
     const reviewsBuilder = createQueryBuilder()
     reviewsBuilder.mockResolve([])
@@ -418,6 +421,42 @@ describe('getEventBySlug', () => {
     // Strict equality — toBe(null) catches `0`, `undefined`, and `'null'`
     // string regressions that toBeFalsy() would silently allow.
     expect(result!.revenue_collected).toBe(null)
+  })
+
+  it('reads confirmed_count from event_with_stats view, not via direct bookings count (RLS-leak regression)', async () => {
+    // Pre-fix: this function ran a `count: 'exact'` query on the bookings
+    // table. The bookings RLS policy (user_id = auth.uid() OR is_admin)
+    // means anonymous viewers saw 0 attendees on every event, and
+    // logged-in members saw at most 1 (their own). Only admins saw the
+    // real count. The fix is to read confirmed_count from the
+    // event_with_stats view, which aggregates with definer privileges
+    // — the count crosses the view boundary as a single number, individual
+    // booking rows remain RLS-protected. This test fails loudly if a
+    // future cleanup re-introduces the direct bookings count.
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve(mockEventRow)
+    fromBuilders['events'] = eventsBuilder
+
+    const statsBuilder = createQueryBuilder()
+    statsBuilder.mockResolve({ confirmed_count: 47 })
+    fromBuilders['event_with_stats'] = statsBuilder
+
+    // Bookings builder is intentionally LEFT UNSET. If getEventBySlug ever
+    // queries `bookings` again, the createServerClient mock will lazily
+    // create an empty builder that resolves to {data:null,count:null} — and
+    // confirmed_count would fall back to 0. Asserting 47 below proves the
+    // count came from the view, not the table.
+    const reviewsBuilder = createQueryBuilder()
+    reviewsBuilder.mockResolve([])
+    fromBuilders['event_reviews'] = reviewsBuilder
+
+    const result = await getEventBySlug('wine-and-wisdom')
+
+    expect(result).not.toBeNull()
+    expect(result!.confirmed_count).toBe(47)
+    // Belt-and-braces: if the bookings table was queried, the lazy
+    // builder would have been created in fromBuilders. It must NOT exist.
+    expect(fromBuilders['bookings']).toBeUndefined()
   })
 })
 
