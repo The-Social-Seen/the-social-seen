@@ -274,14 +274,25 @@ export async function getEventBySlug(slug: string): Promise<EventDetail | null> 
     return null
   }
 
-  // 2. Fetch booking count + review stats in parallel (Amendment 3.5)
-  const [bookingResult, reviewResult] = await Promise.all([
+  // 2. Fetch booking count + review stats in parallel (Amendment 3.5).
+  //
+  // confirmed_count is read from the `event_with_stats` view, NOT via a
+  // direct `count: 'exact'` on the bookings table. The bookings RLS policy
+  // (user_id = auth.uid() OR is_admin) means a direct count returns:
+  //   - 0 for anon visitors
+  //   - 0 or 1 for the booking-holder themselves
+  //   - the real number only for admins
+  // …which silently broke the public detail page's "X people going" badge
+  // for everyone except admins. The view computes COUNT(*) inside the view
+  // body with definer privileges, so the aggregate sees ALL confirmed
+  // bookings; only that single number leaves the view, individual booking
+  // rows remain RLS-protected. See fix/event-detail-attendee-count-rls-leak.
+  const [statsResult, reviewResult] = await Promise.all([
     supabase
-      .from('bookings')
-      .select('*', { count: 'exact', head: true })
-      .eq('event_id', event.id)
-      .eq('status', 'confirmed')
-      .is('deleted_at', null),
+      .from('event_with_stats')
+      .select('confirmed_count')
+      .eq('id', event.id)
+      .maybeSingle(),
     supabase
       .from('event_reviews')
       .select('rating')
@@ -289,14 +300,14 @@ export async function getEventBySlug(slug: string): Promise<EventDetail | null> 
       .eq('is_visible', true),
   ])
 
-  if (bookingResult.error) {
-    console.error('[getEventBySlug:bookingCount]', bookingResult.error.message)
+  if (statsResult.error) {
+    console.error('[getEventBySlug:stats]', statsResult.error.message)
   }
   if (reviewResult.error) {
     console.error('[getEventBySlug:reviewStats]', reviewResult.error.message)
   }
 
-  const confirmed = bookingResult.count ?? 0
+  const confirmed = statsResult.data?.confirmed_count ?? 0
   const reviews = reviewResult.data ?? []
   const reviewCount = reviews.length
   const avgRating =
