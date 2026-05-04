@@ -6,7 +6,12 @@
  *   - Successful exchange, no `next` → redirect to /reset-password (fallback)
  *   - Successful exchange, safe `next` → redirect to that path
  *   - Successful exchange, malicious absolute `next` → sanitised to fallback
+ *     (deeper open-redirect coverage — `//evil.com`, `\\/evil.com`,
+ *     `javascript:` etc. — lives in src/lib/utils/__tests__/redirect.test.ts;
+ *     the route inherits those guarantees from sanitizeRedirectPath.)
  *   - exchangeCodeForSession returns { error } → redirect to expired_link
+ *   - exchangeCodeForSession throws (network / Supabase 5xx) → same
+ *     expired_link redirect, NOT a 500
  *
  * No Playwright E2E exists for this route: the recovery flow can't be
  * exercised without a real Supabase recovery email (the PKCE token is bound
@@ -102,5 +107,23 @@ describe('GET /auth/callback', () => {
       'http://localhost:3000/forgot-password?error=expired_link',
     )
     expect(mockExchangeCodeForSession).toHaveBeenCalledWith('pkce_expired')
+  })
+
+  it('redirects to expired_link when exchangeCodeForSession throws', async () => {
+    // Defence-in-depth: a network failure or Supabase 5xx can cause the
+    // SDK to throw rather than return { error }. We must NOT 500 the route
+    // — the email is single-use, so a dead-end response would force the
+    // user to re-request. Same expired-link redirect as the { error } path.
+    mockExchangeCodeForSession.mockRejectedValue(
+      new Error('network: connect ECONNREFUSED'),
+    )
+
+    const res = await GET(makeRequest('?code=pkce_thrown'))
+
+    expect(res.status).toBe(307)
+    expect(res.headers.get('location')).toBe(
+      'http://localhost:3000/forgot-password?error=expired_link',
+    )
+    expect(mockExchangeCodeForSession).toHaveBeenCalledWith('pkce_thrown')
   })
 })

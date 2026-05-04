@@ -30,9 +30,19 @@ export async function GET(request: Request) {
   }
 
   const supabase = await createServerClient()
-  const { error } = await supabase.auth.exchangeCodeForSession(code)
 
-  if (error) {
+  // Network failures or Supabase 5xx can cause the SDK to throw rather than
+  // return { error }. Catch both rejection paths so the user gets the same
+  // actionable expired-link redirect instead of a 500 — a 500 on a
+  // password-recovery click is a dead-end since the email is single-use.
+  try {
+    const { error } = await supabase.auth.exchangeCodeForSession(code)
+    if (error) {
+      return NextResponse.redirect(
+        new URL('/forgot-password?error=expired_link', url.origin),
+      )
+    }
+  } catch {
     return NextResponse.redirect(
       new URL('/forgot-password?error=expired_link', url.origin),
     )
