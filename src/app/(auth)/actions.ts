@@ -303,10 +303,10 @@ export async function saveInterests(input: {
  * registered (prevents account enumeration). Supabase handles the actual
  * email delivery; if the email isn't registered, no email is sent.
  *
- * The reset link returned by Supabase points to the URL configured in
- * Supabase Auth → URL Configuration → Redirect URLs. Locally the first
- * allowed URL is http://localhost:3000; in production set this to
- * https://<your-domain>/reset-password.
+ * The reset link routes through /auth/callback so the PKCE code can be
+ * exchanged for a recovery session before the user lands on /reset-password.
+ * Both /auth/callback and /reset-password must be on the Supabase Redirect
+ * URLs allow list (Auth → URL Configuration).
  */
 export async function requestPasswordReset(input: {
   email: string
@@ -319,9 +319,24 @@ export async function requestPasswordReset(input: {
   const { email } = parsed.data
   const supabase = await createServerClient()
 
-  // Derive the absolute redirect URL from the NEXT_PUBLIC_SITE_URL env var
-  // so staging and production land on their own /reset-password page.
-  // Falls back to NEXT_PUBLIC_VERCEL_URL (auto-set on Vercel) then localhost.
+  // Derive the absolute redirect URL from NEXT_PUBLIC_SITE_URL. Without it in
+  // production the fallback to NEXT_PUBLIC_VERCEL_URL produces the auto-domain
+  // (e.g. <project>.vercel.app), which won't be on Supabase's allow list and
+  // silently breaks reset emails — warn loudly so the misconfig is visible in
+  // Vercel logs rather than discovered by a confused user.
+  if (
+    process.env.NODE_ENV === 'production' &&
+    !process.env.NEXT_PUBLIC_SITE_URL
+  ) {
+    console.warn(
+      '[requestPasswordReset] NEXT_PUBLIC_SITE_URL is not set in production. ' +
+        'Falling back to NEXT_PUBLIC_VERCEL_URL, which will not match the ' +
+        'Supabase Redirect URLs allow list — reset emails will land on the ' +
+        'Site URL instead of /auth/callback. Set NEXT_PUBLIC_SITE_URL to your ' +
+        'production domain.',
+    )
+  }
+
   const origin =
     process.env.NEXT_PUBLIC_SITE_URL ??
     (process.env.NEXT_PUBLIC_VERCEL_URL
@@ -329,7 +344,7 @@ export async function requestPasswordReset(input: {
       : 'http://localhost:3000')
 
   await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${origin}/reset-password`,
+    redirectTo: `${origin}/auth/callback?next=/reset-password`,
   })
 
   // Always report success — we don't leak whether the email is registered.
