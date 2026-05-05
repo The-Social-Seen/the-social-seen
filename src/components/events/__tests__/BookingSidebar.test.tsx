@@ -335,4 +335,21 @@ describe('BookingSidebar', () => {
     expect(screen.getByText('5 / 30')).toBeTruthy()
     expect(screen.getByText(/Only 5 spots left/)).toBeTruthy()
   })
+
+  // Pins the d65a525 + 34fec9d swap: the public Attendees mini-card reads
+  // `total_attending` (= confirmed_count + external_attendees), NOT
+  // `confirmed_count` directly. Divergent fixture is load-bearing here —
+  // the existing 22/22 fixture is invisible to which-field-is-rendered.
+  it('renders total_attending (not confirmed_count) on the Attendees mini-card', () => {
+    render(
+      <BookingSidebar
+        event={makeEvent({ confirmed_count: 5, total_attending: 25 })}
+        userBooking={null}
+        {...defaultProps}
+      />,
+    )
+
+    expect(screen.getByText('25 people going')).toBeTruthy()
+    expect(screen.queryByText('5 people going')).toBeNull()
+  })
 })

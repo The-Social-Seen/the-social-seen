@@ -388,6 +388,21 @@ describe('EventDetailClient', () => {
     expect(countTexts.length).toBeGreaterThan(0)
   })
 
+  // Pins the d65a525 + 34fec9d swap: the public Attendees panel reads
+  // `total_attending` (= confirmed_count + external_attendees), NOT
+  // `confirmed_count` directly. Divergent fixture is load-bearing here —
+  // the existing 22/22 fixture is invisible to which-field-is-rendered.
+  it('renders total_attending (not confirmed_count) on the public Attendees panel', () => {
+    render(
+      <EventDetailClient
+        event={makeEventDetail({ confirmed_count: 5, total_attending: 25 })}
+        {...defaultProps}
+      />,
+    )
+    expect(screen.getByText('25 people going')).toBeTruthy()
+    expect(screen.queryByText('5 people going')).toBeNull()
+  })
+
   // ── P2-3: Email-verification booking gate ────────────────────────────────
 
   it('renders the unverified banner when isLoggedIn and !emailVerified', () => {
