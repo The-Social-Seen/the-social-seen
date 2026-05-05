@@ -97,6 +97,7 @@ describe('EventForm', () => {
           image_url: null,
           dress_code: null,
           refund_window_hours: 48,
+          external_attendees: 0,
           is_published: true,
         }}
       />
@@ -230,6 +231,7 @@ describe('EventForm', () => {
             image_url: null,
             dress_code: null,
             refund_window_hours: 72,
+            external_attendees: 0,
             is_published: true,
           }}
         />
@@ -260,6 +262,7 @@ describe('EventForm', () => {
             image_url: null,
             dress_code: null,
             refund_window_hours: 0,
+            external_attendees: 0,
             is_published: true,
           }}
         />
