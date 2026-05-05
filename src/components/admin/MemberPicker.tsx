@@ -85,9 +85,11 @@ export default function MemberPicker({
 
   const excludeSet = useMemo(() => new Set(excludeIds), [excludeIds])
 
+  const trimmedQuery = query.trim()
+
   const filtered = useMemo(() => {
     if (!members) return []
-    const q = query.trim().toLowerCase()
+    const q = trimmedQuery.toLowerCase()
     return members
       .filter((m) => !excludeSet.has(m.id))
       .filter((m) => {
@@ -97,7 +99,7 @@ export default function MemberPicker({
           .toLowerCase()
         return haystack.includes(q)
       })
-  }, [members, excludeSet, query])
+  }, [members, excludeSet, trimmedQuery])
 
   function handlePick(member: HostPickerMember) {
     onSelect(member)
@@ -151,10 +153,16 @@ export default function MemberPicker({
             ) : members === null ? (
               <MemberRowsSkeleton />
             ) : filtered.length === 0 ? (
+              // Empty-state copy is host-specific because this picker has only
+              // one consumer today (EventForm hosts). When a second consumer
+              // arrives, lift these strings to an optional `messages?` prop
+              // rather than continuing to overload the meaning here.
               <p className="px-4 py-6 text-center text-sm text-text-tertiary">
                 {members.length === 0
                   ? 'No members available.'
-                  : 'No members match.'}
+                  : trimmedQuery !== ''
+                    ? 'No members match your search.'
+                    : 'All other active members are already hosting this event.'}
               </p>
             ) : (
               filtered.map((m) => <MemberRow key={m.id} member={m} onPick={handlePick} />)
