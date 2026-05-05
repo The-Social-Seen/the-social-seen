@@ -1,10 +1,56 @@
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { getAdminEventById } from '../../actions'
-import EventForm from '@/components/admin/EventForm'
+import EventForm, { type HostFormRow } from '@/components/admin/EventForm'
 import DuplicateEventButton from '@/components/admin/DuplicateEventButton'
 import { getActiveTags } from '@/lib/supabase/queries/tags'
 import { getEventTagsForEvent } from '@/lib/supabase/queries/tags'
+
+/**
+ * Shape of the embedded host row returned by getAdminEventById.
+ * `profile` may arrive as either an object or a single-element array
+ * depending on Supabase's inference for the FK relationship.
+ */
+type AdminHostRow = {
+  id: string
+  role_label: string
+  sort_order: number
+  profile:
+    | {
+        id: string
+        full_name: string
+        avatar_url: string | null
+        job_title: string | null
+        company: string | null
+      }
+    | Array<{
+        id: string
+        full_name: string
+        avatar_url: string | null
+        job_title: string | null
+        company: string | null
+      }>
+    | null
+}
+
+function toHostFormRows(rows: AdminHostRow[]): HostFormRow[] {
+  return rows
+    .map((r) => {
+      const profile = Array.isArray(r.profile) ? r.profile[0] : r.profile
+      if (!profile) return null
+      return {
+        profileId: profile.id,
+        roleLabel: r.role_label,
+        memberSnapshot: {
+          full_name: profile.full_name,
+          avatar_url: profile.avatar_url,
+          job_title: profile.job_title,
+          company: profile.company,
+        },
+      } satisfies HostFormRow
+    })
+    .filter((r): r is HostFormRow => r !== null)
+}
 
 interface PageProps {
   params: Promise<{ id: string }>
@@ -26,6 +72,7 @@ export default async function AdminEventEditPage({ params }: PageProps) {
   let event = undefined
   let inclusions = undefined
   let initialTagSelection = undefined
+  let initialHosts: HostFormRow[] | undefined = undefined
 
   // The full active taxonomy is needed for both flows (new + edit) to
   // populate the tag picker.
@@ -57,6 +104,7 @@ export default async function AdminEventEditPage({ params }: PageProps) {
       icon: inc.icon ?? '',
     }))
     initialTagSelection = await getEventTagsForEvent(data.id)
+    initialHosts = toHostFormRows((data.hosts ?? []) as AdminHostRow[])
   }
 
   return (
@@ -83,6 +131,7 @@ export default async function AdminEventEditPage({ params }: PageProps) {
           inclusions={inclusions}
           availableTags={availableTags}
           initialTagSelection={initialTagSelection}
+          initialHosts={initialHosts}
         />
       </div>
     </div>
