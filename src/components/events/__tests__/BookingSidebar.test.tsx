@@ -88,10 +88,12 @@ function makeEvent(overrides: Partial<EventDetail> = {}): EventDetail {
     refund_window_hours: 48,
     is_published: true,
     is_cancelled: false,
+    external_attendees: 0,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     deleted_at: null,
     confirmed_count: 22,
+    total_attending: 22,
     revenue_collected: null,
     avg_rating: 0,
     review_count: 0,
@@ -332,5 +334,22 @@ describe('BookingSidebar', () => {
 
     expect(screen.getByText('5 / 30')).toBeTruthy()
     expect(screen.getByText(/Only 5 spots left/)).toBeTruthy()
+  })
+
+  // Pins the d65a525 + 34fec9d swap: the public Attendees mini-card reads
+  // `total_attending` (= confirmed_count + external_attendees), NOT
+  // `confirmed_count` directly. Divergent fixture is load-bearing here —
+  // the existing 22/22 fixture is invisible to which-field-is-rendered.
+  it('renders total_attending (not confirmed_count) on the Attendees mini-card', () => {
+    render(
+      <BookingSidebar
+        event={makeEvent({ confirmed_count: 5, total_attending: 25 })}
+        userBooking={null}
+        {...defaultProps}
+      />,
+    )
+
+    expect(screen.getByText('25 people going')).toBeTruthy()
+    expect(screen.queryByText('5 people going')).toBeNull()
   })
 })

@@ -166,7 +166,7 @@ function EventInfoBlock({ event }: { event: EventDetail }) {
       <div className="mb-6 flex items-center gap-3 rounded-xl bg-bg-primary p-3">
         <Users className="h-4 w-4 text-gold" />
         <span className="text-sm text-text-primary/70">
-          {event.confirmed_count} people going
+          {event.total_attending} people going
         </span>
       </div>
     </>

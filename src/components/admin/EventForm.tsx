@@ -35,6 +35,9 @@ interface EventData {
   venue_revealed: boolean
   price: number
   capacity: number | null
+  // Off-platform partnership headcount. Additive to the public "going"
+  // display only — does NOT consume capacity.
+  external_attendees: number
   image_url: string | null
   dress_code: string | null
   refund_window_hours: number
@@ -415,6 +418,21 @@ export default function EventForm({
           defaultValue={event?.capacity ?? ''}
           className="form-input"
           placeholder="Unlimited"
+        />
+      </FormField>
+
+      <FormField
+        label="External attendees"
+        hint="Off-platform partnership attendees. Adds to the public going count; does not reduce platform tickets."
+      >
+        <input
+          name="external_attendees"
+          type="number"
+          min={0}
+          step={1}
+          defaultValue={event?.external_attendees ?? 0}
+          className="form-input"
+          placeholder="0"
         />
       </FormField>
 

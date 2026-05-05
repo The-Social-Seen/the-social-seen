@@ -94,6 +94,7 @@ export default async function AdminEventEditPage({ params }: PageProps) {
       venue_revealed: data.venue_revealed ?? true,
       price: data.price,
       capacity: data.capacity,
+      external_attendees: data.external_attendees ?? 0,
       image_url: data.image_url,
       dress_code: data.dress_code,
       refund_window_hours: data.refund_window_hours,

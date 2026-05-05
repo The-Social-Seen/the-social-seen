@@ -216,7 +216,7 @@ export default function EventDetailClient({
                   <div>
                     <p className="text-xs text-text-primary/50">Attendees</p>
                     <p className="text-sm font-semibold text-text-primary">
-                      {event.confirmed_count} people going
+                      {event.total_attending} people going
                     </p>
                   </div>
                 </div>

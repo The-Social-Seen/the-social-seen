@@ -97,6 +97,7 @@ describe('EventForm', () => {
           image_url: null,
           dress_code: null,
           refund_window_hours: 48,
+          external_attendees: 0,
           is_published: true,
         }}
       />
@@ -230,6 +231,7 @@ describe('EventForm', () => {
             image_url: null,
             dress_code: null,
             refund_window_hours: 72,
+            external_attendees: 0,
             is_published: true,
           }}
         />
@@ -260,6 +262,7 @@ describe('EventForm', () => {
             image_url: null,
             dress_code: null,
             refund_window_hours: 0,
+            external_attendees: 0,
             is_published: true,
           }}
         />
@@ -488,6 +491,73 @@ describe('EventForm', () => {
 
       expect(screen.queryByText('Alice Adams')).toBeNull()
       expect(screen.getByText('Bob Brown')).toBeTruthy()
+    })
+  })
+
+  // ── External attendees field (d65a525 + 34fec9d) ────────────────────────
+  // Pins the new partnership-headcount input introduced for additive
+  // public "going" display. The Server Action contract (negative rejection,
+  // default 0) is covered in src/app/(admin)/admin/__tests__/actions.test.ts;
+  // these tests pin the form-render contract: input attributes, default
+  // value on create, hydrated value on edit, and helper-text presence.
+
+  describe('External attendees field', () => {
+    function getExternalInput(): HTMLInputElement | null {
+      return document.querySelector(
+        'input[name="external_attendees"]',
+      ) as HTMLInputElement | null
+    }
+
+    it('renders with defaultValue 0 on the create form', () => {
+      render(<EventForm />)
+      const input = getExternalInput()
+      expect(input).toBeTruthy()
+      expect(input!.defaultValue).toBe('0')
+    })
+
+    it('hydrates from event.external_attendees on the edit form', () => {
+      render(
+        <EventForm
+          event={{
+            id: 'evt-1',
+            title: 'Existing Event',
+            slug: 'existing-event',
+            short_description: 'A short desc here',
+            description: 'Full description here',
+            date_time: '2026-06-15T19:00:00.000Z',
+            end_time: '2026-06-15T22:00:00.000Z',
+            venue_name: 'Wine Cellar',
+            venue_address: '1 Bank End',
+            postcode: 'SE1 9BU',
+            venue_revealed: true,
+            price: 3500,
+            capacity: 20,
+            image_url: null,
+            dress_code: null,
+            refund_window_hours: 48,
+            external_attendees: 15,
+            is_published: true,
+          }}
+        />,
+      )
+      const input = getExternalInput()
+      expect(input).toBeTruthy()
+      expect(input!.defaultValue).toBe('15')
+    })
+
+    it('enforces type=number, min=0, name=external_attendees', () => {
+      render(<EventForm />)
+      const input = getExternalInput()!
+      expect(input.type).toBe('number')
+      expect(input.min).toBe('0')
+      expect(input.name).toBe('external_attendees')
+    })
+
+    it('renders the helper text explaining additive-only semantics', () => {
+      render(<EventForm />)
+      // Pin the load-bearing phrase rather than the full string so a small
+      // copy refinement (e.g. period dropped) doesn't fail the test.
+      expect(screen.getByText(/does not reduce platform tickets/i)).toBeTruthy()
     })
   })
 })
