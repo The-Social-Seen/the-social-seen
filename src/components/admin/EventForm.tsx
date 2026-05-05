@@ -2,15 +2,22 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
+import Image from 'next/image'
+import { X } from 'lucide-react'
 import { slugify } from '@/lib/utils/slugify'
 import { penceToPounds } from '@/lib/utils/currency'
+import { resolveAvatarUrl, getInitials } from '@/lib/utils/images'
 import {
   createEvent,
   saveEventTags,
   updateEvent,
+  upsertEventHosts,
   upsertEventInclusions,
+  type HostInput,
+  type HostPickerMember,
 } from '@/app/(admin)/admin/actions'
 import InclusionsList from './InclusionsList'
+import MemberPicker from './MemberPicker'
 import TagPicker from './TagPicker'
 import type { Tag } from '@/types'
 
@@ -59,6 +66,22 @@ interface Inclusion {
   icon: string
 }
 
+/**
+ * In-form representation of a host. The `memberSnapshot` is captured at
+ * pick-time so the row renders without a second member-lookup, and so a
+ * locally-deleted member doesn't break the UI before save.
+ */
+export interface HostFormRow {
+  profileId: string
+  roleLabel: string
+  memberSnapshot: {
+    full_name: string
+    avatar_url: string | null
+    job_title: string | null
+    company: string | null
+  }
+}
+
 interface EventFormProps {
   event?: EventData
   inclusions?: Inclusion[]
@@ -66,6 +89,8 @@ interface EventFormProps {
   availableTags?: Tag[]
   /** Pre-existing tag selection for edit screens; null primary means a new event. */
   initialTagSelection?: EventTagSelection
+  /** Pre-existing hosts on the edit screen. Empty array on create. */
+  initialHosts?: HostFormRow[]
 }
 
 function toDatetimeLocal(iso: string): string {
@@ -81,6 +106,7 @@ export default function EventForm({
   inclusions: initialInclusions,
   availableTags = [],
   initialTagSelection,
+  initialHosts = [],
 }: EventFormProps) {
   const router = useRouter()
   const isEditing = !!event?.id
@@ -92,6 +118,36 @@ export default function EventForm({
   const [inclusions, setInclusions] = useState<Inclusion[]>(
     initialInclusions ?? []
   )
+
+  // Hosts are listed in the order they were added. Drag-to-reorder is
+  // deferred to v2 — admins remove and re-add to change order today.
+  const [hosts, setHosts] = useState<HostFormRow[]>(initialHosts)
+
+  function addHost(member: HostPickerMember) {
+    setHosts((prev) => [
+      ...prev,
+      {
+        profileId: member.id,
+        roleLabel: '',
+        memberSnapshot: {
+          full_name: member.full_name,
+          avatar_url: member.avatar_url,
+          job_title: member.job_title,
+          company: member.company,
+        },
+      },
+    ])
+  }
+
+  function updateHostLabel(profileId: string, value: string) {
+    setHosts((prev) =>
+      prev.map((h) => (h.profileId === profileId ? { ...h, roleLabel: value } : h)),
+    )
+  }
+
+  function removeHost(profileId: string) {
+    setHosts((prev) => prev.filter((h) => h.profileId !== profileId))
+  }
 
   // Tag picker state — independent of the form, submitted via hidden inputs
   // (primary_tag_slug + secondary_tag_slugs). The Server Action reads
@@ -133,10 +189,17 @@ export default function EventForm({
       return
     }
 
+    // Map the local host rows to the server's HostInput shape — trim
+    // happens server-side; an empty roleLabel falls back to 'Host' there.
+    const hostInputs: HostInput[] = hosts.map((h) => ({
+      profileId: h.profileId,
+      roleLabel: h.roleLabel,
+    }))
+
     startTransition(async () => {
       const result = isEditing
         ? await updateEvent(event!.id!, formData)
-        : await createEvent(formData)
+        : await createEvent(formData, hostInputs)
 
       if ('error' in result && result.error) {
         setError(result.error)
@@ -147,6 +210,18 @@ export default function EventForm({
       const eventId = isEditing
         ? event!.id!
         : (result as { event: { id: string } }).event.id
+
+      // On the edit path, sync hosts via the dedicated upsert action.
+      // (createEvent handles host insert internally on creation.) Errors
+      // here surface to the form but don't roll the event update back —
+      // partial success is acceptable; admins can retry.
+      if (isEditing) {
+        const hostsResult = await upsertEventHosts(eventId, hostInputs)
+        if ('error' in hostsResult && hostsResult.error) {
+          setError(hostsResult.error)
+          return
+        }
+      }
 
       if (inclusions.length > 0) {
         const filtered = inclusions.filter((inc) => inc.label.trim())
@@ -425,6 +500,13 @@ export default function EventForm({
 
       <InclusionsList items={inclusions} onChange={setInclusions} />
 
+      <HostsSection
+        hosts={hosts}
+        onUpdateLabel={updateHostLabel}
+        onRemove={removeHost}
+        onAdd={addHost}
+      />
+
       <label className="flex cursor-pointer items-center gap-3 min-h-[44px]">
         <span className="relative inline-flex items-center">
           <input
@@ -505,6 +587,118 @@ export default function EventForm({
         }
       `}</style>
     </form>
+  )
+}
+
+const HOST_ROLE_LABEL_MAX = 60
+const HOST_ROLE_LABEL_COUNT_THRESHOLD = 50
+
+function HostsSection({
+  hosts,
+  onUpdateLabel,
+  onRemove,
+  onAdd,
+}: {
+  hosts: HostFormRow[]
+  onUpdateLabel: (profileId: string, value: string) => void
+  onRemove: (profileId: string) => void
+  onAdd: (member: HostPickerMember) => void
+}) {
+  const excludeIds = hosts.map((h) => h.profileId)
+  return (
+    <section className="space-y-3">
+      <div>
+        <h3 className="font-serif text-lg text-text-primary">Hosts</h3>
+        <p className="mt-1 text-xs text-text-tertiary">
+          Add the people who will be hosting this event. They&rsquo;ll appear
+          on the public event page in the order shown here. If you don&rsquo;t
+          add any, you&rsquo;ll be set as the sole host.
+        </p>
+      </div>
+
+      {hosts.length > 0 && (
+        <ul className="space-y-2">
+          {hosts.map((host) => (
+            <HostRow
+              key={host.profileId}
+              host={host}
+              onChangeLabel={(v) => onUpdateLabel(host.profileId, v)}
+              onRemove={() => onRemove(host.profileId)}
+            />
+          ))}
+        </ul>
+      )}
+
+      <MemberPicker
+        excludeIds={excludeIds}
+        onSelect={onAdd}
+        triggerLabel="Add host"
+        ariaLabel="Add a host"
+      />
+    </section>
+  )
+}
+
+function HostRow({
+  host,
+  onChangeLabel,
+  onRemove,
+}: {
+  host: HostFormRow
+  onChangeLabel: (value: string) => void
+  onRemove: () => void
+}) {
+  const avatarUrl = resolveAvatarUrl(host.memberSnapshot.avatar_url)
+  const initials = getInitials(host.memberSnapshot.full_name)
+  const showCount = host.roleLabel.length > HOST_ROLE_LABEL_COUNT_THRESHOLD
+
+  return (
+    <li className="flex items-center gap-3 rounded-lg border border-border bg-bg-card p-3">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-gold/20 bg-gold/10">
+        {avatarUrl ? (
+          <Image
+            src={avatarUrl}
+            alt=""
+            width={32}
+            height={32}
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <span className="text-xs font-semibold text-gold">{initials}</span>
+        )}
+      </span>
+
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-text-primary">
+          {host.memberSnapshot.full_name}
+        </span>
+        <span className="mt-1 block">
+          <input
+            type="text"
+            value={host.roleLabel}
+            onChange={(e) => onChangeLabel(e.target.value)}
+            placeholder="Host"
+            maxLength={HOST_ROLE_LABEL_MAX}
+            aria-label={`Role label for ${host.memberSnapshot.full_name}`}
+            className="form-input"
+          />
+          {showCount && (
+            <span className="mt-1 block text-xs text-text-tertiary">
+              {host.roleLabel.length} / {HOST_ROLE_LABEL_MAX}
+            </span>
+          )}
+        </span>
+      </span>
+
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove ${host.memberSnapshot.full_name} as host`}
+        className="rounded-full p-2 text-text-tertiary transition-colors hover:bg-bg-secondary hover:text-danger min-h-[44px] min-w-[44px]"
+      >
+        <X aria-hidden="true" className="h-4 w-4" />
+      </button>
+    </li>
   )
 }
 

@@ -317,6 +317,93 @@ describe('createEvent — auto-host assignment', () => {
     const tables = mockFrom.mock.calls.map((args) => args[0] as string)
     expect(tables).not.toContain('event_hosts')
   })
+
+  it('uses an explicit hosts array when provided (NOT the creator fallback)', async () => {
+    const adminId = 'admin-with-explicit-hosts'
+    const createdEvent = { id: 'evt-explicit', slug: 'test', title: 'Test' }
+
+    authenticateAdmin(adminId)
+    let callIndex = 0
+    let capturedInsert: unknown = null
+
+    mockFrom.mockImplementation((table: string) => {
+      callIndex++
+      if (callIndex === 1) return mockChain({ data: { role: 'admin' } })
+      if (table === 'events') return mockChain({ data: createdEvent })
+      if (table === 'event_hosts') {
+        const chain = mockChain({ error: null })
+        chain.insert = vi.fn((data: unknown) => {
+          capturedInsert = data
+          return chain
+        })
+        return chain
+      }
+      return mockChain({ data: null })
+    })
+
+    await createEvent(makeEventFormData(), [
+      { profileId: 'partner-host-1', roleLabel: 'Co-Host' },
+      { profileId: 'partner-host-2', roleLabel: 'Special Guest' },
+    ])
+
+    // Inserts the supplied hosts, NOT the admin caller.
+    expect(capturedInsert).toEqual([
+      { event_id: 'evt-explicit', profile_id: 'partner-host-1', role_label: 'Co-Host', sort_order: 0 },
+      { event_id: 'evt-explicit', profile_id: 'partner-host-2', role_label: 'Special Guest', sort_order: 1 },
+    ])
+  })
+
+  it('falls back to the creator when hosts array is empty (defensive)', async () => {
+    const adminId = 'admin-empty-hosts'
+    const createdEvent = { id: 'evt-empty-hosts', slug: 'test', title: 'Test' }
+
+    authenticateAdmin(adminId)
+    let callIndex = 0
+    let capturedInsert: unknown = null
+
+    mockFrom.mockImplementation((table: string) => {
+      callIndex++
+      if (callIndex === 1) return mockChain({ data: { role: 'admin' } })
+      if (table === 'events') return mockChain({ data: createdEvent })
+      if (table === 'event_hosts') {
+        const chain = mockChain({ error: null })
+        chain.insert = vi.fn((data: unknown) => {
+          capturedInsert = data
+          return chain
+        })
+        return chain
+      }
+      return mockChain({ data: null })
+    })
+
+    // Empty array — should fall back so the event isn't left hostless.
+    await createEvent(makeEventFormData(), [])
+
+    expect(capturedInsert).toMatchObject({
+      event_id: createdEvent.id,
+      profile_id: adminId,
+      role_label: 'Host',
+      sort_order: 0,
+    })
+  })
+
+  it('rejects before creating the event when an explicit host has an over-long role label', async () => {
+    authenticateAdmin('admin-bad-label')
+    mockFrom.mockImplementation(() => mockChain({ data: { role: 'admin' } }))
+
+    const sixtyOne = 'z'.repeat(61)
+    const result = await createEvent(makeEventFormData(), [
+      { profileId: 'p-1', roleLabel: sixtyOne },
+    ])
+
+    expect(result).toEqual({
+      error: 'Host role label must be 60 characters or fewer',
+    })
+    // events insert must NOT have been attempted.
+    const tables = mockFrom.mock.calls.map((args) => args[0] as string)
+    expect(tables).not.toContain('events')
+    expect(tables).not.toContain('event_hosts')
+  })
 })
 
 // ════════════════════════════════════════════════════════════════════════════

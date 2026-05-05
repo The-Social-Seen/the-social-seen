@@ -307,7 +307,7 @@ export async function getRecentActivity() {
 
 // ── Event CRUD ───────────────────────────────────────────────────────────────
 
-export async function createEvent(formData: FormData) {
+export async function createEvent(formData: FormData, hosts?: HostInput[]) {
   const { supabase, userId } = await requireAdmin()
 
   const raw = parseEventFormData(formData)
@@ -317,6 +317,24 @@ export async function createEvent(formData: FormData) {
   }
 
   const data = parsed.data
+
+  // Validate hosts input BEFORE creating the event so a bad role_label
+  // doesn't leave us with an event whose host insert silently failed.
+  // We don't know the event id yet — pass a placeholder; the validator
+  // only checks shape/length, not the eventId.
+  let validatedHostRows:
+    | Array<{
+        event_id: string
+        profile_id: string
+        role_label: string
+        sort_order: number
+      }>
+    | null = null
+  if (hosts && hosts.length > 0) {
+    const prepared = prepareHostRows('__pending__', hosts)
+    if ('error' in prepared) return { error: prepared.error }
+    validatedHostRows = prepared.rows
+  }
 
   // Generate unique slug
   const slug = await uniqueSlug(data.title, async (s) => {
@@ -355,12 +373,23 @@ export async function createEvent(formData: FormData) {
     return { error: error.message }
   }
 
-  await supabase.from('event_hosts').insert({
-    event_id: event.id,
-    profile_id: userId,
-    role_label: 'Host',
-    sort_order: 0,
-  })
+  // If hosts were submitted, use them with their per-host role_labels.
+  // Otherwise fall back to the historical "creator becomes the sole Host"
+  // behaviour so events without an explicit hosts payload aren't hostless.
+  if (validatedHostRows) {
+    const rowsWithEventId = validatedHostRows.map((row) => ({
+      ...row,
+      event_id: event.id,
+    }))
+    await supabase.from('event_hosts').insert(rowsWithEventId)
+  } else {
+    await supabase.from('event_hosts').insert({
+      event_id: event.id,
+      profile_id: userId,
+      role_label: 'Host',
+      sort_order: 0,
+    })
+  }
 
   revalidatePath('/admin/events')
   revalidatePath('/events')
@@ -890,12 +919,77 @@ export async function upsertEventInclusions(
   return { success: true }
 }
 
-export async function upsertEventHosts(eventId: string, hostIds: string[]) {
+/** Per-host input for upsertEventHosts and the optional hosts arg on createEvent. */
+export interface HostInput {
+  profileId: string
+  roleLabel: string
+}
+
+const HOST_ROLE_LABEL_MAX = 60
+
+/**
+ * Validate + shape a hosts array into event_hosts rows ready for insert.
+ *
+ * Rules:
+ *   - profileId required (non-empty trimmed string)
+ *   - roleLabel trimmed; empty / whitespace-only → falls back to 'Host'
+ *     (matches the column default and pre-multi-host behaviour)
+ *   - roleLabel post-trim length capped at HOST_ROLE_LABEL_MAX (60 chars)
+ *   - sort_order = array index (callers pass hosts in display order)
+ */
+function prepareHostRows(
+  eventId: string,
+  hosts: HostInput[],
+):
+  | {
+      rows: Array<{
+        event_id: string
+        profile_id: string
+        role_label: string
+        sort_order: number
+      }>
+    }
+  | { error: string } {
+  const rows: Array<{
+    event_id: string
+    profile_id: string
+    role_label: string
+    sort_order: number
+  }> = []
+
+  for (let i = 0; i < hosts.length; i++) {
+    const { profileId, roleLabel } = hosts[i]
+    const profile = (profileId ?? '').trim()
+    if (!profile) {
+      return { error: `Host #${i + 1} is missing a profile id` }
+    }
+    const trimmed = (roleLabel ?? '').trim()
+    if (trimmed.length > HOST_ROLE_LABEL_MAX) {
+      return {
+        error: `Host role label must be ${HOST_ROLE_LABEL_MAX} characters or fewer`,
+      }
+    }
+    rows.push({
+      event_id: eventId,
+      profile_id: profile,
+      role_label: trimmed.length > 0 ? trimmed : 'Host',
+      sort_order: i,
+    })
+  }
+
+  return { rows }
+}
+
+export async function upsertEventHosts(eventId: string, hosts: HostInput[]) {
   const { supabase } = await requireAdmin()
 
   if (!eventId) return { error: 'Event ID is required' }
 
-  // Delete existing hosts for this event
+  // Validate + shape BEFORE we delete the existing rows. If the new payload
+  // is malformed we'd rather fail loud than leave the event hostless.
+  const prepared = prepareHostRows(eventId, hosts)
+  if ('error' in prepared) return { error: prepared.error }
+
   const { error: deleteError } = await supabase
     .from('event_hosts')
     .delete()
@@ -903,18 +997,10 @@ export async function upsertEventHosts(eventId: string, hostIds: string[]) {
 
   if (deleteError) return { error: deleteError.message }
 
-  // Insert new ones
-  if (hostIds.length > 0) {
-    const rows = hostIds.map((profileId, i) => ({
-      event_id: eventId,
-      profile_id: profileId,
-      role_label: 'Host',
-      sort_order: i,
-    }))
-
+  if (prepared.rows.length > 0) {
     const { error: insertError } = await supabase
       .from('event_hosts')
-      .insert(rows)
+      .insert(prepared.rows)
 
     if (insertError) return { error: insertError.message }
   }
@@ -1160,6 +1246,36 @@ export async function getAdminMembers(search?: string, sort?: string) {
   }
 
   return result
+}
+
+/** Slim member shape for the admin host-picker UI. */
+export interface HostPickerMember {
+  id: string
+  full_name: string
+  avatar_url: string | null
+  job_title: string | null
+  company: string | null
+}
+
+/**
+ * Lean read for the admin host-picker dropdown. `getAdminMembers` is too
+ * heavy here because it joins per-member booking counts; the picker just
+ * needs identifying info to render a row. Active members only — banned /
+ * suspended / soft-deleted shouldn't appear in the dropdown.
+ */
+export async function listMembersForHostPicker(): Promise<HostPickerMember[]> {
+  const { supabase } = await requireAdmin()
+
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, full_name, avatar_url, job_title, company')
+    .is('deleted_at', null)
+    .eq('status', 'active')
+    .order('full_name', { ascending: true })
+
+  if (error) throw new Error('Failed to fetch members for host picker')
+
+  return (data ?? []) as HostPickerMember[]
 }
 
 export async function exportMembersCSV(search?: string) {
