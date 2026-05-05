@@ -1,20 +1,74 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import type { HostPickerMember } from '@/app/(admin)/admin/actions'
 
 // Mock next/navigation
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }))
 
-// Mock server actions
+// Mock server actions. Includes the host-related actions imported by
+// EventForm post-4abaf4e even though the render-only tests don't exercise
+// them — keeps the mock complete so a future submit-wiring test can plug
+// in without rewriting the mock surface.
 vi.mock('@/app/(admin)/admin/actions', () => ({
   createEvent: vi.fn(),
   updateEvent: vi.fn(),
   upsertEventInclusions: vi.fn(),
+  upsertEventHosts: vi.fn(),
+  saveEventTags: vi.fn(),
 }))
 
-import EventForm from '../EventForm'
+// Mock next/image (used by the new HostRow avatar rendering).
+vi.mock('next/image', () => ({
+  default: ({ alt, src }: { alt: string; src: string; [k: string]: unknown }) => (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img alt={alt} src={src} />
+  ),
+}))
+
+// Stub the MemberPicker so EventForm tests don't pull in its fetch-on-open
+// behaviour. The stub renders a button labelled with `triggerLabel`; clicking
+// it fires `onSelect` with whatever member the current test pushed via
+// `setStubMember`. This keeps host-flow assertions focused on EventForm.
+const { setStubMember, getStubMember } = vi.hoisted(() => {
+  let current: HostPickerMember = {
+    id: 'usr-stub',
+    full_name: 'Stub Member',
+    avatar_url: null,
+    job_title: null,
+    company: null,
+  }
+  return {
+    setStubMember: (m: HostPickerMember) => {
+      current = m
+    },
+    getStubMember: () => current,
+  }
+})
+
+vi.mock('../MemberPicker', () => ({
+  default: ({
+    onSelect,
+    triggerLabel = 'Add member',
+  }: {
+    onSelect: (m: HostPickerMember) => void
+    triggerLabel?: string
+    excludeIds?: string[]
+    ariaLabel?: string
+  }) => (
+    <button
+      type="button"
+      data-testid="member-picker-trigger"
+      onClick={() => onSelect(getStubMember())}
+    >
+      {triggerLabel}
+    </button>
+  ),
+}))
+
+import EventForm, { type HostFormRow } from '../EventForm'
 
 describe('EventForm', () => {
   it('renders the create form when no event is passed', () => {
@@ -255,6 +309,185 @@ describe('EventForm', () => {
         expect(b.className).toContain('min-h-[44px]')
         expect(b.className).toContain('w-full')
       })
+    })
+  })
+
+  // ── Hosts section (4abaf4e) ─────────────────────────────────────────────
+  // Pins the multi-host editing surface introduced on top of the existing
+  // form: heading + helper text, hydration from initialHosts, add via the
+  // (stubbed) MemberPicker, role-label edit / max-length / counter
+  // threshold, and remove. Submit-wiring tests (createEvent/upsertEventHosts
+  // call shapes) are deliberately deferred — see handover notes — so we
+  // don't ship a half-working submit harness mid-feature.
+
+  describe('Hosts section', () => {
+    function makeHostRow(overrides: Partial<HostFormRow> = {}): HostFormRow {
+      return {
+        profileId: 'host-1',
+        roleLabel: '',
+        memberSnapshot: {
+          full_name: 'Charlotte Smith',
+          avatar_url: null,
+          job_title: 'Designer',
+          company: 'Acme',
+        },
+        ...overrides,
+      }
+    }
+
+    it('renders the Hosts heading + helper text on a fresh create form', () => {
+      render(<EventForm />)
+      expect(screen.getByRole('heading', { name: 'Hosts' })).toBeTruthy()
+      expect(screen.getByText(/add the people who will be hosting/i)).toBeTruthy()
+      // No host rows exist yet → no Role label inputs.
+      const labelInputs = document.querySelectorAll('input[aria-label^="Role label for"]')
+      expect(labelInputs.length).toBe(0)
+    })
+
+    it('renders the (stubbed) MemberPicker trigger labelled "Add host"', () => {
+      render(<EventForm />)
+      expect(screen.getByTestId('member-picker-trigger')).toBeTruthy()
+      // Stub uses the triggerLabel prop EventForm passes ("Add host").
+      expect(screen.getByText('Add host')).toBeTruthy()
+    })
+
+    it('hydrates initialHosts on edit and renders one row per host', () => {
+      render(
+        <EventForm
+          initialHosts={[
+            makeHostRow({
+              profileId: 'host-a',
+              roleLabel: 'Host',
+              memberSnapshot: {
+                full_name: 'Alice Adams',
+                avatar_url: null,
+                job_title: null,
+                company: null,
+              },
+            }),
+            makeHostRow({
+              profileId: 'host-b',
+              roleLabel: 'Co-Host',
+              memberSnapshot: {
+                full_name: 'Bob Brown',
+                avatar_url: null,
+                job_title: 'Director',
+                company: 'Beta',
+              },
+            }),
+          ]}
+        />,
+      )
+      expect(screen.getByText('Alice Adams')).toBeTruthy()
+      expect(screen.getByText('Bob Brown')).toBeTruthy()
+      const labelInputs = document.querySelectorAll('input[aria-label^="Role label for"]')
+      expect(labelInputs.length).toBe(2)
+      expect((labelInputs[0] as HTMLInputElement).value).toBe('Host')
+      expect((labelInputs[1] as HTMLInputElement).value).toBe('Co-Host')
+    })
+
+    it('adds a host row when the picker fires onSelect', () => {
+      setStubMember({
+        id: 'usr-x',
+        full_name: 'Xavier Knight',
+        avatar_url: null,
+        job_title: 'Architect',
+        company: 'Studio',
+      })
+      render(<EventForm />)
+
+      // Before: no row, no role label input.
+      expect(screen.queryByText('Xavier Knight')).toBeNull()
+      let labelInputs = document.querySelectorAll('input[aria-label^="Role label for"]')
+      expect(labelInputs.length).toBe(0)
+
+      fireEvent.click(screen.getByTestId('member-picker-trigger'))
+
+      // After: one row with empty role label and the picked member's name.
+      expect(screen.getByText('Xavier Knight')).toBeTruthy()
+      labelInputs = document.querySelectorAll('input[aria-label^="Role label for"]')
+      expect(labelInputs.length).toBe(1)
+      expect((labelInputs[0] as HTMLInputElement).value).toBe('')
+    })
+
+    it('typing into a role label updates the input value', () => {
+      render(<EventForm initialHosts={[makeHostRow()]} />)
+      const input = document.querySelector(
+        'input[aria-label="Role label for Charlotte Smith"]',
+      ) as HTMLInputElement
+      expect(input).toBeTruthy()
+
+      fireEvent.change(input, { target: { value: 'Co-Host' } })
+
+      // Re-query to get the post-render value.
+      const refreshed = document.querySelector(
+        'input[aria-label="Role label for Charlotte Smith"]',
+      ) as HTMLInputElement
+      expect(refreshed.value).toBe('Co-Host')
+    })
+
+    it('enforces the 60-char maxLength on the role label input', () => {
+      render(<EventForm initialHosts={[makeHostRow()]} />)
+      const input = document.querySelector(
+        'input[aria-label="Role label for Charlotte Smith"]',
+      ) as HTMLInputElement
+      expect(input.maxLength).toBe(60)
+    })
+
+    it('hides the X / 60 counter when role label is at or below 50 chars', () => {
+      const fifty = 'x'.repeat(50)
+      render(
+        <EventForm initialHosts={[makeHostRow({ roleLabel: fifty })]} />,
+      )
+      // No counter at the threshold — only > 50 reveals it.
+      expect(screen.queryByText('50 / 60')).toBeNull()
+      expect(screen.queryByText(/\/ 60$/)).toBeNull()
+    })
+
+    it('shows the X / 60 counter when role label exceeds 50 chars', () => {
+      const fiftyOne = 'y'.repeat(51)
+      render(
+        <EventForm initialHosts={[makeHostRow({ roleLabel: fiftyOne })]} />,
+      )
+      expect(screen.getByText('51 / 60')).toBeTruthy()
+    })
+
+    it('removes a host row when its Remove button is clicked', () => {
+      render(
+        <EventForm
+          initialHosts={[
+            makeHostRow({
+              profileId: 'host-a',
+              memberSnapshot: {
+                full_name: 'Alice Adams',
+                avatar_url: null,
+                job_title: null,
+                company: null,
+              },
+            }),
+            makeHostRow({
+              profileId: 'host-b',
+              memberSnapshot: {
+                full_name: 'Bob Brown',
+                avatar_url: null,
+                job_title: null,
+                company: null,
+              },
+            }),
+          ]}
+        />,
+      )
+
+      expect(screen.getByText('Alice Adams')).toBeTruthy()
+      expect(screen.getByText('Bob Brown')).toBeTruthy()
+
+      const removeAlice = screen.getByRole('button', {
+        name: /remove alice adams as host/i,
+      })
+      fireEvent.click(removeAlice)
+
+      expect(screen.queryByText('Alice Adams')).toBeNull()
+      expect(screen.getByText('Bob Brown')).toBeTruthy()
     })
   })
 })
