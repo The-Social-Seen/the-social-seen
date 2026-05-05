@@ -180,7 +180,7 @@ function CapacitySection({ event }: { event: EventDetail }) {
         <div className="mb-2 flex items-center justify-between text-sm">
           <span className="text-text-primary/60">Spots remaining</span>
           <span className="font-semibold text-text-primary">
-            {event.spots_left} / {event.capacity}
+            {event.spots_left}
           </span>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-bg-secondary">

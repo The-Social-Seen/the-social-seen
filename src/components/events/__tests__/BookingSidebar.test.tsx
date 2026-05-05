@@ -332,7 +332,12 @@ describe('BookingSidebar', () => {
       />
     )
 
-    expect(screen.getByText('5 / 30')).toBeTruthy()
+    // Denominator dropped intentionally — "X going" elsewhere on the card
+    // carries the total. The "Spots remaining" line just states platform
+    // availability without forcing the user to reconcile it against a
+    // capacity figure that ignores external_attendees.
+    expect(screen.getByText('5')).toBeTruthy()
+    expect(screen.queryByText('5 / 30')).toBeNull()
     expect(screen.getByText(/Only 5 spots left/)).toBeTruthy()
   })
 
