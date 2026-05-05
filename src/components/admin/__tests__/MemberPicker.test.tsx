@@ -216,13 +216,17 @@ describe('MemberPicker — filter', () => {
     expect(screen.queryByText('Bob Brown')).toBeNull()
   })
 
-  it('shows "No members match." when the filter excludes everything', async () => {
+  it('shows "No members match your search." when the search query yields no matches', async () => {
     renderWithMembers()
     const search = await screen.findByPlaceholderText('Search members')
     fireEvent.change(search, { target: { value: 'zzzz-no-match' } })
 
-    expect(screen.getByText('No members match.')).toBeTruthy()
+    expect(screen.getByText('No members match your search.')).toBeTruthy()
     expect(screen.queryByText('Alice Adams')).toBeNull()
+    // Inverse: the all-excluded copy must NOT render in this branch — pins
+    // the no-overlap invariant since (search-no-match) and (all-excluded)
+    // share the `filtered.length === 0` predicate.
+    expect(screen.queryByText(/already hosting this event/i)).toBeNull()
   })
 })
 
@@ -341,7 +345,28 @@ describe('MemberPicker — error and empty states', () => {
     await waitFor(() => {
       expect(screen.getByText('No members available.')).toBeTruthy()
     })
-    // Filter-empty copy must NOT render in this case.
-    expect(screen.queryByText('No members match.')).toBeNull()
+    // Filter-empty copies must NOT render when there are zero members at all.
+    expect(screen.queryByText(/no members match your search/i)).toBeNull()
+    expect(screen.queryByText(/already hosting this event/i)).toBeNull()
+  })
+
+  it('shows "All other active members are already hosting" when every member is excluded and no search query', async () => {
+    mockListMembersForHostPicker.mockResolvedValue([
+      makeMember({ id: 'a', full_name: 'Alice Adams' }),
+      makeMember({ id: 'b', full_name: 'Bob Brown' }),
+    ])
+    render(<MemberPicker onSelect={noopSelect} excludeIds={['a', 'b']} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /add a member/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('All other active members are already hosting this event.'),
+      ).toBeTruthy()
+    })
+    // The other two empty-state copies must NOT render in this branch —
+    // pins the predicate's no-overlap invariant.
+    expect(screen.queryByText('No members available.')).toBeNull()
+    expect(screen.queryByText(/no members match your search/i)).toBeNull()
   })
 })
