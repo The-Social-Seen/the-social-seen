@@ -373,25 +373,22 @@ describe('upsertEventInclusions', () => {
 // ════════════════════════════════════════════════════════════════════════════
 
 describe('upsertEventHosts', () => {
-  it('T1-7: happy path — deletes existing then inserts 2 hosts with role_label Host', async () => {
-    let capturedDeleteTable = ''
+  /**
+   * Set up the standard 3-stage chain for a successful upsert:
+   *   call 1: requireAdmin → profiles.role
+   *   call 2: delete existing event_hosts
+   *   call 3: insert new event_hosts (capturedInsertData is the payload)
+   * Returns a getter for the captured insert payload.
+   */
+  function setupUpsertChain(): { getInsert: () => unknown } {
     let capturedInsertData: unknown = null
-
     authenticateAdmin()
     let callCount = 0
-    mockFrom.mockImplementation((table: string) => {
+    mockFrom.mockImplementation(() => {
       callCount++
-      if (callCount === 1) {
-        // requireAdmin → profiles.role
-        return mockChain({ data: { role: 'admin' } })
-      }
-      if (callCount === 2) {
-        // delete existing hosts
-        capturedDeleteTable = table
-        return mockChain({ error: null })
-      }
+      if (callCount === 1) return mockChain({ data: { role: 'admin' } })
+      if (callCount === 2) return mockChain({ error: null })
       if (callCount === 3) {
-        // insert new hosts
         const chain = mockChain({ error: null })
         chain.insert = vi.fn((data: unknown) => {
           capturedInsertData = data
@@ -401,14 +398,168 @@ describe('upsertEventHosts', () => {
       }
       return mockChain({ data: null })
     })
+    return { getInsert: () => capturedInsertData }
+  }
 
-    const result = await upsertEventHosts('evt-1', ['host-a', 'host-b'])
+  it('happy path — deletes existing then inserts 2 hosts with their per-host role labels and sort_order', async () => {
+    const { getInsert } = setupUpsertChain()
+
+    const result = await upsertEventHosts('evt-1', [
+      { profileId: 'host-a', roleLabel: 'Host' },
+      { profileId: 'host-b', roleLabel: 'Co-Host' },
+    ])
+
+    expect(result).toEqual({ success: true })
+    expect(getInsert()).toEqual([
+      { event_id: 'evt-1', profile_id: 'host-a', role_label: 'Host', sort_order: 0 },
+      { event_id: 'evt-1', profile_id: 'host-b', role_label: 'Co-Host', sort_order: 1 },
+    ])
+  })
+
+  it('empty hosts array deletes existing rows and skips the insert call', async () => {
+    let insertCalls = 0
+    let capturedDeleteTable = ''
+    authenticateAdmin()
+    let callCount = 0
+    mockFrom.mockImplementation((table: string) => {
+      callCount++
+      if (callCount === 1) return mockChain({ data: { role: 'admin' } })
+      if (callCount === 2) {
+        capturedDeleteTable = table
+        return mockChain({ error: null })
+      }
+      // If a third .from() ever runs, count it as an insert call so we can
+      // assert it didn't happen.
+      const chain = mockChain({ error: null })
+      chain.insert = vi.fn(() => {
+        insertCalls++
+        return chain
+      })
+      return chain
+    })
+
+    const result = await upsertEventHosts('evt-1', [])
 
     expect(result).toEqual({ success: true })
     expect(capturedDeleteTable).toBe('event_hosts')
-    expect(capturedInsertData).toEqual([
+    expect(insertCalls).toBe(0)
+  })
+
+  it('falls back to "Host" when roleLabel is empty string', async () => {
+    const { getInsert } = setupUpsertChain()
+
+    await upsertEventHosts('evt-1', [{ profileId: 'host-a', roleLabel: '' }])
+
+    expect(getInsert()).toEqual([
       { event_id: 'evt-1', profile_id: 'host-a', role_label: 'Host', sort_order: 0 },
-      { event_id: 'evt-1', profile_id: 'host-b', role_label: 'Host', sort_order: 1 },
     ])
+  })
+
+  it('falls back to "Host" when roleLabel is whitespace-only', async () => {
+    const { getInsert } = setupUpsertChain()
+
+    await upsertEventHosts('evt-1', [{ profileId: 'host-a', roleLabel: '   ' }])
+
+    expect(getInsert()).toEqual([
+      { event_id: 'evt-1', profile_id: 'host-a', role_label: 'Host', sort_order: 0 },
+    ])
+  })
+
+  it('trims surrounding whitespace from roleLabel', async () => {
+    const { getInsert } = setupUpsertChain()
+
+    await upsertEventHosts('evt-1', [
+      { profileId: 'host-a', roleLabel: '  Co-Host  ' },
+    ])
+
+    expect(getInsert()).toEqual([
+      { event_id: 'evt-1', profile_id: 'host-a', role_label: 'Co-Host', sort_order: 0 },
+    ])
+  })
+
+  it('accepts roleLabel of exactly 60 chars (cap boundary)', async () => {
+    const { getInsert } = setupUpsertChain()
+    const sixty = 'x'.repeat(60)
+
+    const result = await upsertEventHosts('evt-1', [
+      { profileId: 'host-a', roleLabel: sixty },
+    ])
+
+    expect(result).toEqual({ success: true })
+    expect(getInsert()).toEqual([
+      { event_id: 'evt-1', profile_id: 'host-a', role_label: sixty, sort_order: 0 },
+    ])
+  })
+
+  it('rejects roleLabel longer than 60 chars and never deletes or inserts', async () => {
+    const sixtyOne = 'y'.repeat(61)
+    let dbCalls = 0
+    authenticateAdmin()
+    let callCount = 0
+    mockFrom.mockImplementation(() => {
+      callCount++
+      if (callCount === 1) return mockChain({ data: { role: 'admin' } })
+      // Validation should fail BEFORE any second .from() runs.
+      dbCalls++
+      return mockChain({ data: null })
+    })
+
+    const result = await upsertEventHosts('evt-1', [
+      { profileId: 'host-a', roleLabel: sixtyOne },
+    ])
+
+    expect(result).toEqual({
+      error: 'Host role label must be 60 characters or fewer',
+    })
+    expect(dbCalls).toBe(0)
+  })
+
+  it('returns error when eventId is empty', async () => {
+    authenticateAdmin()
+    let callCount = 0
+    mockFrom.mockImplementation(() => {
+      callCount++
+      if (callCount === 1) return mockChain({ data: { role: 'admin' } })
+      return mockChain({ data: null })
+    })
+
+    const result = await upsertEventHosts('', [
+      { profileId: 'host-a', roleLabel: 'Host' },
+    ])
+
+    expect(result).toEqual({ error: 'Event ID is required' })
+  })
+
+  it('rejects an entry with a missing profileId', async () => {
+    authenticateAdmin()
+    let dbCalls = 0
+    let callCount = 0
+    mockFrom.mockImplementation(() => {
+      callCount++
+      if (callCount === 1) return mockChain({ data: { role: 'admin' } })
+      dbCalls++
+      return mockChain({ data: null })
+    })
+
+    const result = await upsertEventHosts('evt-1', [
+      { profileId: '   ', roleLabel: 'Host' },
+    ])
+
+    expect(result).toEqual({ error: 'Host #1 is missing a profile id' })
+    expect(dbCalls).toBe(0)
+  })
+
+  it('throws for unauthenticated user', async () => {
+    unauthenticateUser()
+    await expect(
+      upsertEventHosts('evt-1', [{ profileId: 'host-a', roleLabel: 'Host' }]),
+    ).rejects.toThrow('Authentication required')
+  })
+
+  it('throws for non-admin caller', async () => {
+    mockMemberUser()
+    await expect(
+      upsertEventHosts('evt-1', [{ profileId: 'host-a', roleLabel: 'Host' }]),
+    ).rejects.toThrow('Admin access required')
   })
 })

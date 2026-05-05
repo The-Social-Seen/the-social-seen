@@ -45,7 +45,7 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }))
 
-import { getAdminMembers } from '../actions'
+import { getAdminMembers, listMembersForHostPicker } from '../actions'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -270,5 +270,164 @@ describe('getAdminMembers — booking aggregation', () => {
     expect(result[0].events_attended).toBe(2)
     expect(result[0].events_confirmed).toBe(2)
     expect(result[0].events_waitlisted).toBe(1)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// listMembersForHostPicker — slim host-picker read
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Pins the slim shape returned to the host picker. Tests focus on:
+//   - column projection contract (no PII beyond identifying info)
+//   - filters: deleted_at IS NULL + status = 'active'
+//   - ordering: full_name ASC
+//   - admin gate
+//
+// The actual filter values are asserted on the mock chain spies because
+// the SUT awaits the terminal builder rather than chaining through a
+// where-clause AST we could inspect.
+
+function wireHostPickerSupabase(opts: { profiles?: unknown[]; error?: unknown } = {}) {
+  let profilesCallCount = 0
+  let listChain: ReturnType<typeof mockChain> | undefined
+  mockFrom.mockImplementation((table: string) => {
+    if (table === 'profiles') {
+      profilesCallCount += 1
+      if (profilesCallCount === 1) {
+        return mockChain({ data: { role: 'admin' } })
+      }
+      listChain = mockChain({ data: opts.profiles ?? [], error: opts.error ?? null })
+      return listChain
+    }
+    return mockChain({ data: null, error: null })
+  })
+  return {
+    getListChain: () => {
+      if (!listChain) throw new Error('list chain not captured — did listMembersForHostPicker run?')
+      return listChain
+    },
+  }
+}
+
+describe('listMembersForHostPicker', () => {
+  it('selects only the slim host-picker columns (no email, no phone, no bio)', async () => {
+    authenticateAdmin()
+    const wired = wireHostPickerSupabase({ profiles: [] })
+
+    await listMembersForHostPicker()
+
+    const selectArg = wired.getListChain().select.mock.calls[0]?.[0] as string
+    expect(typeof selectArg).toBe('string')
+    expect(selectArg.includes('*')).toBe(false)
+
+    // Required columns
+    for (const col of ['id', 'full_name', 'avatar_url', 'job_title', 'company']) {
+      expect(selectArg.includes(col)).toBe(true)
+    }
+
+    // Forbidden columns — would over-share PII to an admin UI dropdown.
+    for (const forbidden of ['email', 'phone_number', 'bio', 'gender', 'age_range']) {
+      expect(selectArg.includes(forbidden)).toBe(false)
+    }
+  })
+
+  it('filters out soft-deleted (deleted_at IS NULL) and non-active (status = active) members', async () => {
+    authenticateAdmin()
+    const wired = wireHostPickerSupabase({ profiles: [] })
+
+    await listMembersForHostPicker()
+
+    const chain = wired.getListChain()
+    expect(chain.is).toHaveBeenCalledWith('deleted_at', null)
+    expect(chain.eq).toHaveBeenCalledWith('status', 'active')
+  })
+
+  it('orders by full_name ascending for predictable picker behaviour', async () => {
+    authenticateAdmin()
+    const wired = wireHostPickerSupabase({ profiles: [] })
+
+    await listMembersForHostPicker()
+
+    const chain = wired.getListChain()
+    expect(chain.order).toHaveBeenCalledWith('full_name', { ascending: true })
+  })
+
+  it('returns the rows shaped as HostPickerMember[]', async () => {
+    authenticateAdmin()
+    wireHostPickerSupabase({
+      profiles: [
+        {
+          id: 'usr-a',
+          full_name: 'Alice Adams',
+          avatar_url: null,
+          job_title: 'Designer',
+          company: 'Acme',
+        },
+        {
+          id: 'usr-b',
+          full_name: 'Bob Brown',
+          avatar_url: 'https://example.com/b.jpg',
+          job_title: null,
+          company: null,
+        },
+      ],
+    })
+
+    const result = await listMembersForHostPicker()
+
+    expect(result).toEqual([
+      {
+        id: 'usr-a',
+        full_name: 'Alice Adams',
+        avatar_url: null,
+        job_title: 'Designer',
+        company: 'Acme',
+      },
+      {
+        id: 'usr-b',
+        full_name: 'Bob Brown',
+        avatar_url: 'https://example.com/b.jpg',
+        job_title: null,
+        company: null,
+      },
+    ])
+  })
+
+  it('returns an empty array when the query returns null data', async () => {
+    authenticateAdmin()
+    wireHostPickerSupabase({ profiles: undefined })
+
+    const result = await listMembersForHostPicker()
+
+    expect(result).toEqual([])
+  })
+
+  it('throws "Failed to fetch members for host picker" when the query errors', async () => {
+    authenticateAdmin()
+    wireHostPickerSupabase({ error: { message: 'boom' } })
+
+    await expect(listMembersForHostPicker()).rejects.toThrow(
+      'Failed to fetch members for host picker',
+    )
+  })
+
+  it('throws "Authentication required" for unauthenticated caller', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: null },
+      error: { message: 'no session' },
+    })
+    mockFrom.mockImplementation(() => mockChain({ data: null }))
+
+    await expect(listMembersForHostPicker()).rejects.toThrow('Authentication required')
+  })
+
+  it('throws "Admin access required" for member-role caller', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'user-1' } },
+      error: null,
+    })
+    mockFrom.mockImplementation(() => mockChain({ data: { role: 'member' } }))
+
+    await expect(listMembersForHostPicker()).rejects.toThrow('Admin access required')
   })
 })
