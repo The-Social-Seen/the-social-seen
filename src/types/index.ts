@@ -93,6 +93,10 @@ export interface Event {
   refund_window_hours: number
   is_published:      boolean
   is_cancelled:      boolean
+  // Off-platform partnership attendees. Purely additive to the public-facing
+  // "going" display (via EventWithStats.total_attending). Does NOT consume
+  // capacity — booking RPCs continue to gate on platform confirmed_count only.
+  external_attendees: number
   created_at:        string
   updated_at:        string
   deleted_at:        string | null
@@ -229,6 +233,12 @@ export interface PrimaryTag {
 
 export interface EventWithStats extends Event {
   confirmed_count:   number
+  /**
+   * Public-facing "X going" total: confirmed_count + external_attendees.
+   * Public surfaces (event card, event detail, booking sidebar) read this;
+   * admin surfaces stay on confirmed_count for a platform-only view.
+   */
+  total_attending:   number
   /**
    * Sum of price_at_booking (pence) for confirmed bookings on this event.
    * NULL when not aggregated (e.g. public read paths that don't need it).

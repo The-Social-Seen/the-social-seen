@@ -104,6 +104,13 @@ const eventFormSchema = z.object({
     }),
   price: z.number().min(0, 'Price cannot be negative'),
   capacity: z.number().int().positive().nullable(),
+  // Off-platform partnership headcount. Additive to public "going" display
+  // only — does NOT consume capacity. Defaults to 0 when missing from payload.
+  external_attendees: z
+    .number()
+    .int('External attendees must be a whole number')
+    .nonnegative('External attendees cannot be negative')
+    .default(0),
   image_url: z.string().url().nullable().or(z.literal('')).transform(v => v || null),
   dress_code: z.string().nullable().transform(v => v || null),
   refund_window_hours: z
@@ -146,6 +153,15 @@ function parseEventFormData(formData: FormData) {
     ? parseInt(capacityRaw, 10)
     : null
 
+  // External attendees defaults to 0 when missing/empty so existing form
+  // payloads without the field continue to round-trip cleanly. Don't clamp
+  // negatives here — Zod (.nonnegative()) is the validation layer; clamping
+  // would silently swallow user-visible errors and confuse the admin.
+  const externalRaw = formData.get('external_attendees') as string
+  const externalAttendees = externalRaw && externalRaw.trim() !== ''
+    ? parseInt(externalRaw, 10)
+    : 0
+
   // Refund policy: 'none' → 0, 'standard' → 48, 'custom' → user input.
   // The form falls back to 'standard' when the field is missing (older
   // form payloads, programmatic submissions) so existing behaviour is
@@ -174,6 +190,7 @@ function parseEventFormData(formData: FormData) {
     primary_tag_slug: (formData.get('primary_tag_slug') as string) ?? '',
     price: priceInPence,
     capacity,
+    external_attendees: externalAttendees,
     image_url: (formData.get('image_url') as string) || null,
     dress_code: (formData.get('dress_code') as string) || null,
     refund_window_hours: refundWindowHours,
@@ -361,6 +378,7 @@ export async function createEvent(formData: FormData, hosts?: HostInput[]) {
       venue_revealed: data.venue_revealed,
       price: data.price,
       capacity: data.capacity,
+      external_attendees: data.external_attendees,
       image_url: data.image_url,
       dress_code: data.dress_code,
       refund_window_hours: data.refund_window_hours,
@@ -448,6 +466,7 @@ export async function updateEvent(eventId: string, formData: FormData) {
       venue_revealed: data.venue_revealed,
       price: data.price,
       capacity: data.capacity,
+      external_attendees: data.external_attendees,
       image_url: data.image_url,
       dress_code: data.dress_code,
       refund_window_hours: data.refund_window_hours,
@@ -526,6 +545,7 @@ export async function duplicateEvent(
       venue_revealed: source.venue_revealed ?? true,
       price: source.price,
       capacity: source.capacity,
+      external_attendees: source.external_attendees,
       image_url: source.image_url,
       dress_code: source.dress_code,
       refund_window_hours: source.refund_window_hours,

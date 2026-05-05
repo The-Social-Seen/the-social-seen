@@ -238,6 +238,105 @@ describe('createEvent', () => {
     expect(result.error).toBeDefined()
     expect(result.error).toContain('End time must be after start time')
   })
+
+  // ── external_attendees field ────────────────────────────────────────────
+  // The new partnership-headcount field is purely additive to the public
+  // "going" display. These tests pin the create/update payload shapes so
+  // a future refactor can't silently drop the field from the events insert.
+
+  it('includes external_attendees in the events insert payload when provided', async () => {
+    const createdEvent = { id: 'evt-with-external', slug: 'test', title: 'Test' }
+    authenticateAdmin('admin-ext')
+    let callIndex = 0
+    let capturedInsert: unknown = null
+
+    mockFrom.mockImplementation((table: string) => {
+      callIndex++
+      if (callIndex === 1) return mockChain({ data: { role: 'admin' } })
+      if (table === 'events') {
+        const chain = mockChain({ data: createdEvent })
+        chain.insert = vi.fn((data: unknown) => {
+          capturedInsert = data
+          return chain
+        })
+        return chain
+      }
+      if (table === 'event_hosts') return mockChain({ error: null })
+      return mockChain({ data: null })
+    })
+
+    await createEvent(makeEventFormData({ external_attendees: '15' }))
+
+    expect(capturedInsert).toMatchObject({ external_attendees: 15 })
+  })
+
+  it('defaults external_attendees to 0 when the form field is absent', async () => {
+    const createdEvent = { id: 'evt-default-external', slug: 'test', title: 'Test' }
+    authenticateAdmin('admin-default')
+    let callIndex = 0
+    let capturedInsert: unknown = null
+
+    mockFrom.mockImplementation((table: string) => {
+      callIndex++
+      if (callIndex === 1) return mockChain({ data: { role: 'admin' } })
+      if (table === 'events') {
+        const chain = mockChain({ data: createdEvent })
+        chain.insert = vi.fn((data: unknown) => {
+          capturedInsert = data
+          return chain
+        })
+        return chain
+      }
+      if (table === 'event_hosts') return mockChain({ error: null })
+      return mockChain({ data: null })
+    })
+
+    // makeEventFormData defaults don't include external_attendees, so it's
+    // missing from the FormData entirely.
+    await createEvent(makeEventFormData())
+
+    expect(capturedInsert).toMatchObject({ external_attendees: 0 })
+  })
+
+  it('rejects negative external_attendees with a validation error', async () => {
+    mockAdminWithSequence([])
+
+    const result = await createEvent(makeEventFormData({ external_attendees: '-1' }))
+
+    expect(result.error).toBeDefined()
+    expect(result.error).toContain('External attendees cannot be negative')
+  })
+})
+
+describe('updateEvent — external_attendees', () => {
+  it('includes external_attendees in the events update payload', async () => {
+    authenticateAdmin('admin-update-ext')
+    let callIndex = 0
+    let capturedUpdate: unknown = null
+
+    mockFrom.mockImplementation((table: string) => {
+      callIndex++
+      if (callIndex === 1) return mockChain({ data: { role: 'admin' } })
+      if (table === 'events') {
+        // updateEvent does: select current → update → re-select. Use update
+        // capture; first events from() is the select for current slug.
+        if (callIndex === 2) {
+          return mockChain({ data: { slug: 'existing-event', title: 'Existing' } })
+        }
+        const chain = mockChain({ error: null })
+        chain.update = vi.fn((data: unknown) => {
+          capturedUpdate = data
+          return chain
+        })
+        return chain
+      }
+      return mockChain({ data: null })
+    })
+
+    await updateEvent('evt-1', makeEventFormData({ external_attendees: '7' }))
+
+    expect(capturedUpdate).toMatchObject({ external_attendees: 7 })
+  })
 })
 
 // ════════════════════════════════════════════════════════════════════════════
