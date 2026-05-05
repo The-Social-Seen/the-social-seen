@@ -1,7 +1,7 @@
 'use client'
 
 import Image from 'next/image'
-import { Edit3, Linkedin, ExternalLink, Briefcase, Building2, Calendar, Phone } from 'lucide-react'
+import { Edit3, Linkedin, ExternalLink, Briefcase, Building2, Tag, Calendar, Mail, Phone } from 'lucide-react'
 import { resolveAvatarUrl, getInitials } from '@/lib/utils/images'
 import type { Profile } from '@/types'
 
@@ -49,21 +49,30 @@ export function ProfileHeader({ profile, onEditClick }: ProfileHeaderProps) {
               <h1 className="font-serif text-2xl font-bold text-text-primary md:text-3xl">
                 {profile.full_name}
               </h1>
-              {(profile.job_title || profile.company) && (
+              {(profile.job_title || profile.company || profile.industry) && (
                 <div className="mt-1.5 flex flex-wrap items-center gap-2 text-sm text-text-tertiary">
                   {profile.job_title && (
                     <span className="flex items-center gap-1.5">
-                      <Briefcase className="h-3.5 w-3.5" />
+                      <Briefcase aria-hidden="true" className="h-3.5 w-3.5" />
                       {profile.job_title}
                     </span>
                   )}
-                  {profile.job_title && profile.company && (
-                    <span className="text-border">&bull;</span>
+                  {profile.job_title && (profile.company || profile.industry) && (
+                    <span aria-hidden="true" className="text-border">&bull;</span>
                   )}
                   {profile.company && (
                     <span className="flex items-center gap-1.5">
-                      <Building2 className="h-3.5 w-3.5" />
+                      <Building2 aria-hidden="true" className="h-3.5 w-3.5" />
                       {profile.company}
+                    </span>
+                  )}
+                  {profile.company && profile.industry && (
+                    <span aria-hidden="true" className="text-border">&bull;</span>
+                  )}
+                  {profile.industry && (
+                    <span className="flex items-center gap-1.5">
+                      <Tag aria-hidden="true" className="h-3.5 w-3.5" />
+                      {profile.industry}
                     </span>
                   )}
                 </div>
@@ -103,10 +112,13 @@ export function ProfileHeader({ profile, onEditClick }: ProfileHeaderProps) {
                 <ExternalLink aria-hidden="true" className="h-3 w-3" />
               </a>
             )}
-            {/* Phone is sensitive — this header only renders for the
-                signed-in owner of the profile, so showing the number
-                is fine. The /admin profile-browser uses a separate
-                read path. */}
+            {/* Email and phone are sensitive — this header only renders for
+                the signed-in owner of the profile, so showing them is fine.
+                The /admin profile-browser uses a separate read path. */}
+            <span className="flex items-center gap-1.5">
+              <Mail aria-hidden="true" className="h-3.5 w-3.5" />
+              {profile.email}
+            </span>
             {profile.phone_number && (
               <span className="flex items-center gap-1.5">
                 <Phone aria-hidden="true" className="h-3.5 w-3.5" />
