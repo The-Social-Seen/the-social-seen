@@ -276,9 +276,10 @@ export async function getEventBySlug(slug: string): Promise<EventDetail | null> 
 
   // 2. Fetch booking count + review stats in parallel (Amendment 3.5).
   //
-  // confirmed_count is read from the `event_with_stats` view, NOT via a
-  // direct `count: 'exact'` on the bookings table. The bookings RLS policy
-  // (user_id = auth.uid() OR is_admin) means a direct count returns:
+  // confirmed_count and total_attending are read from the `event_with_stats`
+  // view, NOT via a direct `count: 'exact'` on the bookings table. The
+  // bookings RLS policy (user_id = auth.uid() OR is_admin) means a direct
+  // count returns:
   //   - 0 for anon visitors
   //   - 0 or 1 for the booking-holder themselves
   //   - the real number only for admins
@@ -286,11 +287,14 @@ export async function getEventBySlug(slug: string): Promise<EventDetail | null> 
   // for everyone except admins. The view computes COUNT(*) inside the view
   // body with definer privileges, so the aggregate sees ALL confirmed
   // bookings; only that single number leaves the view, individual booking
-  // rows remain RLS-protected. See fix/event-detail-attendee-count-rls-leak.
+  // rows remain RLS-protected. total_attending is the same kind of safe
+  // aggregate (= confirmed_count + events.external_attendees) and inherits
+  // the same RLS-bypass-via-definer guarantee.
+  // See fix/event-detail-attendee-count-rls-leak.
   const [statsResult, reviewResult] = await Promise.all([
     supabase
       .from('event_with_stats')
-      .select('confirmed_count')
+      .select('confirmed_count, total_attending')
       .eq('id', event.id)
       .maybeSingle(),
     supabase
@@ -308,6 +312,12 @@ export async function getEventBySlug(slug: string): Promise<EventDetail | null> 
   }
 
   const confirmed = statsResult.data?.confirmed_count ?? 0
+  // Defensive fallback to `confirmed`: if the view doesn't yet have
+  // total_attending populated (migration not applied somewhere), the
+  // public "X people going" line shows the platform count rather than
+  // literally nothing. With external_attendees default 0 these are
+  // equal anyway in the common case.
+  const totalAttending = statsResult.data?.total_attending ?? confirmed
   const reviews = reviewResult.data ?? []
   const reviewCount = reviews.length
   const avgRating =
@@ -348,6 +358,7 @@ export async function getEventBySlug(slug: string): Promise<EventDetail | null> 
   return {
     ...eventFields,
     confirmed_count: confirmed,
+    total_attending: totalAttending,
     // revenue_collected exists on EventWithStats for admin consumers (read
     // from event_with_stats view). Public detail page doesn't display it,
     // and aggregating bookings.price_at_booking on a public path would

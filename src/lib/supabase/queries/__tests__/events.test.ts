@@ -458,6 +458,93 @@ describe('getEventBySlug', () => {
     // builder would have been created in fromBuilders. It must NOT exist.
     expect(fromBuilders['bookings']).toBeUndefined()
   })
+
+  // ── total_attending fetch (regression for the post-PR-#92 silent break) ──
+  // PR #92 added total_attending to event_with_stats but this query's
+  // .select('confirmed_count') call never asked for it — so on the live
+  // detail page (Turkish Dining Experience, 2026-05-05) the new
+  // `{event.total_attending} people going` markup rendered as
+  // " people going" with no number. The component test suites all passed
+  // because their fixtures had total_attending: N set artificially.
+  // These cases pin both the select-string contract AND the behavioural
+  // pass-through so the same class of bug can't recur silently.
+
+  it('requests total_attending in the stats select (regression: post-PR-#92 silent break)', async () => {
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve(mockEventRow)
+    fromBuilders['events'] = eventsBuilder
+
+    const statsBuilder = createQueryBuilder()
+    statsBuilder.mockResolve({ confirmed_count: 5, total_attending: 25 })
+    fromBuilders['event_with_stats'] = statsBuilder
+
+    const reviewsBuilder = createQueryBuilder()
+    reviewsBuilder.mockResolve([])
+    fromBuilders['event_reviews'] = reviewsBuilder
+
+    await getEventBySlug('wine-and-wisdom')
+
+    // Pin the exact select-string contract. The view aggregates with
+    // definer privileges (RLS-safe), so `total_attending` is fetched
+    // alongside confirmed_count via the same explicit column list. A
+    // future refactor that drops total_attending from the select would
+    // silently break the public Attendees panel — this assertion fails
+    // loudly first.
+    const selectArg = statsBuilder.select.mock.calls[0]?.[0] as string
+    expect(typeof selectArg).toBe('string')
+    expect(selectArg).toContain('total_attending')
+    expect(selectArg).toContain('confirmed_count')
+  })
+
+  it('flows total_attending from the view into the returned EventDetail', async () => {
+    // Behavioural pin: the divergent fixture (confirmed=5, total=25)
+    // proves the EventDetail carries total_attending from the view, not
+    // a re-derivation that drops external_attendees.
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve(mockEventRow)
+    fromBuilders['events'] = eventsBuilder
+
+    const statsBuilder = createQueryBuilder()
+    statsBuilder.mockResolve({ confirmed_count: 5, total_attending: 25 })
+    fromBuilders['event_with_stats'] = statsBuilder
+
+    const reviewsBuilder = createQueryBuilder()
+    reviewsBuilder.mockResolve([])
+    fromBuilders['event_reviews'] = reviewsBuilder
+
+    const result = await getEventBySlug('wine-and-wisdom')
+
+    expect(result).not.toBeNull()
+    expect(result!.confirmed_count).toBe(5)
+    expect(result!.total_attending).toBe(25)
+  })
+
+  it('falls back to confirmed_count when total_attending is missing from the view (defensive)', async () => {
+    // Defence-in-depth: if a deploy ever runs ahead of the migration so
+    // event_with_stats lacks total_attending, the public detail page
+    // shows the platform count rather than rendering blank. With
+    // external_attendees default 0 these are equal anyway in 100% of
+    // pre-feature-use cases, so this fallback is invisible operationally.
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve(mockEventRow)
+    fromBuilders['events'] = eventsBuilder
+
+    const statsBuilder = createQueryBuilder()
+    // Note: no `total_attending` key in the response — simulates the
+    // pre-migration column shape OR a malformed select.
+    statsBuilder.mockResolve({ confirmed_count: 7 })
+    fromBuilders['event_with_stats'] = statsBuilder
+
+    const reviewsBuilder = createQueryBuilder()
+    reviewsBuilder.mockResolve([])
+    fromBuilders['event_reviews'] = reviewsBuilder
+
+    const result = await getEventBySlug('wine-and-wisdom')
+
+    expect(result).not.toBeNull()
+    expect(result!.confirmed_count).toBe(7)
+    expect(result!.total_attending).toBe(7) // fell back to confirmed
+  })
 })
 
 describe('getEventReviews', () => {
