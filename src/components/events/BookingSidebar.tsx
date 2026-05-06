@@ -187,9 +187,18 @@ function CapacitySection({ event }: { event: EventDetail }) {
           <div
             className="h-full rounded-full bg-gold transition-all"
             style={{
+              // Fill reflects the same "implied inflated capacity" model as
+              // the public "X going" headline: total_attending (platform +
+              // external) over (capacity + external_attendees). Platform-only
+              // math (confirmed_count / capacity) ignored partnership
+              // attendees and made the bar disagree with the headline once
+              // external > 0 — the issue PR #93 closed for the textual
+              // display extends here too.
               width: `${
                 event.capacity
-                  ? ((event.capacity - event.spots_left) / event.capacity) * 100
+                  ? (event.total_attending /
+                      (event.capacity + event.external_attendees)) *
+                    100
                   : 0
               }%`,
             }}

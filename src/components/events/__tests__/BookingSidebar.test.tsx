@@ -341,6 +341,41 @@ describe('BookingSidebar', () => {
     expect(screen.getByText(/Only 5 spots left/)).toBeTruthy()
   })
 
+  it('progress bar fill reflects total_attending over inflated capacity (not platform-only)', () => {
+    // Divergent fixture: 5 platform + 15 external = 20 going on a 30-cap event.
+    // Inflated capacity = 30 + 15 = 45. Fill = 20/45 ≈ 44.44%.
+    // Platform-only math (the pre-fix behaviour) would have given 5/30 ≈ 16.67%.
+    // The two are far enough apart that an off-by-one or wrong-formula
+    // regression fails this test loudly.
+    const { container } = render(
+      <BookingSidebar
+        event={makeEvent({
+          capacity: 30,
+          spots_left: 25,           // capacity - confirmed (30 - 5)
+          confirmed_count: 5,
+          total_attending: 20,      // confirmed + external (5 + 15)
+          external_attendees: 15,
+        })}
+        userBooking={null}
+        {...defaultProps}
+      />,
+    )
+
+    // Find the gold fill div inside the progress bar.
+    const fillBar = container.querySelector('.bg-gold.h-full') as HTMLElement | null
+    expect(fillBar).toBeTruthy()
+
+    // 20 / (30 + 15) * 100 = 44.44…%. Tolerate a sliver of float jitter.
+    const widthPercent = parseFloat(fillBar!.style.width)
+    expect(widthPercent).toBeGreaterThan(43)
+    expect(widthPercent).toBeLessThan(46)
+
+    // Inverse: the platform-only calculation (5/30 ≈ 17%) must NOT match.
+    // Catches a future revert that drops total_attending from the numerator
+    // or capacity+external from the denominator.
+    expect(widthPercent).toBeGreaterThan(20)
+  })
+
   // Pins the d65a525 + 34fec9d swap: the public Attendees mini-card reads
   // `total_attending` (= confirmed_count + external_attendees), NOT
   // `confirmed_count` directly. Divergent fixture is load-bearing here —
