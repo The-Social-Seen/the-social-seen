@@ -337,18 +337,17 @@ export async function createEvent(formData: FormData, hosts?: HostInput[]) {
 
   // Validate hosts input BEFORE creating the event so a bad role_label
   // doesn't leave us with an event whose host insert silently failed.
-  // We don't know the event id yet — pass a placeholder; the validator
-  // only checks shape/length, not the eventId.
+  // The helper returns rows without event_id; we tack it on after the
+  // events insert returns the real id.
   let validatedHostRows:
     | Array<{
-        event_id: string
         profile_id: string
         role_label: string
         sort_order: number
       }>
     | null = null
   if (hosts && hosts.length > 0) {
-    const prepared = prepareHostRows('__pending__', hosts)
+    const prepared = prepareHostRows(hosts)
     if ('error' in prepared) return { error: prepared.error }
     validatedHostRows = prepared.rows
   }
@@ -950,6 +949,10 @@ const HOST_ROLE_LABEL_MAX = 60
 /**
  * Validate + shape a hosts array into event_hosts rows ready for insert.
  *
+ * Returns rows WITHOUT `event_id`; callers tack it on at insert time. This
+ * keeps the helper agnostic about whether the event exists yet — useful for
+ * `createEvent` (which doesn't have the id until the events insert returns).
+ *
  * Rules:
  *   - profileId required (non-empty trimmed string)
  *   - roleLabel trimmed; empty / whitespace-only → falls back to 'Host'
@@ -958,12 +961,10 @@ const HOST_ROLE_LABEL_MAX = 60
  *   - sort_order = array index (callers pass hosts in display order)
  */
 function prepareHostRows(
-  eventId: string,
   hosts: HostInput[],
 ):
   | {
       rows: Array<{
-        event_id: string
         profile_id: string
         role_label: string
         sort_order: number
@@ -971,7 +972,6 @@ function prepareHostRows(
     }
   | { error: string } {
   const rows: Array<{
-    event_id: string
     profile_id: string
     role_label: string
     sort_order: number
@@ -990,7 +990,6 @@ function prepareHostRows(
       }
     }
     rows.push({
-      event_id: eventId,
       profile_id: profile,
       role_label: trimmed.length > 0 ? trimmed : 'Host',
       sort_order: i,
@@ -1007,7 +1006,7 @@ export async function upsertEventHosts(eventId: string, hosts: HostInput[]) {
 
   // Validate + shape BEFORE we delete the existing rows. If the new payload
   // is malformed we'd rather fail loud than leave the event hostless.
-  const prepared = prepareHostRows(eventId, hosts)
+  const prepared = prepareHostRows(hosts)
   if ('error' in prepared) return { error: prepared.error }
 
   const { error: deleteError } = await supabase
@@ -1018,9 +1017,13 @@ export async function upsertEventHosts(eventId: string, hosts: HostInput[]) {
   if (deleteError) return { error: deleteError.message }
 
   if (prepared.rows.length > 0) {
+    const rowsWithEventId = prepared.rows.map((row) => ({
+      ...row,
+      event_id: eventId,
+    }))
     const { error: insertError } = await supabase
       .from('event_hosts')
-      .insert(prepared.rows)
+      .insert(rowsWithEventId)
 
     if (insertError) return { error: insertError.message }
   }
