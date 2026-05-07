@@ -10,8 +10,13 @@
  * actually update their password on /reset-password. Pointing
  * `resetPasswordForEmail`'s `redirectTo` straight at /reset-password skips
  * this step and leaves the user without a recovery session.
+ *
+ * Observability: thrown errors from the SDK exchange (e.g. Supabase 5xx,
+ * network failures) are reported to Sentry as warnings — the user gets a
+ * clean redirect, but ops still need visibility into auth-side flakiness.
  */
 import { NextResponse } from 'next/server'
+import * as Sentry from '@sentry/nextjs'
 import { createServerClient } from '@/lib/supabase/server'
 import { sanitizeRedirectPath } from '@/lib/utils/redirect'
 
@@ -42,7 +47,22 @@ export async function GET(request: Request) {
         new URL('/forgot-password?error=expired_link', url.origin),
       )
     }
-  } catch {
+  } catch (err) {
+    // Capture in Sentry for ops visibility, but defensively wrap the
+    // captureException itself — a Sentry misconfig must never crash the
+    // recovery flow. Level is 'warning' (not 'error') because the user
+    // gets a clean actionable redirect; this is a logged anomaly, not an
+    // unhandled crash. `hadCode` lets triagers tell "exchange threw" from
+    // "missing code" without us logging the single-use code itself.
+    try {
+      Sentry.captureException(err, {
+        tags: { surface: 'auth-callback-pkce' },
+        level: 'warning',
+        extra: { hadCode: typeof code === 'string' && code.length > 0 },
+      })
+    } catch {
+      // Don't let Sentry misconfig crash the recovery flow.
+    }
     return NextResponse.redirect(
       new URL('/forgot-password?error=expired_link', url.origin),
     )

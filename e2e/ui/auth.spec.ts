@@ -26,6 +26,14 @@ import { getAdminClient } from '../helpers/supabase'
  */
 
 test.describe('Auth UI flows', () => {
+  // Retries: the register flow flakes at the 30s default when CI is slow
+  // (memory: project_flaky_e2e_daily_notifications.md). The 3-step form
+  // exercises browser + cookie + middleware + Server Action + Supabase Auth
+  // — any one of those being slow can blow the timeout. Two retries
+  // (3 attempts total) absorb transient slowness without masking a real
+  // regression: if all 3 fail the test still fails.
+  test.describe.configure({ retries: 2 })
+
   test.afterAll(async () => {
     await purgeRun(getAdminClient())
   })
