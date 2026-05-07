@@ -9,6 +9,7 @@ import {
   formatRelative,
   isPastEvent,
   isWithin48Hours,
+  normaliseLondonDatetimeToUtc,
 } from '../dates'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -279,5 +280,112 @@ describe('isWithin48Hours', () => {
 
   it('returns false for a past event', () => {
     expect(isWithin48Hours('2026-03-13T12:00:00.000Z')).toBe(false)
+  })
+})
+
+// ── normaliseLondonDatetimeToUtc — Europe/London wall-clock to UTC ───────────
+// Pre-fix the admin event form's submit-time conversion naively appended `Z`
+// to a datetime-local input (treating London wall-clock as UTC). Off by 1h
+// during BST; admins entered 7pm and the public event page displayed 8pm.
+// The fix uses Intl.DateTimeFormat to compute the London offset at the
+// wall-clock moment and subtract it from a pretend-UTC instant. Tests run
+// against Vitest's Node 20 environment, which has full ICU and Europe/London
+// available — no environment mocking required.
+
+describe('normaliseLondonDatetimeToUtc', () => {
+  // ── BST cases (March-October, UTC+1) ────────────────────────────────────
+
+  it('subtracts 1h during BST (June)', () => {
+    expect(normaliseLondonDatetimeToUtc('2026-06-15T19:00')).toBe(
+      '2026-06-15T18:00:00.000Z',
+    )
+  })
+
+  it('subtracts 1h during BST at midnight (June)', () => {
+    // 00:00 BST → previous-day 23:00 UTC
+    expect(normaliseLondonDatetimeToUtc('2026-06-15T00:00')).toBe(
+      '2026-06-14T23:00:00.000Z',
+    )
+  })
+
+  it('handles seconds component during BST', () => {
+    expect(normaliseLondonDatetimeToUtc('2026-06-15T19:00:30')).toBe(
+      '2026-06-15T18:00:30.000Z',
+    )
+  })
+
+  // ── GMT cases (October-March, UTC+0) ────────────────────────────────────
+
+  it('makes no offset adjustment during GMT (December)', () => {
+    expect(normaliseLondonDatetimeToUtc('2026-12-15T19:00')).toBe(
+      '2026-12-15T19:00:00.000Z',
+    )
+  })
+
+  it('makes no offset adjustment during GMT (January)', () => {
+    expect(normaliseLondonDatetimeToUtc('2026-01-15T19:00')).toBe(
+      '2026-01-15T19:00:00.000Z',
+    )
+  })
+
+  // ── Pass-through cases (input already has explicit timezone) ────────────
+
+  it('returns Z-suffixed UTC string unchanged', () => {
+    expect(normaliseLondonDatetimeToUtc('2026-06-15T19:00:00.000Z')).toBe(
+      '2026-06-15T19:00:00.000Z',
+    )
+  })
+
+  it('returns positive-offset string unchanged', () => {
+    expect(normaliseLondonDatetimeToUtc('2026-06-15T19:00+01:00')).toBe(
+      '2026-06-15T19:00+01:00',
+    )
+  })
+
+  it('returns negative-offset string unchanged', () => {
+    expect(normaliseLondonDatetimeToUtc('2026-06-15T19:00-05:00')).toBe(
+      '2026-06-15T19:00-05:00',
+    )
+  })
+
+  // ── Edge cases ──────────────────────────────────────────────────────────
+
+  it('returns empty string for empty input', () => {
+    expect(normaliseLondonDatetimeToUtc('')).toBe('')
+  })
+
+  it('returns empty string for malformed input', () => {
+    expect(normaliseLondonDatetimeToUtc('not a datetime')).toBe('')
+  })
+
+  it('returns empty string for partial input (no time component)', () => {
+    expect(normaliseLondonDatetimeToUtc('2026-06-15')).toBe('')
+  })
+
+  // ── End-to-end correctness: round-trip through display ──────────────────
+  // Pin the load-bearing user-visible invariant: a wall-clock time entered
+  // in the admin form, after normalisation + display formatting in
+  // Europe/London, gives back the same wall-clock time.
+
+  it('round-trips: 7pm BST input → display in London → 7pm', () => {
+    const stored = normaliseLondonDatetimeToUtc('2026-06-15T19:00')
+    const displayed = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/London',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(new Date(stored))
+    expect(displayed).toBe('19:00')
+  })
+
+  it('round-trips: 7pm GMT input → display in London → 7pm', () => {
+    const stored = normaliseLondonDatetimeToUtc('2026-12-15T19:00')
+    const displayed = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/London',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(new Date(stored))
+    expect(displayed).toBe('19:00')
   })
 })
