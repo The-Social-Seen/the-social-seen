@@ -138,3 +138,82 @@ export function isWithin48Hours(date: Date | string): boolean {
   const diffMs = toDate(date).getTime() - Date.now()
   return diffMs > 0 && diffMs <= 48 * 60 * 60 * 1_000
 }
+
+/**
+ * Convert a datetime-local input value (YYYY-MM-DDTHH:mm with no TZ) to a
+ * UTC ISO string, treating the input as Europe/London wall-clock time.
+ *
+ * The platform is for London professionals; admin events are scheduled in
+ * London time. This is the inverse of the `toDatetimeLocal()` helper inside
+ * EventForm.tsx (which goes UTC → London for the input's defaultValue).
+ *
+ * Algorithm: build a "pretend UTC" instant from the wall-clock components,
+ * then ask Intl.DateTimeFormat what that instant looks like in Europe/London.
+ * The gap between the two IS the London offset at that wall-clock moment
+ * (1h during BST, 0 during GMT). Subtract that offset from pretend-UTC to
+ * get the true UTC instant the admin meant.
+ *
+ * Strings that already carry a timezone marker (Z or ±HH:mm) pass through
+ * unchanged — we never override an explicit timezone.
+ *
+ * Pre-fix the conversion at parseEventFormData in admin/actions.ts naively
+ * appended `Z` to a local datetime string, treating London wall-clock as
+ * UTC. Off by 1h during BST; admins entered 7pm and the public event page
+ * displayed 8pm. This helper lives here (rather than alongside the Server
+ * Action) so it's directly unit-testable — files with `'use server'`
+ * can only export async Server Actions.
+ */
+export function normaliseLondonDatetimeToUtc(value: string): string {
+  if (!value) return ''
+  // Already has explicit timezone — pass through.
+  if (value.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(value)) return value
+
+  // Parse YYYY-MM-DDTHH:mm (seconds optional)
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/.exec(value)
+  if (!match) return ''
+  const [, y, mo, d, hh, mm, ss] = match
+
+  // Step 1: pretend the components ARE UTC. Compute that instant.
+  const pretendUtcMs = Date.UTC(
+    +y,
+    +mo - 1,
+    +d,
+    +hh,
+    +mm,
+    ss ? +ss : 0,
+  )
+
+  // Step 2: render that instant in Europe/London. Read the rendered
+  // wall-clock components back via formatToParts.
+  const fmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: LONDON_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
+  const parts = fmt.formatToParts(new Date(pretendUtcMs))
+  const get = (t: string) =>
+    Number(parts.find((p) => p.type === t)?.value ?? '0')
+  // Intl.DateTimeFormat sometimes emits hour=24 at midnight; normalise to 0.
+  const renderedHour = get('hour') === 24 ? 0 : get('hour')
+  const renderedMs = Date.UTC(
+    get('year'),
+    get('month') - 1,
+    get('day'),
+    renderedHour,
+    get('minute'),
+    get('second'),
+  )
+
+  // Step 3: gap between rendered and pretend = London offset at this
+  // wall-clock moment (positive in BST, zero in GMT).
+  const londonOffsetMs = renderedMs - pretendUtcMs
+
+  // Step 4: subtract offset from pretend-UTC to get TRUE UTC.
+  const trueUtcMs = pretendUtcMs - londonOffsetMs
+  return new Date(trueUtcMs).toISOString()
+}

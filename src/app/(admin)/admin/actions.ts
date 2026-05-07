@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { after } from 'next/server'
 import { uniqueSlug } from '@/lib/utils/slugify'
+import { normaliseLondonDatetimeToUtc } from '@/lib/utils/dates'
 import { sendEmail } from '@/lib/email/send'
 import { adminAnnouncementTemplate } from '@/lib/email/templates/admin-announcement'
 import { isRedacted } from '@/lib/notifications/redaction'
@@ -133,17 +134,6 @@ const notificationSchema = z.object({
 
 // ── Form data → typed object helper ──────────────────────────────────────────
 
-/** Normalise datetime-local value (YYYY-MM-DDTHH:mm) to full ISO 8601 with Z suffix. */
-function normaliseDatetime(value: string): string {
-  if (!value) return ''
-  // Already has timezone info — return as-is
-  if (value.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(value)) return value
-  // Append seconds + Z for Zod .datetime() validation
-  return value.includes(':') && value.split(':').length === 2
-    ? `${value}:00.000Z`
-    : `${value}.000Z`
-}
-
 function parseEventFormData(formData: FormData) {
   const priceInPounds = parseFloat(formData.get('price') as string) || 0
   const priceInPence = Math.round(priceInPounds * 100)
@@ -180,8 +170,8 @@ function parseEventFormData(formData: FormData) {
     title: (formData.get('title') as string) ?? '',
     description: (formData.get('description') as string) ?? '',
     short_description: (formData.get('short_description') as string) ?? '',
-    date_time: normaliseDatetime((formData.get('date_time') as string) ?? ''),
-    end_time: normaliseDatetime((formData.get('end_time') as string) ?? ''),
+    date_time: normaliseLondonDatetimeToUtc((formData.get('date_time') as string) ?? ''),
+    end_time: normaliseLondonDatetimeToUtc((formData.get('end_time') as string) ?? ''),
     venue_name: (formData.get('venue_name') as string) ?? '',
     venue_address: (formData.get('venue_address') as string) ?? '',
     postcode: (formData.get('postcode') as string) || null,
