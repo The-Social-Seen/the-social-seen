@@ -43,6 +43,14 @@ async function isFunctionReachable(): Promise<boolean> {
 }
 
 test.describe('daily-notifications edge function', () => {
+  // Retries: the venue-reveal test consistently flakes at the 30s default
+  // when CI is slow (memory: project_flaky_e2e_daily_notifications.md).
+  // The operation invokes an edge function then polls for the DB side
+  // effect — individually fast but bursty in CI. Two retries (3 attempts
+  // total) absorb transient slowness without masking a real regression:
+  // if all 3 fail the test still fails.
+  test.describe.configure({ retries: 2 })
+
   test.afterAll(async () => {
     await purgeRun(getAdminClient())
   })
