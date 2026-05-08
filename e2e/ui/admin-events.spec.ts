@@ -76,6 +76,33 @@ async function seedEventAt(opts: SeedOpts): Promise<TestEvent> {
   if (error || !data) {
     throw new Error(`seedEventAt: insert failed: ${error?.message ?? 'no row'}`)
   }
+
+  // The public event detail query (getEventBySlug, src/lib/supabase/queries/
+  // events.ts) uses an INNER JOIN on event_tags + tags via PRIMARY_TAG_EMBED.
+  // An event with no primary tag is excluded from the result -> the page
+  // returns 404 -> the time assertion can never resolve. Seed a primary
+  // tag link to a known seed-data tag (`drinks-bars` is primary-eligible
+  // per supabase/seed.sql).
+  const { data: tagRow, error: tagLookupErr } = await admin
+    .from('tags')
+    .select('id')
+    .eq('slug', 'drinks-bars')
+    .single()
+  if (tagLookupErr || !tagRow) {
+    throw new Error(
+      `seedEventAt: primary tag 'drinks-bars' not found — ` +
+        `seed migrations may have changed: ${tagLookupErr?.message ?? 'no row'}`,
+    )
+  }
+  const { error: tagLinkErr } = await admin.from('event_tags').insert({
+    event_id: data.id,
+    tag_id: tagRow.id,
+    is_primary: true,
+  })
+  if (tagLinkErr) {
+    throw new Error(`seedEventAt: event_tags insert failed: ${tagLinkErr.message}`)
+  }
+
   return data as TestEvent
 }
 
@@ -102,9 +129,15 @@ test.describe('Admin event time round-trip — public page rendering', () => {
 
     await page.goto(`/events/${event.slug}`)
 
+    // First confirm the event page rendered at all (the title is on the
+    // page as a heading). If THIS fails, the event 404'd — most likely
+    // the seed is missing a required field. If only the time assertion
+    // fails, it's a render-side regression.
+    await expect(
+      page.getByRole('heading', { name: event.title }),
+    ).toBeVisible({ timeout: 10_000 })
+
     // The event detail page renders the time range via formatTimeRange.
-    // We assert the start hour explicitly — the en-dash separator is
-    // load-bearing for the format but not for this regression.
     await expect(page.getByText('7:00 PM – 10:00 PM')).toBeVisible({
       timeout: 10_000,
     })
