@@ -217,3 +217,48 @@ export function normaliseLondonDatetimeToUtc(value: string): string {
   const trueUtcMs = pretendUtcMs - londonOffsetMs
   return new Date(trueUtcMs).toISOString()
 }
+
+/**
+ * Convert a UTC ISO timestamp to a `YYYY-MM-DDTHH:mm` string suitable for an
+ * `<input type="datetime-local">` defaultValue, expressed in Europe/London
+ * wall-clock time. The inverse of `normaliseLondonDatetimeToUtc`.
+ *
+ * Pre-fix the EventForm component used `Date.prototype.getTimezoneOffset()`
+ * to convert UTC → datetime-local, which keys off the BROWSER's reported
+ * timezone rather than Europe/London. That worked in practice because
+ * admins are in London (per CLAUDE.md product decision), but failed
+ * silently for a London admin editing the form while travelling, or any
+ * SSR path that touches the component (server reports UTC, defaultValue
+ * would shift by 1h during BST). This helper grounds the conversion in
+ * Europe/London explicitly via Intl.DateTimeFormat so it's correct
+ * regardless of the runtime's reported TZ.
+ *
+ * Round-trips cleanly with `normaliseLondonDatetimeToUtc`:
+ *   normaliseLondonDatetimeToUtc('2026-06-15T19:00')   // '2026-06-15T18:00:00.000Z'
+ *   londonDatetimeFromUtc('2026-06-15T18:00:00.000Z')  // '2026-06-15T19:00'
+ *
+ * Returns '' for empty or malformed input — `<input type="datetime-local">`
+ * treats an empty defaultValue as "no value", which matches the
+ * create-event flow where no datetime is pre-set.
+ */
+export function londonDatetimeFromUtc(iso: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+
+  const fmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: LONDON_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+  const parts = fmt.formatToParts(d)
+  const get = (t: string) =>
+    parts.find((p) => p.type === t)?.value ?? '00'
+  // Intl.DateTimeFormat sometimes emits hour=24 at midnight; normalise to 00.
+  const hh = get('hour') === '24' ? '00' : get('hour')
+  return `${get('year')}-${get('month')}-${get('day')}T${hh}:${get('minute')}`
+}

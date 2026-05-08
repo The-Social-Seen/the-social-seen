@@ -7,6 +7,7 @@ import { X } from 'lucide-react'
 import { slugify } from '@/lib/utils/slugify'
 import { penceToPounds } from '@/lib/utils/currency'
 import { resolveAvatarUrl, getInitials } from '@/lib/utils/images'
+import { londonDatetimeFromUtc } from '@/lib/utils/dates'
 import {
   createEvent,
   saveEventTags,
@@ -94,14 +95,6 @@ interface EventFormProps {
   initialTagSelection?: EventTagSelection
   /** Pre-existing hosts on the edit screen. Empty array on create. */
   initialHosts?: HostFormRow[]
-}
-
-function toDatetimeLocal(iso: string): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  const offset = d.getTimezoneOffset()
-  const local = new Date(d.getTime() - offset * 60000)
-  return local.toISOString().slice(0, 16)
 }
 
 export default function EventForm({
@@ -342,7 +335,7 @@ export default function EventForm({
             name="date_time"
             type="datetime-local"
             required
-            defaultValue={event ? toDatetimeLocal(event.date_time) : ''}
+            defaultValue={event ? londonDatetimeFromUtc(event.date_time) : ''}
             className="form-input"
           />
         </FormField>
@@ -352,7 +345,7 @@ export default function EventForm({
             name="end_time"
             type="datetime-local"
             required
-            defaultValue={event ? toDatetimeLocal(event.end_time) : ''}
+            defaultValue={event ? londonDatetimeFromUtc(event.end_time) : ''}
             className="form-input"
           />
         </FormField>
