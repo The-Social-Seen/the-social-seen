@@ -138,9 +138,13 @@ test.describe('Admin event time round-trip — public page rendering', () => {
     ).toBeVisible({ timeout: 10_000 })
 
     // The event detail page renders the time range via formatTimeRange.
-    await expect(page.getByText('7:00 PM – 10:00 PM')).toBeVisible({
-      timeout: 10_000,
-    })
+    // The event detail page renders this text twice (responsive layout —
+    // primary + muted variants). Both copies bind to the same source
+    // data; if one is wrong, they both are. .first() avoids strict-mode
+    // violation without weakening the assertion.
+    await expect(
+      page.getByText('7:00 PM – 10:00 PM').first(),
+    ).toBeVisible({ timeout: 10_000 })
   })
 
   // ── Scenario 2: GMT event renders at the correct London wall-clock time
@@ -156,9 +160,13 @@ test.describe('Admin event time round-trip — public page rendering', () => {
 
     await page.goto(`/events/${event.slug}`)
 
-    await expect(page.getByText('7:00 PM – 10:00 PM')).toBeVisible({
-      timeout: 10_000,
-    })
+    // The event detail page renders this text twice (responsive layout —
+    // primary + muted variants). Both copies bind to the same source
+    // data; if one is wrong, they both are. .first() avoids strict-mode
+    // violation without weakening the assertion.
+    await expect(
+      page.getByText('7:00 PM – 10:00 PM').first(),
+    ).toBeVisible({ timeout: 10_000 })
   })
 
   // ── Scenario 3: BST→GMT transition Sunday (last Sunday of October).
@@ -179,9 +187,13 @@ test.describe('Admin event time round-trip — public page rendering', () => {
 
     await page.goto(`/events/${event.slug}`)
 
-    await expect(page.getByText('7:00 PM – 10:00 PM')).toBeVisible({
-      timeout: 10_000,
-    })
+    // The event detail page renders this text twice (responsive layout —
+    // primary + muted variants). Both copies bind to the same source
+    // data; if one is wrong, they both are. .first() avoids strict-mode
+    // violation without weakening the assertion.
+    await expect(
+      page.getByText('7:00 PM – 10:00 PM').first(),
+    ).toBeVisible({ timeout: 10_000 })
   })
 })
 
