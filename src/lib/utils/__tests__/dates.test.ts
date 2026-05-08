@@ -10,6 +10,7 @@ import {
   isPastEvent,
   isWithin48Hours,
   normaliseLondonDatetimeToUtc,
+  londonDatetimeFromUtc,
 } from '../dates'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -387,5 +388,90 @@ describe('normaliseLondonDatetimeToUtc', () => {
       hour12: false,
     }).format(new Date(stored))
     expect(displayed).toBe('19:00')
+  })
+})
+
+// ── londonDatetimeFromUtc — UTC ISO → datetime-local input value ─────────────
+// Pre-fix the EventForm component used Date.prototype.getTimezoneOffset() to
+// convert UTC → datetime-local, which keys off the BROWSER's reported TZ
+// rather than Europe/London. Worked in practice (admins are in London) but
+// was wrong for travelling admins / SSR paths. The new helper grounds the
+// conversion in Europe/London via Intl.DateTimeFormat regardless of the
+// runtime's reported TZ.
+
+describe('londonDatetimeFromUtc', () => {
+  // ── BST cases (March-October, UTC+1) ────────────────────────────────────
+
+  it('converts BST UTC to London datetime-local (June, +1h)', () => {
+    expect(londonDatetimeFromUtc('2026-06-15T18:00:00.000Z')).toBe(
+      '2026-06-15T19:00',
+    )
+  })
+
+  it('handles BST midnight rollover (UTC 23:00 prev-day → 00:00 London)', () => {
+    expect(londonDatetimeFromUtc('2026-06-14T23:00:00.000Z')).toBe(
+      '2026-06-15T00:00',
+    )
+  })
+
+  // ── GMT cases (October-March, UTC+0) ────────────────────────────────────
+
+  it('converts GMT UTC to London datetime-local (December, no offset)', () => {
+    expect(londonDatetimeFromUtc('2026-12-15T19:00:00.000Z')).toBe(
+      '2026-12-15T19:00',
+    )
+  })
+
+  it('converts GMT UTC to London datetime-local (January, no offset)', () => {
+    expect(londonDatetimeFromUtc('2026-01-15T19:00:00.000Z')).toBe(
+      '2026-01-15T19:00',
+    )
+  })
+
+  // ── Edge cases ──────────────────────────────────────────────────────────
+
+  it('returns empty string for empty input', () => {
+    expect(londonDatetimeFromUtc('')).toBe('')
+  })
+
+  it('returns empty string for malformed input', () => {
+    expect(londonDatetimeFromUtc('not a datetime')).toBe('')
+  })
+
+  it('omits the seconds component (datetime-local format is YYYY-MM-DDTHH:mm)', () => {
+    // Stored UTC may carry seconds, but datetime-local inputs ignore them
+    // and the returned string must not include them either.
+    expect(londonDatetimeFromUtc('2026-06-15T18:00:30.000Z')).toBe(
+      '2026-06-15T19:00',
+    )
+  })
+
+  // ── Round-trip pins ─────────────────────────────────────────────────────
+  // Pin the load-bearing invariant: the new outbound + inbound helpers are
+  // exact inverses. If either regresses (e.g. someone "fixes" one to use
+  // browser TZ), these tests fail and surface the round-trip break.
+
+  it('round-trips: 7pm BST → store UTC → datetime-local input → 7pm', () => {
+    const stored = normaliseLondonDatetimeToUtc('2026-06-15T19:00')
+    expect(londonDatetimeFromUtc(stored)).toBe('2026-06-15T19:00')
+  })
+
+  it('round-trips: 7pm GMT → store UTC → datetime-local input → 7pm', () => {
+    const stored = normaliseLondonDatetimeToUtc('2026-12-15T19:00')
+    expect(londonDatetimeFromUtc(stored)).toBe('2026-12-15T19:00')
+  })
+
+  it('round-trips across the BST→GMT transition (last-Sunday-of-October)', () => {
+    // 2026 BST ends Sunday 25 October at 02:00 BST → 01:00 UTC.
+    // 19:00 on 26 October London is GMT (no offset).
+    const stored = normaliseLondonDatetimeToUtc('2026-10-26T19:00')
+    expect(londonDatetimeFromUtc(stored)).toBe('2026-10-26T19:00')
+  })
+
+  it('round-trips across the GMT→BST transition (last-Sunday-of-March)', () => {
+    // 2026 BST starts Sunday 29 March at 01:00 GMT → 02:00 BST.
+    // 19:00 on 30 March London is BST (+1h offset).
+    const stored = normaliseLondonDatetimeToUtc('2026-03-30T19:00')
+    expect(londonDatetimeFromUtc(stored)).toBe('2026-03-30T19:00')
   })
 })
