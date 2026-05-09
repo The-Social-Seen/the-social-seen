@@ -51,9 +51,9 @@ export function AboutSection() {
                 grown into something extraordinary.
               </p>
               <p>
-                We are a community of London professionals in their 30s and 40s
-                who are tired of awkward networking events and surface-level
-                small talk. Instead, we gather over wine tastings, supper clubs,
+                We are a community of people who are tired of awkward
+                networking events and surface-level small talk. Instead, we
+                gather over wine tastings, supper clubs,
                 gallery openings, and sunrise yoga sessions — experiences
                 designed to spark genuine conversation and lasting friendships.
               </p>

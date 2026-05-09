@@ -47,8 +47,8 @@ export default function CollaboratePage() {
                 </li>
                 <li>
                   <span className="text-text-primary">Brands</span> aligned
-                  with London professionals in their 30s–40s — wine, spirits,
-                  wellness, design, food.
+                  with London professionals and entrepreneurs — wine,
+                  spirits, wellness, design, food.
                 </li>
                 <li>
                   <span className="text-text-primary">Sponsors</span>{' '}
