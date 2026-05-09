@@ -77,7 +77,7 @@ export default function AboutPage() {
                   already started.
                 </p>
                 <p>
-                  London professionals in their 30s and 40s were tired of
+                  London professionals and entrepreneurs were tired of
                   awkward networking events and surface-level small talk.
                   They wanted nice bars, dining experiences, rooftop drinks -
                   experiences designed to spark genuine conversation, not
