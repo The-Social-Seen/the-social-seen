@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
 import * as Checkbox from '@radix-ui/react-checkbox'
 import { cn } from '@/lib/utils/cn'
+import { sanitizeRedirectPath } from '@/lib/utils/redirect'
 import { HEAR_ABOUT_OPTIONS } from '@/lib/constants'
 import { track } from '@/lib/analytics/track'
 import { signUp, saveInterests, completeOnboarding } from '../actions'
@@ -524,6 +525,16 @@ export function JoinForm({ interestTags }: JoinFormProps) {
   const stepParam = searchParams.get('step')
   const initialStep = stepParam ? Math.max(0, Math.min(parseInt(stepParam, 10) - 1, 2)) : 0
 
+  // Honour `?redirect=` so a user who arrived via
+  // /login?redirect=… → "Join now" lands on their original target
+  // (typically /events/<slug>?book=1) after Welcome. We sanitise via
+  // the same helper the login form uses so a tampered param can't
+  // bounce the user off-site. `hadRedirectParam` tracks whether the
+  // raw param was set, so the cross-link to /login only forwards
+  // when meaningful — keeps direct /join → /login hops clean.
+  const hadRedirectParam = searchParams.get('redirect') != null
+  const redirectTo = sanitizeRedirectPath(searchParams.get('redirect'))
+
   const [step, setStep] = useState(initialStep)
   const [direction, setDirection] = useState(1)
 
@@ -663,7 +674,7 @@ export function JoinForm({ interestTags }: JoinFormProps) {
             The Social Seen
           </Link>
           <Link
-            href="/login"
+            href={hadRedirectParam ? `/login?redirect=${encodeURIComponent(redirectTo)}` : '/login'}
             className="text-sm text-text-tertiary transition-colors hover:text-gold"
           >
             Already a member? <span className="font-medium text-gold">Sign In</span>

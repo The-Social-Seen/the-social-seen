@@ -14,6 +14,10 @@ import { signIn } from '../actions'
 export function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  // Track whether a `?redirect=` was actually supplied — `sanitizeRedirectPath`
+  // returns its fallback (`/events`) when the param is missing, so we can't
+  // tell from `redirectTo` alone whether forwarding to /join makes sense.
+  const hadRedirectParam = searchParams.get('redirect') != null
   const redirectTo = sanitizeRedirectPath(searchParams.get('redirect'))
 
   const [email, setEmail] = useState('')
@@ -207,8 +211,16 @@ export function LoginForm() {
         {/* Footer */}
         <p className="mt-8 text-center text-sm text-text-tertiary">
           Don&apos;t have an account?{' '}
+          {/*
+            Preserve the post-auth redirect target across the
+            login → join hop. Without this, a user who hit
+            /login?redirect=/events/<slug>?book=1 and decided to
+            register would lose the destination and land on /events
+            after Welcome. `redirectTo` is already sanitised in
+            scope (line 17) so this is safe to forward as-is.
+          */}
           <Link
-            href="/join"
+            href={hadRedirectParam ? `/join?redirect=${encodeURIComponent(redirectTo)}` : '/join'}
             className="font-medium text-gold transition-colors hover:text-gold-dark"
           >
             Join now
