@@ -18,6 +18,7 @@ export default function AccountDeletedHandler() {
   useEffect(() => {
     if (sp.get('account_deleted') !== '1') return
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setShowToast(true)
     const url = new URL(window.location.href)
     url.searchParams.delete('account_deleted')
