@@ -15,6 +15,10 @@ const eslintConfig = defineConfig([
     // Supabase Edge Functions run on Deno — remote imports + different
     // globals. Don't lint them with the Node/Next config.
     "supabase/functions/**",
+    // Agent worktrees, plugin caches, and skill scaffolding live under
+    // .claude/. They contain stale TypeScript copies from prior branches
+    // and tooling assets that aren't part of the app source.
+    ".claude/**",
   ]),
 ]);
 

@@ -10,7 +10,7 @@ export default defineConfig({
     setupFiles: ['./vitest.setup.ts'],
     // Playwright E2E specs live under `e2e/` and target a real
     // Supabase stack. Run them via `pnpm e2e`, not here.
-    exclude: ['node_modules/**', 'e2e/**', '.next/**', 'dist/**'],
+    exclude: ['node_modules/**', 'e2e/**', '.next/**', 'dist/**', '.claude/**'],
   },
   resolve: {
     alias: {
