@@ -301,7 +301,7 @@ export async function getRecentActivity() {
     .order('created_at', { ascending: false })
     .limit(5)
 
-  if (error) throw new Error('Failed to fetch recent activity')
+  if (error) throw new Error(`Failed to fetch recent activity: ${error.message}`)
 
   return (data ?? []).map((b) => ({
     id: b.id,
@@ -847,7 +847,7 @@ export async function getAdminEvents(): Promise<EventWithStats[]> {
     .eq('event_tags.is_primary', true)
     .order('date_time', { ascending: false })
 
-  if (error) throw new Error('Failed to fetch events')
+  if (error) throw new Error(`Failed to fetch events: ${error.message}`)
 
   return (data ?? []).map((row) =>
     attachPrimaryTag(row as RowWithPrimaryTagEmbed),
@@ -1050,7 +1050,7 @@ export async function getEventBookings(
 
   const { data, error } = await query
 
-  if (error) throw new Error('Failed to fetch bookings')
+  if (error) throw new Error(`Failed to fetch bookings: ${error.message}`)
 
   return data ?? []
 }
@@ -1138,7 +1138,7 @@ export async function exportEventAttendeesCSV(eventId: string) {
     .is('deleted_at', null)
     .order('booked_at', { ascending: true })
 
-  if (error) throw new Error('Failed to fetch attendees')
+  if (error) throw new Error(`Failed to fetch attendees: ${error.message}`)
 
   const rows = (data ?? []).map((b) => {
     const profile = extractJoin<{ full_name: string; email: string }>(b.profile)
@@ -1209,7 +1209,7 @@ export async function getAdminMembers(search?: string, sort?: string) {
 
   const { data: profiles, error } = await query
 
-  if (error) throw new Error('Failed to fetch members')
+  if (error) throw new Error(`Failed to fetch members: ${error.message}`)
 
   if (!profiles || profiles.length === 0) return [] as MemberWithStats[]
 
@@ -1286,7 +1286,7 @@ export async function listMembersForHostPicker(): Promise<HostPickerMember[]> {
     .eq('status', 'active')
     .order('full_name', { ascending: true })
 
-  if (error) throw new Error('Failed to fetch members for host picker')
+  if (error) throw new Error(`Failed to fetch members for host picker: ${error.message}`)
 
   return (data ?? []) as HostPickerMember[]
 }
@@ -1308,7 +1308,7 @@ export async function exportMembersCSV(search?: string) {
 
   const { data, error } = await query
 
-  if (error) throw new Error('Failed to fetch members')
+  if (error) throw new Error(`Failed to fetch members: ${error.message}`)
 
   const header = 'Name,Email,Job Title,Company,Joined'
   const csvRows = (data ?? []).map((m) => {
@@ -1344,7 +1344,7 @@ export async function getAdminReviews(filter?: 'all' | 'visible' | 'hidden') {
 
   const { data, error } = await query
 
-  if (error) throw new Error('Failed to fetch reviews')
+  if (error) throw new Error(`Failed to fetch reviews: ${error.message}`)
 
   return data ?? []
 }
@@ -1429,7 +1429,7 @@ export async function getNotificationHistory() {
     `)
     .order('sent_at', { ascending: false })
 
-  if (error) throw new Error('Failed to fetch notifications')
+  if (error) throw new Error(`Failed to fetch notifications: ${error.message}`)
 
   return data ?? []
 }
@@ -1467,7 +1467,7 @@ export async function getFailedNotifications(): Promise<FailedNotification[]> {
     .order('sent_at', { ascending: false })
     .limit(100)
 
-  if (error) throw new Error('Failed to fetch failed notifications')
+  if (error) throw new Error(`Failed to fetch failed notifications: ${error.message}`)
   return (data ?? []) as FailedNotification[]
 }
 
@@ -1852,7 +1852,7 @@ export async function getDeletedAccounts() {
     .not('deleted_at', 'is', null)
     .order('deleted_at', { ascending: false })
 
-  if (error) throw new Error('Failed to fetch deleted accounts')
+  if (error) throw new Error(`Failed to fetch deleted accounts: ${error.message}`)
   return data ?? []
 }
 
