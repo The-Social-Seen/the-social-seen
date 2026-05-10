@@ -45,6 +45,23 @@ vi.mock('next/link', () => ({
   ),
 }))
 
+// EventDetailClient now consumes useRouter / useSearchParams for the
+// `?book=1` post-auth resume Handler (and the defensive logged-out
+// redirect in handleBookClick). Default to no params + a no-op
+// router so existing assertions in this file keep their behaviour.
+// Dedicated tests for the resume Handler will land via the tester.
+vi.mock('next/navigation', () => ({
+  useSearchParams: () => ({ get: (_key: string) => null }),
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    refresh: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}))
+
 // Mock BookingModal — not under test (Batch 6)
 vi.mock('@/components/events/BookingModal', () => ({
   default: () => <div data-testid="booking-modal" />,

@@ -74,6 +74,11 @@ function renderBar(overrides: Partial<Parameters<typeof MobileBookingBar>[0]> = 
     isFree: false,
     isSoldOut: false,
     isPast: false,
+    // Defaults assume an authenticated viewer — existing assertions all
+    // exercise the logged-in path. The logged-out branch will get
+    // dedicated coverage from the tester agent.
+    isLoggedIn: true,
+    eventSlug: 'test-event',
     onBookClick: vi.fn(),
     sidebarRef,
     ...overrides,

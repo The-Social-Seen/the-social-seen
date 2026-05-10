@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, type RefObject } from "react";
+import Link from "next/link";
 import { formatPrice } from "@/lib/utils/currency";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -10,6 +11,22 @@ interface MobileBookingBarProps {
   isFree: boolean;
   isSoldOut: boolean;
   isPast: boolean;
+  /**
+   * When false, the CTA renders as a Link to /login (preserving the
+   * current event slug + `?book=1` so the BookingModal auto-opens
+   * after auth). Mirrors `BookingSidebar.LoggedOutState`'s behaviour
+   * for parity between mobile and desktop. The desktop sidebar is
+   * already gated; this prop closes the mobile gap that previously
+   * let a logged-out user reach BookingModal → Server Action →
+   * "Authentication required" error banner.
+   */
+  isLoggedIn: boolean;
+  /**
+   * Event slug used to construct the post-login redirect target.
+   * Required when !isLoggedIn so the user lands back on this event
+   * with `?book=1` after signing in (or registering).
+   */
+  eventSlug: string;
   onBookClick: () => void;
   sidebarRef: RefObject<HTMLDivElement | null>;
 }
@@ -20,6 +37,8 @@ export default function MobileBookingBar({
   isFree,
   isSoldOut,
   isPast,
+  isLoggedIn,
+  eventSlug,
   onBookClick,
   sidebarRef,
 }: MobileBookingBarProps) {
@@ -44,11 +63,22 @@ export default function MobileBookingBar({
   // Don't render for past events
   if (isPast) return null;
 
-  const ctaText = isSoldOut
-    ? "Join Waitlist"
-    : isFree
-      ? "RSVP Now"
-      : "Book Now";
+  // CTA copy: a logged-out user always sees the auth-gated copy (matches
+  // BookingSidebar.LoggedOutState, src/components/events/BookingSidebar.tsx:252).
+  // Logged-in users get the same context-aware copy as before.
+  const ctaText = !isLoggedIn
+    ? "Sign In to Book"
+    : isSoldOut
+      ? "Join Waitlist"
+      : isFree
+        ? "RSVP Now"
+        : "Book Now";
+
+  // Shared CTA styling so the <Link> (logged-out) and <button> (logged-in)
+  // look identical. Keeping a single string here avoids drift if the
+  // primary-CTA pattern changes.
+  const ctaClassName =
+    "rounded-full bg-gold px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-gold/25 transition-all hover:bg-gold-dark active:scale-[0.98]";
 
   return (
     <AnimatePresence>
@@ -77,12 +107,18 @@ export default function MobileBookingBar({
                 </p>
               )}
             </div>
-            <button
-              onClick={onBookClick}
-              className="rounded-full bg-gold px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-gold/25 transition-all hover:bg-gold-dark active:scale-[0.98]"
-            >
-              {ctaText}
-            </button>
+            {isLoggedIn ? (
+              <button onClick={onBookClick} className={ctaClassName}>
+                {ctaText}
+              </button>
+            ) : (
+              <Link
+                href={`/login?redirect=/events/${eventSlug}?book=1`}
+                className={ctaClassName}
+              >
+                {ctaText}
+              </Link>
+            )}
           </div>
         </motion.div>
       )}
