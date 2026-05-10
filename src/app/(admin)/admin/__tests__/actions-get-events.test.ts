@@ -235,6 +235,58 @@ describe('getAdminEvents — revenue_collected pass-through', () => {
 })
 
 // ════════════════════════════════════════════════════════════════════════════
+// Postgres-error detail surfaces through the wrapper throw
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('getAdminEvents — Postgres error detail in throw', () => {
+  it('surfaces PostgrestError.message alongside the wrapper class label', async () => {
+    // Regression for the tech-debt sweep landed in
+    // chore(admin): surface Postgres error detail in Server Action
+    // throws. Across 11 admin Server Actions, `throw new Error('Failed
+    // to fetch X')` was rewritten to interpolate `${error.message}` so
+    // Sentry shows the real cause (RLS denial, view drift, missing
+    // column) rather than the generic class label alone.
+    //
+    // Why this matters: the wrapper text ("Failed to fetch events") is
+    // load-bearing as a Sentry-filterable class label. Stripping it
+    // would break alerting; dropping the underlying message would
+    // re-bury the root cause. This test pins both halves so a future
+    // "tidy up the throws" sweep can't silently regress to either
+    // shape.
+    authenticateAdmin()
+
+    // Realistic Postgres error: an RLS denial or schema drift surfaces
+    // here as a PostgrestError with a `message` field. The exact text
+    // is what Supabase returns; we don't massage it.
+    const postgresMessage = 'permission denied for table event_with_stats'
+
+    let firstCall = true
+    mockFrom.mockImplementation((table: string) => {
+      if (firstCall) {
+        // requireAdmin → profiles.role passes, so the function reaches
+        // the data-fetch error path (not the auth path).
+        firstCall = false
+        return mockChain({ data: { role: 'admin' } })
+      }
+      if (table === 'event_with_stats') {
+        return mockChain({ data: null, error: { message: postgresMessage } })
+      }
+      return mockChain({ data: null, error: null })
+    })
+
+    // One assertion that fails loudly if EITHER half is dropped: the
+    // wrapper class label OR the Postgres detail. Using a single regex
+    // anchors the colon-separator shape ("<wrapper>: <detail>") so a
+    // future "throw the raw error.message" simplification — which would
+    // strip the wrapper and break Sentry filters — also fails this
+    // assertion.
+    await expect(getAdminEvents()).rejects.toThrowError(
+      new RegExp(`^Failed to fetch events: ${postgresMessage}$`),
+    )
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
 // Test 3 — query-shape contract: select() carries the embed clause
 // ════════════════════════════════════════════════════════════════════════════
 
