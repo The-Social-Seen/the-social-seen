@@ -51,7 +51,7 @@ vi.mock('next/link', () => ({
 // router so existing assertions in this file keep their behaviour.
 // Dedicated tests for the resume Handler will land via the tester.
 vi.mock('next/navigation', () => ({
-  useSearchParams: () => ({ get: (_key: string) => null }),
+  useSearchParams: () => ({ get: () => null }),
   useRouter: () => ({
     push: vi.fn(),
     replace: vi.fn(),

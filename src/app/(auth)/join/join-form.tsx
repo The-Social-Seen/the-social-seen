@@ -446,9 +446,19 @@ function StepInterests({ interestTags, selected, onToggle, error, loading, onSub
 
 interface StepWelcomeProps {
   name: string
+  /**
+   * Post-auth landing target for the primary CTA. Defaults to `/events`
+   * (the historical hardcoded value). When the user arrived at /join via
+   * /login?redirect=… (e.g. tapping "Sign In to Book" on a mobile event
+   * page), this gets the sanitised redirect target so they resume the
+   * booking flow instead of dumping them on /events. The "Complete Your
+   * Profile" secondary CTA always points to /profile — that's a
+   * post-onboarding suggestion, not the user's original intent.
+   */
+  redirectTo: string
 }
 
-function StepWelcome({ name }: StepWelcomeProps) {
+function StepWelcome({ name, redirectTo }: StepWelcomeProps) {
   const initials = name
     .split(' ')
     .map((n) => n[0])
@@ -495,7 +505,7 @@ function StepWelcome({ name }: StepWelcomeProps) {
         className="flex flex-col gap-3 sm:flex-row"
       >
         <Link
-          href="/events"
+          href={redirectTo}
           className="inline-flex items-center justify-center rounded-full bg-gold px-8 py-3 text-sm font-semibold text-white transition-all hover:bg-gold-dark hover:shadow-lg hover:shadow-gold/25"
         >
           See What&apos;s On
@@ -729,7 +739,7 @@ export function JoinForm({ interestTags }: JoinFormProps) {
                     onBack={() => goToStep(0)}
                   />
                 )}
-                {step === 2 && <StepWelcome name={name} />}
+                {step === 2 && <StepWelcome name={name} redirectTo={redirectTo} />}
               </motion.div>
             </AnimatePresence>
           </div>
