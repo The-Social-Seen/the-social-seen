@@ -35,6 +35,7 @@ export default function BookingCancelledHandler({ eventId }: Props) {
     // to restore them to `waitlisted` rather than `cancelled` so they
     // keep their queue position for the next cancellation email.
     const isFromClaim = sp.get('from') === 'claim'
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setFromClaim(isFromClaim)
 
     let cancelled = false
