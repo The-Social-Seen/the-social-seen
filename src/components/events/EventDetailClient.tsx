@@ -138,9 +138,17 @@ export default function EventDetailClient({
     if (isSoldOut) return;
     // Email-verified users get the modal; unverified users get the
     // verify-prompt (mirrors handleBookClick precedence above).
+    // The two setState calls below are intentional in this mount-time
+    // resume effect — matches the codebase convention for URL-param-
+    // driven Handlers (BookingCancelledHandler, AccountDeletedHandler,
+    // ThemeProvider, UnverifiedBanner, verify-form). Local lint won't
+    // surface this but CI escalates `react-hooks/set-state-in-effect`
+    // to error; disable explicitly to keep both environments green.
     if (!emailVerified) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setVerifyPromptOpen(true);
     } else {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBookingOpen(true);
     }
     // Strip the `?book=1` so a refresh or back-nav doesn't reopen the
