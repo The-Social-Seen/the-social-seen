@@ -584,7 +584,12 @@ describe('EventDetailClient', () => {
     // booking flow runs — both on direct click and on `?book=1` resume.
     // Drift would let unverified users bypass the email-verification
     // gate (P2-3) just by completing a login redirect.
-    it('opens VerifyPromptModal (NOT BookingModal) when ?book=1 + verified=false', () => {
+    //
+    // Split across two tests (originally a single body asserting all
+    // three invariants) so a future regression isolates which one broke:
+    // (a) modal precedence — verify-prompt opens, booking modal does not,
+    // (b) URL cleanup — `router.replace` still strips `?book=` regardless.
+    it('?book=1 + unverified: opens VerifyPromptModal, NOT BookingModal (precedence)', () => {
       mockSearchParam = '1'
       render(
         <EventDetailClient
@@ -595,8 +600,20 @@ describe('EventDetailClient', () => {
       )
       expect(screen.getByTestId('verify-prompt-modal-open')).toBeTruthy()
       expect(screen.queryByTestId('booking-modal')).toBeNull()
-      // URL cleanup still runs — the prompt is the post-redirect outcome
-      // for unverified users, not a no-op.
+    })
+
+    it('?book=1 + unverified: still strips the ?book= param via router.replace (URL cleanup runs regardless)', () => {
+      mockSearchParam = '1'
+      render(
+        <EventDetailClient
+          event={makeEventDetail()}
+          {...defaultProps}
+          emailVerified={false}
+        />,
+      )
+      // URL cleanup runs even when the verify-prompt (not the booking
+      // modal) is the post-redirect outcome — the param must not survive
+      // a refresh in either branch.
       expect(mockRouterReplace).toHaveBeenCalledTimes(1)
     })
 
