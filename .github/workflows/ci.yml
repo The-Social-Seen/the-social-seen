@@ -29,6 +29,28 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Pin admin Server Action error-detail pattern
+        # PR #101 swept 10 throw sites in `src/app/(admin)/admin/actions.ts`
+        # to interpolate `${error.message}` after the wrapper colon, so
+        # Sentry receives the underlying Postgres message (e.g. RLS
+        # `permission denied for table profiles`) instead of just the
+        # opaque wrapper. Only one site has a regression test; the rest
+        # are mechanically identical and unguarded.
+        #
+        # This grep fails the build if any unparametrised
+        # `throw new Error('Failed to ...')` resurfaces — protecting the
+        # full set against a future "tidy the throws" sweep that drops
+        # interpolation. See:
+        # ~/.claude/projects/.../memory/project_admin_actions_error_messages.md
+        run: |
+          if grep -nE "throw new Error\('Failed to[^']*'\)" "src/app/(admin)/admin/actions.ts"; then
+            echo "::error::Found unparametrised 'Failed to ...' throws in src/app/(admin)/admin/actions.ts."
+            echo "These must interpolate \${error.message} after the wrapper colon so Sentry"
+            echo "shows the underlying Postgres detail (e.g. RLS permission denied)."
+            echo "See memory: project_admin_actions_error_messages.md"
+            exit 1
+          fi
+
       - name: Type-check
         run: pnpm tsc --noEmit
 
