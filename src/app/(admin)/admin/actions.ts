@@ -882,7 +882,16 @@ export async function getAdminEventById(eventId: string) {
       .order('sort_order', { ascending: true }),
   ])
 
-  if (eventRes.error || !eventRes.data) throw new Error('Event not found')
+  // Split predicate so RLS / connection failures (eventRes.error truthy) are
+  // distinguishable from genuine not-found (data null, error null) in Sentry.
+  // Follow-up from PR #101 reviewer note S-2 — the combined predicate above
+  // would have made `${error.message}` ambiguous on the not-found path
+  // (where `error` is null). See:
+  // ~/.claude/projects/.../memory/project_admin_actions_error_messages.md
+  if (eventRes.error) {
+    throw new Error(`Failed to fetch event: ${eventRes.error.message}`)
+  }
+  if (!eventRes.data) throw new Error('Event not found')
 
   return {
     ...eventRes.data,

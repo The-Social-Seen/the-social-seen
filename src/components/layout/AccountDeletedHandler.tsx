@@ -18,6 +18,9 @@ export default function AccountDeletedHandler() {
   useEffect(() => {
     if (sp.get('account_deleted') !== '1') return
 
+    // The lint rule flags setState inside useEffect to discourage render
+    // loops, but this is a one-shot mount-time read of a URL param — the
+    // setter runs at most once per page load and has no dependency cycle.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setShowToast(true)
     const url = new URL(window.location.href)

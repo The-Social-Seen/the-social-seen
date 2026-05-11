@@ -35,6 +35,9 @@ export default function BookingCancelledHandler({ eventId }: Props) {
     // to restore them to `waitlisted` rather than `cancelled` so they
     // keep their queue position for the next cancellation email.
     const isFromClaim = sp.get('from') === 'claim'
+    // The lint rule flags setState inside useEffect to discourage render
+    // loops, but this is a one-shot mount-time read of a URL param — the
+    // setter runs at most once per page load and has no dependency cycle.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setFromClaim(isFromClaim)
 
