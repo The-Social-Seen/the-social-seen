@@ -102,6 +102,20 @@ describe('LoginForm', () => {
     expect(joinLink.getAttribute('href')).toBe('/join')
   })
 
+  // INVARIANT: When a user arrives at /login via the
+  // "Sign In to Book" CTA (carrying ?redirect=…?book=1) and decides to
+  // register instead, the redirect target must survive the
+  // login → join hop. Losing it dumps the user on /events after the
+  // welcome screen and silently kills the booking flow they started.
+  it('forwards URL-encoded ?redirect to the "Join now" link when present', () => {
+    mockRedirectParam = '/events/foo?book=1'
+    render(<LoginForm />)
+    const joinLink = screen.getByRole('link', { name: /join now/i })
+    expect(joinLink.getAttribute('href')).toBe(
+      '/join?redirect=%2Fevents%2Ffoo%3Fbook%3D1',
+    )
+  })
+
   it('shows error when submitting with empty fields', async () => {
     render(<LoginForm />)
     fireEvent.click(screen.getByRole('button', { name: /^sign in$/i }))

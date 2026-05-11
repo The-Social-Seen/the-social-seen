@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
 import * as Checkbox from '@radix-ui/react-checkbox'
 import { cn } from '@/lib/utils/cn'
+import { sanitizeRedirectPath } from '@/lib/utils/redirect'
 import { HEAR_ABOUT_OPTIONS } from '@/lib/constants'
 import { track } from '@/lib/analytics/track'
 import { signUp, saveInterests, completeOnboarding } from '../actions'
@@ -445,9 +446,19 @@ function StepInterests({ interestTags, selected, onToggle, error, loading, onSub
 
 interface StepWelcomeProps {
   name: string
+  /**
+   * Post-auth landing target for the primary CTA. Defaults to `/events`
+   * (the historical hardcoded value). When the user arrived at /join via
+   * /login?redirect=… (e.g. tapping "Sign In to Book" on a mobile event
+   * page), this gets the sanitised redirect target so they resume the
+   * booking flow instead of dumping them on /events. The "Complete Your
+   * Profile" secondary CTA always points to /profile — that's a
+   * post-onboarding suggestion, not the user's original intent.
+   */
+  redirectTo: string
 }
 
-function StepWelcome({ name }: StepWelcomeProps) {
+function StepWelcome({ name, redirectTo }: StepWelcomeProps) {
   const initials = name
     .split(' ')
     .map((n) => n[0])
@@ -494,7 +505,7 @@ function StepWelcome({ name }: StepWelcomeProps) {
         className="flex flex-col gap-3 sm:flex-row"
       >
         <Link
-          href="/events"
+          href={redirectTo}
           className="inline-flex items-center justify-center rounded-full bg-gold px-8 py-3 text-sm font-semibold text-white transition-all hover:bg-gold-dark hover:shadow-lg hover:shadow-gold/25"
         >
           See What&apos;s On
@@ -523,6 +534,16 @@ export function JoinForm({ interestTags }: JoinFormProps) {
 
   const stepParam = searchParams.get('step')
   const initialStep = stepParam ? Math.max(0, Math.min(parseInt(stepParam, 10) - 1, 2)) : 0
+
+  // Honour `?redirect=` so a user who arrived via
+  // /login?redirect=… → "Join now" lands on their original target
+  // (typically /events/<slug>?book=1) after Welcome. We sanitise via
+  // the same helper the login form uses so a tampered param can't
+  // bounce the user off-site. `hadRedirectParam` tracks whether the
+  // raw param was set, so the cross-link to /login only forwards
+  // when meaningful — keeps direct /join → /login hops clean.
+  const hadRedirectParam = searchParams.get('redirect') != null
+  const redirectTo = sanitizeRedirectPath(searchParams.get('redirect'))
 
   const [step, setStep] = useState(initialStep)
   const [direction, setDirection] = useState(1)
@@ -663,7 +684,7 @@ export function JoinForm({ interestTags }: JoinFormProps) {
             The Social Seen
           </Link>
           <Link
-            href="/login"
+            href={hadRedirectParam ? `/login?redirect=${encodeURIComponent(redirectTo)}` : '/login'}
             className="text-sm text-text-tertiary transition-colors hover:text-gold"
           >
             Already a member? <span className="font-medium text-gold">Sign In</span>
@@ -718,7 +739,7 @@ export function JoinForm({ interestTags }: JoinFormProps) {
                     onBack={() => goToStep(0)}
                   />
                 )}
-                {step === 2 && <StepWelcome name={name} />}
+                {step === 2 && <StepWelcome name={name} redirectTo={redirectTo} />}
               </motion.div>
             </AnimatePresence>
           </div>

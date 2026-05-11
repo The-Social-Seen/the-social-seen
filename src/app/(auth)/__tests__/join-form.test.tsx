@@ -36,10 +36,18 @@ vi.mock('framer-motion', () => ({
 }))
 
 const mockPush = vi.fn()
+// Programmable per-test search-params lookup. The form reads
+// `redirect` (post-auth target) and `step` (deep-link to step N).
+// Tests that don't care leave these null; the redirect-preservation
+// + Welcome-CTA tests below set them per case.
+const mockSearchParams: Record<string, string | null> = {
+  redirect: null,
+  step: null,
+}
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
   useSearchParams: () => ({
-    get: vi.fn().mockReturnValue(null),
+    get: (key: string) => mockSearchParams[key] ?? null,
   }),
 }))
 
@@ -134,6 +142,8 @@ function fillStep1Valid({
 describe('JoinForm — Step 1 (Account)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockSearchParams.redirect = null
+    mockSearchParams.step = null
   })
 
   it('renders "Create Your Account" heading', () => {
@@ -213,6 +223,19 @@ describe('JoinForm — Step 1 (Account)', () => {
     render(<JoinForm interestTags={[]} />)
     const signInLink = screen.getByRole('link', { name: /sign in/i })
     expect(signInLink.getAttribute('href')).toBe('/login')
+  })
+
+  // INVARIANT: Cross-link (join → login) must preserve the
+  // post-auth redirect so a user who arrived via
+  // /login?redirect=…?book=1 → "Join now" → "Sign In" round-trips
+  // back to the original destination without losing it.
+  it('forwards URL-encoded ?redirect to the "Sign In" header link when present', () => {
+    mockSearchParams.redirect = '/events/foo?book=1'
+    render(<JoinForm interestTags={[]} />)
+    const signInLink = screen.getByRole('link', { name: /sign in/i })
+    expect(signInLink.getAttribute('href')).toBe(
+      '/login?redirect=%2Fevents%2Ffoo%3Fbook%3D1',
+    )
   })
 
   // Amendment 4.4 validation messages
@@ -370,6 +393,8 @@ describe('JoinForm — Step 1 (Account)', () => {
 describe('JoinForm — Step 2 (Interests)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockSearchParams.redirect = null
+    mockSearchParams.step = null
     mockSignUp.mockResolvedValue({ success: true })
   })
 
@@ -482,6 +507,8 @@ describe('JoinForm — Step 2 (Interests)', () => {
 describe('JoinForm — Step 3 (Welcome)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockSearchParams.redirect = null
+    mockSearchParams.step = null
     mockSignUp.mockResolvedValue({ success: true })
     mockSaveInterests.mockResolvedValue({ success: true })
     mockCompleteOnboarding.mockResolvedValue({ success: true })
@@ -528,6 +555,49 @@ describe('JoinForm — Step 3 (Welcome)', () => {
     await advanceToStep3()
     const profileLink = screen.getByRole('link', { name: /complete your profile/i })
     expect(profileLink.getAttribute('href')).toBe('/profile')
+  })
+
+  // INVARIANT: After completing onboarding, the primary CTA must
+  // resume the original booking flow when ?redirect= was passed.
+  // The path is sanitised via sanitizeRedirectPath (off-site URLs
+  // fall back to /events) so this is safe to feed straight into href.
+  it('uses sanitised ?redirect= for the "See What\'s On" CTA when present', async () => {
+    mockSearchParams.redirect = '/events/wine-evening?book=1'
+    await advanceToStep3()
+    const eventsLink = screen.getByRole('link', { name: /see what's on/i })
+    // The raw (sanitised) path is dropped straight into href —
+    // we don't double-encode it here because the consumer is the
+    // browser's address bar, not a query param.
+    expect(eventsLink.getAttribute('href')).toBe(
+      '/events/wine-evening?book=1',
+    )
+  })
+
+  it('uses a path-only ?redirect= (no `?book=1`) verbatim for the "See What\'s On" CTA', async () => {
+    mockSearchParams.redirect = '/events/wine-evening'
+    await advanceToStep3()
+    const eventsLink = screen.getByRole('link', { name: /see what's on/i })
+    expect(eventsLink.getAttribute('href')).toBe('/events/wine-evening')
+  })
+
+  // INVARIANT: The secondary "Complete Your Profile" CTA is a
+  // post-onboarding nudge, NOT the user's original intent — it must
+  // ignore ?redirect= and always point at /profile.
+  it('keeps the "Complete Your Profile" CTA pointing at /profile even when ?redirect is set', async () => {
+    mockSearchParams.redirect = '/events/wine-evening?book=1'
+    await advanceToStep3()
+    const profileLink = screen.getByRole('link', { name: /complete your profile/i })
+    expect(profileLink.getAttribute('href')).toBe('/profile')
+  })
+
+  // Defence: an off-site redirect param must fall back to /events.
+  // sanitizeRedirectPath already enforces this; this test pins the
+  // wiring so a future refactor that bypasses the helper is caught.
+  it('falls back to /events when ?redirect= is off-site (sanitised)', async () => {
+    mockSearchParams.redirect = 'https://evil.com/phish'
+    await advanceToStep3()
+    const eventsLink = screen.getByRole('link', { name: /see what's on/i })
+    expect(eventsLink.getAttribute('href')).toBe('/events')
   })
 
   it('calls completeOnboarding on render', async () => {

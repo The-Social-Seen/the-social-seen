@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { motion } from "framer-motion";
 import Image from "next/image";
@@ -85,22 +86,13 @@ export default function EventDetailClient({
   userId,
   emailVerified,
 }: EventDetailClientProps) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [bookingOpen, setBookingOpen] = useState(false);
   const [verifyPromptOpen, setVerifyPromptOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
-
-  // Intercept booking clicks for authenticated-but-unverified users.
-  // Logged-out users keep their existing path (usually a "log in to book"
-  // redirect inside BookingSidebar / MobileBookingBar).
-  function handleBookClick() {
-    if (isLoggedIn && !emailVerified) {
-      setVerifyPromptOpen(true);
-      return;
-    }
-    setBookingOpen(true);
-  }
 
   const isPast = isPastEvent(event.date_time);
   const isFree = event.price === 0;
@@ -108,6 +100,67 @@ export default function EventDetailClient({
   const hasReviews = reviews.length > 0;
   const hasGallery = photos.length > 0;
   const heroImage = resolveEventImage(event.image_url);
+
+  // Intercept booking clicks for authenticated-but-unverified users.
+  // Logged-out users normally never reach here — both the desktop sidebar
+  // and (post-fix) the mobile bar render a Sign In link instead of calling
+  // this handler. Defence-in-depth: if a logged-out user somehow does
+  // reach handleBookClick (e.g. via an alternate code path), send them to
+  // /login with the same redirect format as the mobile bar / sidebar so
+  // they land back on this event with `?book=1`.
+  function handleBookClick() {
+    if (!isLoggedIn) {
+      router.push(`/login?redirect=/events/${event.slug}?book=1`);
+      return;
+    }
+    if (!emailVerified) {
+      setVerifyPromptOpen(true);
+      return;
+    }
+    setBookingOpen(true);
+  }
+
+  // Resume the booking flow after auth. If a user clicked "Sign In to Book"
+  // on the mobile bar (or arrived via `/login?redirect=/events/<slug>?book=1`),
+  // they land back here with `?book=1`. Auto-open the BookingModal — but only
+  // when it's actually relevant, to avoid showing a redundant modal to users
+  // who already have a booking, or for past / sold-out events. The
+  // BookingCancelledHandler effect runs in the same component tree on a
+  // separate query param (?cancelled=1), so there's no ordering conflict
+  // here: the unlikely `?cancelled=1&book=1` combo lets the cancel cleanup
+  // run first (it dispatches its own router.replace), and any leftover
+  // `?book=1` then triggers this effect on the resulting render.
+  useEffect(() => {
+    if (searchParams.get("book") !== "1") return;
+    if (!isLoggedIn) return;
+    if (userBooking != null) return;
+    if (isPast) return;
+    if (isSoldOut) return;
+    // Email-verified users get the modal; unverified users get the
+    // verify-prompt (mirrors handleBookClick precedence above).
+    // The two setState calls below are intentional in this mount-time
+    // resume effect — matches the codebase convention for URL-param-
+    // driven Handlers (BookingCancelledHandler, AccountDeletedHandler,
+    // ThemeProvider, UnverifiedBanner, verify-form). Local lint won't
+    // surface this but CI escalates `react-hooks/set-state-in-effect`
+    // to error; disable explicitly to keep both environments green.
+    if (!emailVerified) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setVerifyPromptOpen(true);
+    } else {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setBookingOpen(true);
+    }
+    // Strip the `?book=1` so a refresh or back-nav doesn't reopen the
+    // modal. Use replace (not push) so the user's back button still
+    // works. Mirrors BookingCancelledHandler's URL-cleanup pattern.
+    const url = new URL(window.location.href);
+    url.searchParams.delete("book");
+    router.replace(url.pathname + (url.search || ""));
+    // Empty deps: this is a mount-time "resume" effect, the same
+    // pattern BookingCancelledHandler uses.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Can the current user leave a review?
   const userAttended = userBooking?.status === 'confirmed' && isPast;
@@ -532,6 +585,8 @@ export default function EventDetailClient({
         isFree={isFree}
         isSoldOut={isSoldOut}
         isPast={isPast}
+        isLoggedIn={isLoggedIn}
+        eventSlug={event.slug}
         onBookClick={handleBookClick}
         sidebarRef={sidebarRef}
       />

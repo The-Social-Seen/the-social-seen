@@ -74,6 +74,11 @@ function renderBar(overrides: Partial<Parameters<typeof MobileBookingBar>[0]> = 
     isFree: false,
     isSoldOut: false,
     isPast: false,
+    // Defaults assume an authenticated viewer — existing assertions all
+    // exercise the logged-in path. The logged-out branch will get
+    // dedicated coverage from the tester agent.
+    isLoggedIn: true,
+    eventSlug: 'test-event',
     onBookClick: vi.fn(),
     sidebarRef,
     ...overrides,
@@ -181,5 +186,102 @@ describe('MobileBookingBar', () => {
     // Trigger with sidebar visible → bar should stay hidden
     act(() => triggerIntersection(true))
     expect(screen.queryByRole('button')).toBeNull()
+  })
+
+  // ── Logged-out branch (P-? — unauthenticated booking redirect fix) ───────
+  //
+  // The mobile bar previously rendered a generic "Book Now" button for ALL
+  // viewers, which let a logged-out user reach the BookingModal → Server
+  // Action and hit "Authentication required" mid-flow. The fix gates the
+  // CTA behind isLoggedIn: logged-out users see a Sign In link that
+  // preserves the current event + `?book=1` so the modal auto-opens after
+  // sign-in. Mirrors BookingSidebar.LoggedOutState (already gated).
+  describe('logged-out variant', () => {
+    // INVARIANT: A logged-out viewer must NEVER fire onBookClick. The CTA
+    // must be a navigation Link to /login (carrying ?redirect=…?book=1),
+    // not a button bound to the booking handler.
+    it('renders an anchor (Link), NOT a button, when !isLoggedIn', () => {
+      renderAndShow({ isLoggedIn: false, eventSlug: 'wine-evening' })
+      expect(screen.queryByRole('button')).toBeNull()
+      expect(screen.getByRole('link')).toBeTruthy()
+    })
+
+    it('shows "Sign In to Book" copy when !isLoggedIn', () => {
+      renderAndShow({ isLoggedIn: false, eventSlug: 'wine-evening' })
+      expect(screen.getByRole('link', { name: 'Sign In to Book' })).toBeTruthy()
+    })
+
+    it('points href at /login?redirect=/events/<slug>?book=1', () => {
+      renderAndShow({ isLoggedIn: false, eventSlug: 'wine-evening' })
+      const link = screen.getByRole('link', { name: 'Sign In to Book' })
+      // Exact match — the post-auth resume Handler in EventDetailClient
+      // reads `?book=1` to auto-open the BookingModal. Drift here would
+      // break the resume flow silently.
+      expect(link.getAttribute('href')).toBe(
+        '/login?redirect=/events/wine-evening?book=1',
+      )
+    })
+
+    it('does NOT invoke onBookClick when the Sign In link is tapped', () => {
+      const { onBookClick } = renderAndShow({
+        isLoggedIn: false,
+        eventSlug: 'wine-evening',
+      })
+      const link = screen.getByRole('link', { name: 'Sign In to Book' })
+      // Defence in depth: even if a future refactor reattaches onClick
+      // to the link, the booking action must not fire for an unauth user.
+      link.click()
+      expect(onBookClick).not.toHaveBeenCalled()
+    })
+
+    it('shows "Sign In to Book" (not "Join Waitlist") for a sold-out event when !isLoggedIn', () => {
+      // The auth gate trumps the sold-out copy — logging in always
+      // comes first in the priority order (matches BookingSidebar).
+      renderAndShow({
+        isLoggedIn: false,
+        isSoldOut: true,
+        eventSlug: 'wine-evening',
+      })
+      expect(screen.getByRole('link', { name: 'Sign In to Book' })).toBeTruthy()
+      expect(screen.queryByText('Join Waitlist')).toBeNull()
+    })
+
+    it('shows "Sign In to Book" (not "RSVP Now") for a free event when !isLoggedIn', () => {
+      renderAndShow({
+        isLoggedIn: false,
+        isFree: true,
+        price: 0,
+        eventSlug: 'wine-evening',
+      })
+      expect(screen.getByRole('link', { name: 'Sign In to Book' })).toBeTruthy()
+      expect(screen.queryByText('RSVP Now')).toBeNull()
+    })
+
+    it('URL-encodes a slug containing odd characters into the redirect param', () => {
+      // Slugs in this app are slugify-d (lowercase, hyphen-separated),
+      // so this is largely a defensive check — but the redirect param
+      // is inlined into the href as a template literal. If a future
+      // event ever ends up with a unicode/space slug, the encoded form
+      // must still resolve back to the original target.
+      renderAndShow({ isLoggedIn: false, eventSlug: 'wine & cheese' })
+      const link = screen.getByRole('link')
+      // We use template-literal interpolation (no encodeURIComponent),
+      // so the raw slug ends up in the href. This pins that behaviour
+      // — if it changes we need to update redirect-resume parsing too.
+      expect(link.getAttribute('href')).toBe(
+        '/login?redirect=/events/wine & cheese?book=1',
+      )
+    })
+  })
+
+  // Sanity check: the logged-in default (isLoggedIn: true in renderBar)
+  // must still render a <button> bound to onBookClick. This pins the
+  // logged-in / logged-out swap so a future refactor that accidentally
+  // forces the link variant is caught by the existing logged-in tests
+  // AND this targeted assertion.
+  it('renders a button (not a Link) when isLoggedIn', () => {
+    renderAndShow({ isLoggedIn: true })
+    expect(screen.queryByRole('link')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Book Now' })).toBeTruthy()
   })
 })

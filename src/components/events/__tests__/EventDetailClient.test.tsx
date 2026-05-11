@@ -45,9 +45,36 @@ vi.mock('next/link', () => ({
   ),
 }))
 
-// Mock BookingModal — not under test (Batch 6)
+// EventDetailClient now consumes useRouter / useSearchParams for the
+// `?book=1` post-auth resume Handler (and the defensive logged-out
+// redirect in handleBookClick). Default to no params + a no-op
+// router so existing assertions in this file keep their behaviour;
+// the resume-handler describe block overrides these per-test.
+let mockSearchParam: string | null = null
+const mockRouterReplace = vi.fn()
+const mockRouterPush = vi.fn()
+
+vi.mock('next/navigation', () => ({
+  useSearchParams: () => ({
+    get: (key: string) => (key === 'book' ? mockSearchParam : null),
+  }),
+  useRouter: () => ({
+    push: mockRouterPush,
+    replace: mockRouterReplace,
+    refresh: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}))
+
+// Mock BookingModal — not under test (Batch 6). Only render its
+// data-testid when `isOpen` so the resume-handler tests can assert
+// open/closed via screen.queryByTestId. Existing tests on this file
+// never read `booking-modal` so this change is safe for them.
 vi.mock('@/components/events/BookingModal', () => ({
-  default: () => <div data-testid="booking-modal" />,
+  default: ({ isOpen }: { isOpen: boolean }) =>
+    isOpen ? <div data-testid="booking-modal" /> : null,
 }))
 
 // Mock MobileBookingBar — tested separately
@@ -238,6 +265,11 @@ describe('EventDetailClient', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockIntersectionObserver()
+    // Reset the per-test navigation knobs so a leaky earlier test
+    // (e.g. one that set ?book=1) doesn't bleed into the next one.
+    mockSearchParam = null
+    mockRouterReplace.mockClear()
+    mockRouterPush.mockClear()
   })
 
   // ── Basic rendering ──
@@ -443,5 +475,152 @@ describe('EventDetailClient', () => {
     )
     fireEvent.click(screen.getByTestId('booking-sidebar-book-btn'))
     expect(screen.queryByTestId('verify-prompt-modal-open')).toBeNull()
+  })
+
+  // ── Post-auth resume Handler — `?book=1` (unauthenticated booking
+  // redirect fix). When a logged-out user taps "Sign In to Book" on the
+  // mobile bar (or the sidebar's LoggedOutState) they're sent to
+  // /login?redirect=/events/<slug>?book=1 → after sign-in they land
+  // back here with `?book=1` and the modal must auto-open. The effect
+  // is gated on five conditions: logged in, no existing booking, not
+  // past, not sold out, and (with the verify branch) the email-verified
+  // bit. Each guard gets a defensive test below.
+  describe('?book=1 resume handler', () => {
+    // INVARIANT: After a successful login redirect, a verified logged-in
+    // viewer of an upcoming, non-sold-out event with no prior booking
+    // MUST land in the BookingModal automatically (otherwise the redirect
+    // round-trip is broken and the user has to re-tap the CTA).
+    it('opens BookingModal when ?book=1 + isLoggedIn + verified + no booking + upcoming + spots available', () => {
+      mockSearchParam = '1'
+      render(
+        <EventDetailClient event={makeEventDetail()} {...defaultProps} />,
+      )
+      expect(screen.getByTestId('booking-modal')).toBeTruthy()
+    })
+
+    it('calls router.replace to strip `?book=1` after opening the modal', () => {
+      mockSearchParam = '1'
+      render(
+        <EventDetailClient event={makeEventDetail()} {...defaultProps} />,
+      )
+      // The effect strips the param via router.replace so a refresh /
+      // back-nav doesn't reopen the modal. The replacement target is
+      // pathname + remaining-search; with only `?book=1` present in
+      // JSDOM's default URL, the result is just the pathname.
+      expect(mockRouterReplace).toHaveBeenCalledTimes(1)
+      const replacedUrl = mockRouterReplace.mock.calls[0][0]
+      // Whatever JSDOM's pathname is, it must NOT carry `book=`.
+      expect(replacedUrl).not.toContain('book=')
+    })
+
+    // INVARIANT: A logged-out user with `?book=1` must NEVER see the
+    // BookingModal (defensive — should be unreachable because the
+    // redirect target is /login first, but if the page is somehow
+    // rendered server-side with auth=false the effect must still bail).
+    it('does NOT open BookingModal when ?book=1 + !isLoggedIn', () => {
+      mockSearchParam = '1'
+      render(
+        <EventDetailClient
+          event={makeEventDetail()}
+          {...defaultProps}
+          isLoggedIn={false}
+          // Logged-out → emailVerified is necessarily false (parent
+          // passes false; see EventDetailClient.tsx prop comment).
+          emailVerified={false}
+        />,
+      )
+      expect(screen.queryByTestId('booking-modal')).toBeNull()
+      expect(screen.queryByTestId('verify-prompt-modal-open')).toBeNull()
+      // No URL cleanup either — the effect bails before router.replace.
+      expect(mockRouterReplace).not.toHaveBeenCalled()
+    })
+
+    it('does NOT open BookingModal when user already has a booking', () => {
+      mockSearchParam = '1'
+      const userBooking: Booking = {
+        id: 'bk-1',
+        user_id: 'user-001',
+        event_id: 'evt-1',
+        status: 'confirmed',
+        waitlist_position: null,
+        price_at_booking: 3500,
+        booked_at: '2026-01-01T00:00:00Z',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        deleted_at: null,
+      }
+      render(
+        <EventDetailClient
+          event={makeEventDetail()}
+          {...defaultProps}
+          userBooking={userBooking}
+        />,
+      )
+      expect(screen.queryByTestId('booking-modal')).toBeNull()
+      expect(mockRouterReplace).not.toHaveBeenCalled()
+    })
+
+    it('does NOT open BookingModal for a past event', () => {
+      mockSearchParam = '1'
+      render(
+        <EventDetailClient event={makePastEventDetail()} {...defaultProps} />,
+      )
+      expect(screen.queryByTestId('booking-modal')).toBeNull()
+      expect(mockRouterReplace).not.toHaveBeenCalled()
+    })
+
+    it('does NOT open BookingModal when the event is sold out', () => {
+      mockSearchParam = '1'
+      // Future event + spots_left=0 → isSoldOut === true
+      const soldOut = makeEventDetail({ spots_left: 0 })
+      render(
+        <EventDetailClient event={soldOut} {...defaultProps} />,
+      )
+      expect(screen.queryByTestId('booking-modal')).toBeNull()
+      expect(mockRouterReplace).not.toHaveBeenCalled()
+    })
+
+    // INVARIANT: Unverified users hit the verify-prompt before any
+    // booking flow runs — both on direct click and on `?book=1` resume.
+    // Drift would let unverified users bypass the email-verification
+    // gate (P2-3) just by completing a login redirect.
+    it('opens VerifyPromptModal (NOT BookingModal) when ?book=1 + verified=false', () => {
+      mockSearchParam = '1'
+      render(
+        <EventDetailClient
+          event={makeEventDetail()}
+          {...defaultProps}
+          emailVerified={false}
+        />,
+      )
+      expect(screen.getByTestId('verify-prompt-modal-open')).toBeTruthy()
+      expect(screen.queryByTestId('booking-modal')).toBeNull()
+      // URL cleanup still runs — the prompt is the post-redirect outcome
+      // for unverified users, not a no-op.
+      expect(mockRouterReplace).toHaveBeenCalledTimes(1)
+    })
+
+    it('does NOT open any modal when there is no ?book param', () => {
+      mockSearchParam = null
+      render(
+        <EventDetailClient event={makeEventDetail()} {...defaultProps} />,
+      )
+      expect(screen.queryByTestId('booking-modal')).toBeNull()
+      expect(screen.queryByTestId('verify-prompt-modal-open')).toBeNull()
+      expect(mockRouterReplace).not.toHaveBeenCalled()
+    })
+
+    it('does NOT open BookingModal for a stray `?book=true` (only `?book=1` triggers)', () => {
+      // Pins the exact-value check on the resume gate. The effect uses
+      // `searchParams.get("book") !== "1"` — a future relax of this
+      // check (e.g. `Boolean(searchParams.get("book"))`) could fire on
+      // any truthy value and re-open modals unexpectedly.
+      mockSearchParam = 'true'
+      render(
+        <EventDetailClient event={makeEventDetail()} {...defaultProps} />,
+      )
+      expect(screen.queryByTestId('booking-modal')).toBeNull()
+      expect(mockRouterReplace).not.toHaveBeenCalled()
+    })
   })
 })
