@@ -72,6 +72,26 @@ declare const Deno: {
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+// Workaround for Supabase platform inconsistency (2026-05-13):
+//
+// Supabase auto-injects SUPABASE_SERVICE_ROLE_KEY into the Edge Function
+// runtime, but on projects with the new API key system it injects the
+// `sb_secret_*` format. The Supabase gateway in front of the function
+// rejects `sb_secret_*` Authorization headers as
+// `UNAUTHORIZED_INVALID_JWT_FORMAT` before they reach the function,
+// while the legacy JWT format passes through the gateway but doesn't
+// match the function's SERVICE_ROLE_KEY env. Net effect: no valid auth
+// token works against an unmodified function on a new-key-system
+// project.
+//
+// CRON_AUTH_TOKEN is an explicit, JWT-format fallback the operator sets
+// via `supabase secrets set CRON_AUTH_TOKEN=<legacy-jwt>` (env names
+// starting with SUPABASE_ are reserved and can't be overridden). The
+// pg_cron job stores the same value in vault.decrypted_secrets and
+// sends it as Bearer; gateway accepts (JWT format), function matches.
+// See memory note: project_signup_email_deliverability ➜ daily-cron
+// auth chain.
+const CRON_AUTH_TOKEN = Deno.env.get('CRON_AUTH_TOKEN') ?? ''
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') ?? ''
 const FROM_ADDRESS =
   Deno.env.get('FROM_ADDRESS') ?? 'The Social Seen <hello@the-social-seen.com>'
@@ -142,10 +162,16 @@ Deno.serve(async (req: Request) => {
     return json({ error: 'method not allowed' }, 405)
   }
 
-  // Service-role gate. The anon or any user JWT must be rejected.
+  // Service-role gate. Accept either the auto-injected
+  // SUPABASE_SERVICE_ROLE_KEY (Dashboard invokes, direct curl with the
+  // current key format) OR an explicit CRON_AUTH_TOKEN (used by pg_cron
+  // — see config block above for why this fallback exists). The anon
+  // or any user JWT is still rejected.
   const auth = req.headers.get('authorization') ?? ''
   const token = auth.replace(/^Bearer\s+/i, '')
-  if (!SERVICE_ROLE_KEY || token !== SERVICE_ROLE_KEY) {
+  const matchesServiceRole = SERVICE_ROLE_KEY && token === SERVICE_ROLE_KEY
+  const matchesCronToken = CRON_AUTH_TOKEN && token === CRON_AUTH_TOKEN
+  if (!matchesServiceRole && !matchesCronToken) {
     return json({ error: 'unauthorized' }, 401)
   }
 
