@@ -5,7 +5,7 @@ Management API. **These live outside git** — re-apply them when creating
 the production project or restoring from a backup, otherwise core flows
 (OTP, cron-driven emails, SMS) break or behave inconsistently.
 
-Last reviewed: 2026-04-28.
+Last reviewed: 2026-05-14.
 
 ---
 
@@ -71,6 +71,14 @@ NOTICE and exits.
 > to the listed address. Staging only. Drop the SANDBOX_* lines from
 > the block below before running against production secrets.
 
+> ⚠️ **`CRON_AUTH_TOKEN` is required.** It's the only auth path that
+> works for the pg_cron caller on Supabase projects with the new API
+> key system. See §3 below for the full explanation; for now, just
+> remember it must be set, and it must be a legacy-JWT-format value
+> (a long `eyJ…` string, not `sb_secret_…`). The legacy service-role
+> JWT from `supabase projects api-keys --project-ref <ref>` is the
+> conventional value.
+
 ```bash
 # Log in to the CLI first (one-time, stores a token in your home dir):
 supabase login
@@ -87,12 +95,15 @@ supabase secrets set \
   SANDBOX_FALLBACK_RECIPIENT='mitesh@skillmeup.co' \
   NEXT_PUBLIC_SITE_URL='https://the-social-seen.com' \
   UNSUBSCRIBE_TOKEN_SECRET='<32+ random bytes, base64 or hex>' \
+  CRON_AUTH_TOKEN='<legacy-service-role-JWT, eyJ...>' \
   TWILIO_ACCOUNT_SID='AC...' \
   TWILIO_AUTH_TOKEN='...' \
   TWILIO_SENDER_ID='SocialSeen'
 ```
 
-Verify via a manual invocation:
+Verify via a manual invocation. `Authorization: Bearer` accepts either
+the auto-injected `SUPABASE_SERVICE_ROLE_KEY` (Dashboard / direct curl)
+or the explicit `CRON_AUTH_TOKEN` set above (used by pg_cron):
 
 ```bash
 curl -s -X POST \
@@ -103,30 +114,132 @@ curl -s -X POST \
 
 Expect `{ "ok": true, "counts": { ... } }`.
 
+If the response is `{"code":"UNAUTHORIZED_INVALID_JWT_FORMAT","message":"Invalid JWT"}`
+the gateway rejected your key format before the function ran — try
+the legacy JWT from `supabase projects api-keys` instead of an
+`sb_secret_*` value. If it's `{"error":"unauthorized"}` the function
+received the request but the token didn't match either env var.
+
 ---
 
 ## 3. pg_cron — daily schedule for the edge function
 
-Configured once per environment via SQL editor (not the Management
-API — it's regular postgres). Runs at 07:00 UTC every day.
+The cron schedule itself lives in a migration —
+`supabase/migrations/20260514070757_supersede_daily_notifications_schedule_with_vault_pattern.sql`
+(which supersedes the original `20260421000004_schedule_daily_notifications.sql`).
+Running migrations creates the job named `daily-notifications`.
+
+The job's command body reads both the function URL and the auth token
+from `vault.decrypted_secrets` at fire time. Two vault entries must
+exist (alongside the `CRON_AUTH_TOKEN` env var from §2) for the cron
+to actually invoke the function. Without them the job still runs daily
+but no-ops with a `RAISE NOTICE`.
+
+> ℹ️ **Why not `ALTER DATABASE SET app.settings.*`?**
+> The original migration used database-level settings. On current
+> Supabase cloud, `ALTER DATABASE postgres SET <parameter>` is blocked
+> with `42501: permission denied to set parameter` for every role
+> available to operators (`postgres`, `is_superuser=off`) — including
+> via the Dashboard SQL editor and the Management API. Vault is the
+> supported alternative; `vault.decrypted_secrets` is readable by the
+> postgres role.
+
+> ℹ️ **Why `CRON_AUTH_TOKEN` instead of just using `SUPABASE_SERVICE_ROLE_KEY`?**
+> On projects with the new API key system, `SUPABASE_SERVICE_ROLE_KEY`
+> is auto-injected in `sb_secret_*` format, which the Supabase gateway
+> rejects before the function runs (`UNAUTHORIZED_INVALID_JWT_FORMAT`)
+> — even though the function was deployed with `--no-verify-jwt`. `SUPABASE_*`
+> env names are reserved by Supabase and can't be overridden, so a
+> separate `CRON_AUTH_TOKEN` is the only way to give the function a
+> JWT-format auth value that the gateway will let through. The
+> function accepts either token; pg_cron uses the JWT-format one.
+> See `project_supabase_gateway_key_format_inconsistency.md` for the
+> full diagnostic trail (PR #105).
+
+### One-time setup (per environment)
+
+Run these in the Supabase SQL editor:
 
 ```sql
--- Enable the extension (idempotent).
+-- 1. Enable extensions (idempotent — migration also does this).
 CREATE EXTENSION IF NOT EXISTS pg_cron;
+CREATE EXTENSION IF NOT EXISTS pg_net;
+CREATE EXTENSION IF NOT EXISTS supabase_vault;
 
--- Store the function URL + service-role JWT at the DB level so the
--- cron job can invoke the edge function without secrets leaking into
--- the job definition.
-ALTER DATABASE postgres SET app.settings.edge_function_url =
-  'https://<REF>.supabase.co/functions/v1/daily-notifications';
-ALTER DATABASE postgres SET app.settings.service_role_key = '<service-role-jwt>';
+-- 2. Store the function URL in vault.
+--    Replace <REF> with the project ref from the dashboard URL.
+SELECT vault.create_secret(
+  'https://<REF>.supabase.co/functions/v1/daily-notifications',
+  'cron_edge_function_url',
+  'URL of the daily-notifications Edge Function.'
+);
 
--- The schedule itself lives in a migration (see
--- 20260421000004_schedule_daily_notifications.sql). Running the
--- migration creates / re-creates the job named 'daily-notifications'.
+-- 3. Store the auth token in vault. Use the SAME legacy-JWT value
+--    you set as CRON_AUTH_TOKEN in §2 above.
+SELECT vault.create_secret(
+  '<legacy-service-role-JWT, eyJ...>',
+  'cron_service_role_key',
+  'Service role JWT used by daily-notifications cron.'
+);
 ```
 
-List scheduled jobs:
+Then apply migrations (`supabase db push --include-all --linked`) so
+the schedule itself lands.
+
+### Post-setup verification
+
+Trigger the function manually first, to prove the function + secrets
+end-to-end:
+
+```bash
+curl -s -X POST \
+  "https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/daily-notifications" \
+  -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+  | jq '.'
+```
+
+Then trigger the cron job's own command body once to prove that path
+(reads from vault, sends auth token, function accepts). The least
+invasive way is to temporarily change the schedule to "every minute",
+wait for one run, then restore it:
+
+```sql
+-- Temporarily fire every minute:
+SELECT cron.alter_job(
+  job_id := (SELECT jobid FROM cron.job WHERE jobname = 'daily-notifications'),
+  schedule := '* * * * *'
+);
+-- Wait ~60s, then check the most recent run:
+SELECT status, return_message, start_time
+FROM cron.job_run_details
+WHERE jobid = (SELECT jobid FROM cron.job WHERE jobname = 'daily-notifications')
+ORDER BY start_time DESC LIMIT 1;
+-- Restore the daily schedule:
+SELECT cron.alter_job(
+  job_id := (SELECT jobid FROM cron.job WHERE jobname = 'daily-notifications'),
+  schedule := '0 7 * * *'
+);
+```
+
+Check the HTTP response that pg_net captured:
+
+```sql
+SELECT id, status_code, substring(content::text, 1, 200) AS body, created
+FROM net._http_response ORDER BY created DESC LIMIT 5;
+```
+
+Expected status_code = 200. Then check that notifications rows actually
+landed (will be zero unless you have a real event in the relevant
+time window; the response code is the more reliable signal):
+
+```sql
+SELECT template_name, COUNT(*)
+FROM public.notifications
+WHERE created_at > now() - interval '5 minutes'
+GROUP BY 1;
+```
+
+### Inspect the schedule
 
 ```sql
 SELECT jobname, schedule, active FROM cron.job;
@@ -291,14 +404,20 @@ Sequence to re-apply all settings from scratch:
 1. Create the new project via the Supabase dashboard.
 2. Set `SUPABASE_PROJECT_REF` to the new project's ref.
 3. Run §1 (auth config) via `curl`.
-4. Apply migrations with `supabase db push`.
-5. Deploy the edge function: `supabase functions deploy daily-notifications --no-verify-jwt`.
-6. Run §2 (edge function secrets) with production values.
-7. Run §3 (pg_cron SQL) in the SQL editor.
+4. Deploy the edge function: `supabase functions deploy daily-notifications --no-verify-jwt`.
+5. Run §2 (edge function secrets) with production values — **including
+   `CRON_AUTH_TOKEN`**.
+6. Run §3's one-time setup (the two `vault.create_secret` calls) in the
+   SQL editor. Use the SAME JWT value for `cron_service_role_key` that
+   you set as `CRON_AUTH_TOKEN` in step 5.
+7. Apply migrations with `supabase db push --include-all --linked`.
+   This installs the cron schedule. Steps 5 + 6 must already be in
+   place or the cron fires daily and no-ops with a NOTICE.
 8. Point Stripe webhook (§4) at the new project's production domain.
 9. Update Vercel envs: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`.
 10. Verify end-to-end: sign up, verify email, book a test event, check
-    Twilio + Resend logs, manually trigger daily-notifications.
+    Twilio + Resend logs, manually trigger daily-notifications (§3's
+    "Post-setup verification" block).
 
 Any step skipped will surface as "email didn't arrive" / "cron didn't
 fire" / "webhook not received" later. Faster to re-apply front-to-back
