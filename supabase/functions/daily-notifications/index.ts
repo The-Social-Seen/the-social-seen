@@ -61,6 +61,7 @@ import {
   formatLondonTime,
   londonToday,
 } from './dates.ts'
+import { isAuthorizedRequest } from './auth.ts'
 
 // Deno globals — declared for the Next.js TS build which doesn't know about Deno.
 declare const Deno: {
@@ -166,12 +167,15 @@ Deno.serve(async (req: Request) => {
   // SUPABASE_SERVICE_ROLE_KEY (Dashboard invokes, direct curl with the
   // current key format) OR an explicit CRON_AUTH_TOKEN (used by pg_cron
   // — see config block above for why this fallback exists). The anon
-  // or any user JWT is still rejected.
-  const auth = req.headers.get('authorization') ?? ''
-  const token = auth.replace(/^Bearer\s+/i, '')
-  const matchesServiceRole = SERVICE_ROLE_KEY && token === SERVICE_ROLE_KEY
-  const matchesCronToken = CRON_AUTH_TOKEN && token === CRON_AUTH_TOKEN
-  if (!matchesServiceRole && !matchesCronToken) {
+  // or any user JWT is still rejected. The predicate itself lives in
+  // ./auth.ts so it can be regression-tested without spinning up Deno.
+  if (
+    !isAuthorizedRequest(
+      req.headers.get('authorization'),
+      SERVICE_ROLE_KEY,
+      CRON_AUTH_TOKEN,
+    )
+  ) {
     return json({ error: 'unauthorized' }, 401)
   }
 
