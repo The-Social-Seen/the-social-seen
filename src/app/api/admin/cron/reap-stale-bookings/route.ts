@@ -1,44 +1,54 @@
 /**
- * Vercel-cron-driven reaper for orphan `pending_payment` bookings.
+ * Manual-probe surface for the orphan `pending_payment` booking reaper.
  *
- * Closes Task B from the 2026-04-27 Stripe-credentials-rotation
- * incident. The `book_event_paid` RPC duplicate-check
- * (migration 20260422000002, line 88) blocks any non-cancelled
- * status — including `pending_payment`. The catch block at
- * src/app/events/[slug]/actions.ts:353 is the only happy-path
- * cleanup; if the user closes the tab mid-Stripe-error or the
- * Server Action otherwise doesn't reach the catch, the orphan
- * persists forever — invisible to the user (the bookings page
- * filters `pending_payment` out) AND blocks re-booking the same
- * event. Mitesh hit this twice on 2026-04-28.
+ * SCHEDULING — this route is NOT scheduled by Vercel cron any more. The
+ * scheduled invocation runs every 15 minutes via pg_cron, installed by
+ * migration `20260515095343_reaper_pgcron_schedule.sql` (cadence string
+ * defined there in standard crontab form). That migration defines
+ * `public.reap_stale_pending_bookings()` (SECURITY DEFINER) and
+ * registers the pg_cron schedule that calls it. No env var dependency,
+ * no Bearer auth, no Sentry alarm path. As long as the DB is up, the
+ * reaper runs. The pg_cron path cannot silent-fail the way the Vercel-
+ * cron path did during the 2026-05-15 Roza incident — there were 17
+ * days of 401s because `CRON_SECRET` was unset in Vercel and the
+ * scheduled ticks were reaching this route without an `x-vercel-cron`
+ * header to fall back on. The `vercel.json` `"crons"` entry that
+ * previously pointed here was removed in the same PR as the pg_cron
+ * migration.
  *
- * Drives: Vercel cron, daily at 03:00 UTC (see vercel.json). The
- * Hobby plan caps cron frequency at once-per-day, so a stuck
- * `pending_payment` row can persist up to ~24 hours before reaping.
- * For ad-hoc cleanup during incidents, hit the route manually with
- * Bearer ${CRON_SECRET} — same code path, same safety net.
+ * WHAT THIS ROUTE IS FOR — ad-hoc manual probes during incidents. Hit
+ * it with `curl -H "Authorization: Bearer ${CRON_SECRET}" ...` to force
+ * a reap pass NOW and see the count without waiting for the next
+ * pg_cron tick. Useful when a stuck `pending_payment` is blocking a
+ * specific user from re-booking and 15 minutes is too long to wait.
  *
- * Authentication accepts EITHER:
- *   - x-vercel-cron header. Kept as a defensive fallback — Vercel does
- *     document this header as set on cron-originated requests, but the
- *     2026-05-15 Roza incident showed scheduled ticks reaching us
- *     without it on the Hobby tier. Don't rely on it as the sole auth.
- *   - Authorization: Bearer ${CRON_SECRET} — the path Vercel cron
- *     actually uses for scheduled invocations AND what manual probes
- *     use. CRON_SECRET MUST be set in Vercel env (Production) or every
- *     scheduled tick will 401 and reap zero rows. The `missing_secret`
- *     branch in `authorize()` raises a Sentry alarm so a missing env
- *     var is loud rather than silent (root cause of the 2026-05-15
- *     Roza incident — see route tests for the pinned signal).
+ * AUTHENTICATION — `Authorization: Bearer ${CRON_SECRET}`. The
+ * `x-vercel-cron` header fallback is retained as defence-in-depth, but
+ * no scheduled invocation exercises it in prod any more — there's no
+ * `vercel.json` cron entry pointing here. The fallback stays so the
+ * route still behaves correctly if a future operator re-enables a
+ * Vercel cron entry for any reason. CRON_SECRET must be set in Vercel
+ * Production env for manual probes to work.
  *
- * Note: `bad_credentials` (valid request shape, wrong bearer) is
- * deliberately NOT alarmed. That branch is dominated by probe traffic
- * and would just be noise.
+ * SENTRY — PR #107 added a missing-CRON_SECRET alarm on the
+ * `missing_secret` auth branch. We keep it: even though the scheduled
+ * invocation path is gone, a manual probe that 401s because
+ * CRON_SECRET is unset is still a useful signal that Vercel env is
+ * misconfigured. `bad_credentials` (valid request shape, wrong bearer)
+ * is deliberately NOT alarmed — that branch is dominated by probe
+ * traffic and would just be noise.
  *
- * Safety net: `stripe_payment_id IS NULL` ensures we never touch a
- * booking that actually paid. The webhook is the source of truth for
- * paid bookings and writes that column on `checkout.session.completed`.
- * `deleted_at IS NULL` skips already-soft-deleted rows.
+ * SAFETY — the inline `UPDATE` below uses the same four predicates as
+ * `public.reap_stale_pending_bookings()`:
+ *   - status = 'pending_payment'
+ *   - stripe_payment_id IS NULL  (webhook is source of truth for paid)
+ *   - deleted_at IS NULL          (skip soft-deleted rows)
+ *   - created_at < now() - 35 minutes
+ * If you change ONE, change BOTH — two paths to the same effect must
+ * stay in sync. The route test at `__tests__/route.test.ts` pins the
+ * predicate shape; if a future refactor breaks alignment with the SQL
+ * function, the route tests fail and this docstring is your starting
+ * point for re-syncing.
  */
 import 'server-only'
 import { NextRequest, NextResponse } from 'next/server'
