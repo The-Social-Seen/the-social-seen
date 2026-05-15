@@ -12,18 +12,28 @@
  * filters `pending_payment` out) AND blocks re-booking the same
  * event. Mitesh hit this twice on 2026-04-28.
  *
- * Drives: Vercel cron, every 15 min (see vercel.json). Combined
- * with the 35-min staleness threshold, max time-to-cleanup is
- * ~50 min. Stripe Checkout Sessions auto-expire at 30 min; the
- * 5-min buffer absorbs clock skew + Vercel cron drift.
+ * Drives: Vercel cron, daily at 03:00 UTC (see vercel.json). The
+ * Hobby plan caps cron frequency at once-per-day, so a stuck
+ * `pending_payment` row can persist up to ~24 hours before reaping.
+ * For ad-hoc cleanup during incidents, hit the route manually with
+ * Bearer ${CRON_SECRET} — same code path, same safety net.
  *
  * Authentication accepts EITHER:
- *   - x-vercel-cron header (set automatically by Vercel cron) — the
- *     primary auth path for the scheduled tick.
- *   - Authorization: Bearer ${CRON_SECRET} — for ad-hoc curl during
- *     ops/debug. CRON_SECRET must be set in Vercel env (Production
- *     and Preview) before manual probes will work; the cron tick
- *     does not depend on it.
+ *   - x-vercel-cron header. Kept as a defensive fallback — Vercel does
+ *     document this header as set on cron-originated requests, but the
+ *     2026-05-15 Roza incident showed scheduled ticks reaching us
+ *     without it on the Hobby tier. Don't rely on it as the sole auth.
+ *   - Authorization: Bearer ${CRON_SECRET} — the path Vercel cron
+ *     actually uses for scheduled invocations AND what manual probes
+ *     use. CRON_SECRET MUST be set in Vercel env (Production) or every
+ *     scheduled tick will 401 and reap zero rows. The `missing_secret`
+ *     branch in `authorize()` raises a Sentry alarm so a missing env
+ *     var is loud rather than silent (root cause of the 2026-05-15
+ *     Roza incident — see route tests for the pinned signal).
+ *
+ * Note: `bad_credentials` (valid request shape, wrong bearer) is
+ * deliberately NOT alarmed. That branch is dominated by probe traffic
+ * and would just be noise.
  *
  * Safety net: `stripe_payment_id IS NULL` ensures we never touch a
  * booking that actually paid. The webhook is the source of truth for
@@ -38,16 +48,39 @@ import { createAdminClient } from '@/lib/supabase/admin'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-function isAuthorized(req: NextRequest): boolean {
-  if (req.headers.get('x-vercel-cron')) return true
+type AuthResult =
+  | { ok: true }
+  | { ok: false; reason: 'missing_secret' | 'bad_credentials' }
+
+function authorize(req: NextRequest): AuthResult {
+  if (req.headers.get('x-vercel-cron')) return { ok: true }
   const expected = process.env.CRON_SECRET
-  if (!expected) return false
+  if (!expected) return { ok: false, reason: 'missing_secret' }
   const header = req.headers.get('authorization')
   return header === `Bearer ${expected}`
+    ? { ok: true }
+    : { ok: false, reason: 'bad_credentials' }
 }
 
 export async function GET(req: NextRequest): Promise<Response> {
-  if (!isAuthorized(req)) {
+  const auth = authorize(req)
+  if (!auth.ok) {
+    // Surface the env-var-missing case to Sentry — a silent 401 is how
+    // the cron sat dead for 17 days after PR #77 landed (see the
+    // 2026-05-15 Roza incident). If CRON_SECRET is missing in Vercel,
+    // every scheduled tick 401s and reaps zero rows.
+    if (auth.reason === 'missing_secret') {
+      Sentry.captureMessage(
+        'reap-stale-bookings: CRON_SECRET env var is not set — scheduled runs will all 401',
+        {
+          tags: {
+            surface: 'reap-stale-bookings',
+            reason: 'missing_secret',
+          },
+          level: 'error',
+        },
+      )
+    }
     return new NextResponse('Unauthorized', { status: 401 })
   }
 

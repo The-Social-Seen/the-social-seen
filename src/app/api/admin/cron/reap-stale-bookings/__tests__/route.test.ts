@@ -34,6 +34,7 @@ const {
   mockSelect,
   mockBreadcrumb,
   mockCapture,
+  mockCaptureMessage,
 } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockUpdate: vi.fn(),
@@ -43,6 +44,7 @@ const {
   mockSelect: vi.fn(),
   mockBreadcrumb: vi.fn(),
   mockCapture: vi.fn(),
+  mockCaptureMessage: vi.fn(),
 }))
 
 // Shared chain object. Each spy is wired to return this chain so
@@ -69,6 +71,7 @@ vi.mock('@/lib/supabase/admin', () => ({
 vi.mock('@sentry/nextjs', () => ({
   addBreadcrumb: mockBreadcrumb,
   captureException: mockCapture,
+  captureMessage: mockCaptureMessage,
 }))
 
 // Import the route AFTER vi.mock so the mocks are wired up.
@@ -95,6 +98,7 @@ beforeEach(() => {
   mockSelect.mockReset()
   mockBreadcrumb.mockReset()
   mockCapture.mockReset()
+  mockCaptureMessage.mockReset()
   process.env.CRON_SECRET = SECRET
 })
 
@@ -146,6 +150,20 @@ describe('authentication', () => {
     expect(await res.text()).toBe('Unauthorized')
     expect(mockUpdate).not.toHaveBeenCalled()
     expect(mockSelect).not.toHaveBeenCalled()
+    // Pin the Sentry signal — a silent 401 is how the reaper sat dead
+    // for 17 days after PR #77 (2026-05-15 Roza incident). Future
+    // refactors must keep this alarm wired.
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(1)
+    expect(mockCaptureMessage).toHaveBeenCalledWith(
+      expect.stringContaining('CRON_SECRET'),
+      expect.objectContaining({
+        tags: expect.objectContaining({
+          surface: 'reap-stale-bookings',
+          reason: 'missing_secret',
+        }),
+        level: 'error',
+      }),
+    )
   })
 })
 
@@ -223,7 +241,7 @@ describe('predicate shape and reaper behaviour', () => {
 
     // Zero matches is a clean success — the cron must be safely
     // re-entrant. A non-200 here would page the on-call engineer
-    // every 15 min for a non-event.
+    // on every scheduled tick for a non-event.
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.reaped).toBe(0)
