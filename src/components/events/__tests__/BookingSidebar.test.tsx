@@ -113,6 +113,8 @@ function makeBooking(overrides: Partial<Booking> = {}): Booking {
     status: 'confirmed',
     waitlist_position: null,
     price_at_booking: 3500,
+    booking_fee_pence: 0,
+    stripe_fee_pence: 0,
     booked_at: '2026-04-01T10:00:00Z',
     created_at: '2026-04-01T10:00:00Z',
     updated_at: '2026-04-01T10:00:00Z',

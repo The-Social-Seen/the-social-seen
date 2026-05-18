@@ -313,8 +313,8 @@ the-social-seen/
 | Reviews | REAL | Post-event, verified attendees only |
 | Gallery | REAL | Supabase Storage + seed Unsplash |
 | Dark mode | REAL | CSS variables + toggle |
-| Stripe payments | MOCKED | Simulated checkout, confirm flow |
-| Email notifications | MOCKED | Toast + console.log |
+| Stripe payments | REAL | Stripe Checkout (live in production). Customer charged ticket + non-refundable booking fee absorbed at point of sale. See `SYSTEM-DESIGN-refund-fee-deduction.md`. |
+| Email notifications | REAL | Resend SMTP via Supabase Auth + transactional templates in `src/lib/email/templates/`. |
 | Waitlist auto-promote | MOCKED | Manual admin action for demo |
 | Google Maps | MOCKED | Static image, link to Google Maps |
 | Social login (Google) | DEFERRED | Post-demo |

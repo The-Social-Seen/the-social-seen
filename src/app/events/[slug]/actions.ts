@@ -15,6 +15,7 @@ import {
   createBookingCheckoutSession,
   ensureStripeCustomer,
 } from '@/lib/stripe/checkout'
+import { calculateBookingFeePence } from '@/lib/utils/booking-fee'
 import type { BookingStatus } from '@/types'
 
 // ── Result type ────────���─────────────────────────────��──────────────────────
@@ -227,10 +228,31 @@ export async function createPaidCheckout(
     return { success: false, error: 'Authentication required' }
   }
 
-  // Race-safe paid booking. Inserts pending_payment or waitlisted.
+  // Read the event BEFORE calling the RPC — we need event.price to
+  // compute the booking fee, which the RPC persists alongside the row.
+  // The architect's spec §3.5 calls out this read-then-RPC ordering
+  // explicitly (was previously read inside the Stripe block).
+  const { data: eventForFee, error: eventForFeeError } = await supabase
+    .from('events')
+    .select('title, slug, price')
+    .eq('id', eventId)
+    .single()
+
+  if (eventForFeeError || !eventForFee) {
+    return { success: false, error: 'Event not found' }
+  }
+
+  const bookingFeePence = calculateBookingFeePence(eventForFee.price)
+
+  // Race-safe paid booking. Inserts pending_payment or waitlisted, with
+  // the fee snapshot stamped on the row.
   const { data: rpcData, error: rpcError } = await supabase.rpc(
     'book_event_paid',
-    { p_user_id: user.id, p_event_id: eventId },
+    {
+      p_user_id: user.id,
+      p_event_id: eventId,
+      p_booking_fee_pence: bookingFeePence,
+    },
   )
 
   if (rpcError) {
@@ -275,24 +297,16 @@ export async function createPaidCheckout(
 
   // ── Create Stripe Checkout Session ────────────────────────────────────
   try {
-    // Fetch event + profile for Checkout line-items and Customer.
-    const [eventRes, profileRes] = await Promise.all([
-      supabase
-        .from('events')
-        .select('title, slug, price')
-        .eq('id', eventId)
-        .single(),
-      supabase
-        .from('profiles')
-        .select('full_name, email')
-        .eq('id', user.id)
-        .single(),
-    ])
+    // Fetch profile for Stripe Customer (event already fetched above
+    // for the fee computation; reuse).
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('full_name, email')
+      .eq('id', user.id)
+      .single()
 
-    const event = eventRes.data
-    const profile = profileRes.data
-    if (!event || !profile?.email) {
-      throw new Error('Missing event or profile data for checkout')
+    if (profileError || !profile?.email) {
+      throw new Error('Missing profile data for checkout')
     }
 
     // Lazy-customer-create uses the admin client because it writes back
@@ -307,17 +321,18 @@ export async function createPaidCheckout(
     })
 
     const origin = await resolveOrigin()
-    const successUrl = `${origin}/events/${event.slug}/booking-success?session_id={CHECKOUT_SESSION_ID}`
-    const cancelUrl = `${origin}/events/${event.slug}?cancelled=1`
+    const successUrl = `${origin}/events/${eventForFee.slug}/booking-success?session_id={CHECKOUT_SESSION_ID}`
+    const cancelUrl = `${origin}/events/${eventForFee.slug}?cancelled=1`
 
     const { sessionId, url } = await createBookingCheckoutSession({
       bookingId,
       userId: user.id,
       userEmail: profile.email,
       eventId,
-      eventTitle: event.title,
-      eventSlug: event.slug,
-      priceInPence: event.price,
+      eventTitle: eventForFee.title,
+      eventSlug: eventForFee.slug,
+      priceInPence: eventForFee.price,
+      bookingFeePence,
       successUrl,
       cancelUrl,
       stripeCustomerId,
@@ -397,9 +412,29 @@ export async function claimWaitlistSpot(
     return { success: false, error: 'Authentication required' }
   }
 
+  // Read the event BEFORE calling the RPC — we need event.price to
+  // compute the booking fee, which the RPC persists onto the row when
+  // transitioning waitlisted → pending_payment. Same pattern as
+  // createPaidCheckout. Free events get a fee of 0.
+  const { data: eventForFee, error: eventForFeeError } = await supabase
+    .from('events')
+    .select('title, slug, price')
+    .eq('id', eventId)
+    .single()
+
+  if (eventForFeeError || !eventForFee) {
+    return { success: false, error: 'Event not found' }
+  }
+
+  const bookingFeePence = calculateBookingFeePence(eventForFee.price)
+
   const { data: rpcData, error: rpcError } = await supabase.rpc(
     'claim_waitlist_spot',
-    { p_user_id: user.id, p_event_id: eventId },
+    {
+      p_user_id: user.id,
+      p_event_id: eventId,
+      p_booking_fee_pence: bookingFeePence,
+    },
   )
 
   if (rpcError) {
@@ -444,23 +479,14 @@ export async function claimWaitlistSpot(
   // rather than cancelling (the user shouldn't lose their waitlist
   // entry because our payment provider hiccuped).
   try {
-    const [eventRes, profileRes] = await Promise.all([
-      supabase
-        .from('events')
-        .select('title, slug, price')
-        .eq('id', eventId)
-        .single(),
-      supabase
-        .from('profiles')
-        .select('full_name, email')
-        .eq('id', user.id)
-        .single(),
-    ])
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('full_name, email')
+      .eq('id', user.id)
+      .single()
 
-    const event = eventRes.data
-    const profile = profileRes.data
-    if (!event || !profile?.email) {
-      throw new Error('Missing event or profile data for checkout')
+    if (profileError || !profile?.email) {
+      throw new Error('Missing profile data for checkout')
     }
 
     const admin = createAdminClient()
@@ -471,20 +497,21 @@ export async function claimWaitlistSpot(
     })
 
     const origin = await resolveOrigin()
-    const successUrl = `${origin}/events/${event.slug}/booking-success?session_id={CHECKOUT_SESSION_ID}`
+    const successUrl = `${origin}/events/${eventForFee.slug}/booking-success?session_id={CHECKOUT_SESSION_ID}`
     // Cancel goes back to the event page with claim=1 so the waitlist
     // user can try again if they want. `cancelled=1` triggers the
     // abandon-pending handler which flips them back to waitlisted.
-    const cancelUrl = `${origin}/events/${event.slug}?cancelled=1&from=claim`
+    const cancelUrl = `${origin}/events/${eventForFee.slug}?cancelled=1&from=claim`
 
     const { sessionId, url } = await createBookingCheckoutSession({
       bookingId,
       userId: user.id,
       userEmail: profile.email,
       eventId,
-      eventTitle: event.title,
-      eventSlug: event.slug,
-      priceInPence: event.price,
+      eventTitle: eventForFee.title,
+      eventSlug: eventForFee.slug,
+      priceInPence: eventForFee.price,
+      bookingFeePence,
       successUrl,
       cancelUrl,
       stripeCustomerId,
@@ -607,8 +634,10 @@ export async function abandonPendingCheckout(
  *   - Paid events, refund_window_hours = 0: status → cancelled, NO
  *     refund (event is non-refundable by configuration).
  *   - Paid events, hoursUntilEvent > refund_window_hours: status →
- *     cancelled, full Stripe refund issued. stripe_refund_id +
- *     refunded_amount_pence recorded.
+ *     cancelled, PARTIAL Stripe refund of price_at_booking ONLY.
+ *     The booking_fee_pence is NOT refunded — it covers Stripe's
+ *     processing cost on the original charge. stripe_refund_id +
+ *     refunded_amount_pence (= price_at_booking) recorded.
  *   - Paid events, hoursUntilEvent ≤ refund_window_hours: status →
  *     cancelled, NO refund. `refundEligible: false` in the result so
  *     the UI can show the policy line without sending a second API
@@ -617,11 +646,21 @@ export async function abandonPendingCheckout(
  * `refund_window_hours` is per-event (defaults to 48). 0 is the
  * sentinel for "non-refundable".
  *
+ * The booking_fee_pence is non-refundable on USER-initiated cancellation
+ * — see SYSTEM-DESIGN-refund-fee-deduction.md. On ADMIN-initiated event
+ * cancellation (cancelEventAndRefundBookings) the platform refunds the
+ * full price_at_booking + booking_fee_pence; that's a different code
+ * path (admin/actions.ts).
+ *
  * After a successful cancel (any branch), we fire-and-forget a "spot
  * available" email to every remaining waitlisted member. First-to-pay
  * wins — no staggering, no auto-promote.
  *
  * Refund correctness:
+ *   - The refund API call passes an explicit `amount: price_at_booking`
+ *     so Stripe issues a PARTIAL refund. Without this, Stripe would
+ *     refund the full charge (price + fee) and the platform would lose
+ *     the fee — that's the bug this whole feature fixes.
  *   - Refund API call happens BEFORE the status UPDATE. A failed refund
  *     aborts the cancellation (user keeps their spot, sees the error,
  *     can retry or contact support).
@@ -631,6 +670,10 @@ export async function abandonPendingCheckout(
  *   - The partial UNIQUE index `ux_bookings_stripe_refund_id` prevents
  *     the same refund id from being recorded on two rows (defence in
  *     depth; not reachable under normal flow).
+ *   - Stripe's idempotency-key semantics: the key (refund-booking-{id})
+ *     is unchanged. A second call with the same key returns the SAME
+ *     refund object regardless of the new `amount` arg, so a tight
+ *     double-click still hits the same partial refund.
  */
 export async function cancelBooking(bookingId: string): Promise<ActionResult> {
   if (!bookingId) {
@@ -708,6 +751,14 @@ export async function cancelBooking(bookingId: string): Promise<ActionResult> {
       const refund = await stripe.refunds.create(
         {
           payment_intent: booking.stripe_payment_id!,
+          // Refund only the ticket price. The booking fee is
+          // non-refundable on user-initiated cancellations — it covers
+          // Stripe's processing cost on the original charge. WITHOUT
+          // this `amount` arg, Stripe would issue a FULL refund of the
+          // original charge (price + fee), defeating the whole
+          // refund-fee-deduction policy. See
+          // SYSTEM-DESIGN-refund-fee-deduction.md §6.
+          amount: booking.price_at_booking,
           // Reason surfaces in the Stripe dashboard — helpful when an
           // admin is auditing refund volumes.
           reason: 'requested_by_customer',

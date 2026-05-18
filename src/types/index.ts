@@ -127,6 +127,24 @@ export interface Booking {
   status:           BookingStatus
   waitlist_position: number | null
   price_at_booking: number   // pence snapshot at time of booking
+  /**
+   * Non-refundable booking fee charged on top of price_at_booking at
+   * checkout. Snapshot at row creation; never updates after that.
+   * 0 for free events and pre-migration rows.
+   * Added by migration 20260517000001 (refund-fee-deduction).
+   * Refund policy:
+   *   - User-initiated cancellation: NOT refunded (covers Stripe fee).
+   *   - Admin-initiated event cancellation: refunded (platform absorbs).
+   */
+  booking_fee_pence: number
+  /**
+   * Actual Stripe processing fee captured from BalanceTransaction.fee
+   * in the checkout.session.completed webhook. Reporting / reconciliation
+   * only — NOT used in any refund formula.
+   * 0 for free events and if the webhook lookup failed (non-blocking).
+   * Added by migration 20260517000001 (refund-fee-deduction).
+   */
+  stripe_fee_pence:  number
   booked_at:        string
   created_at:       string
   updated_at:       string

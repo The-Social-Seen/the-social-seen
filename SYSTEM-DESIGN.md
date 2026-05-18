@@ -910,6 +910,16 @@ When admin promotes from waitlist:
 
 **Impact:** One custom hook: `use-realtime-count.ts`. Subscribe to `bookings` table changes filtered by `event_id`. Cleanup on unmount. All other pages use server-fetched data.
 
+### ADR-14: Non-refundable Booking Fee Absorbed at Checkout
+
+**Decision:** A small per-booking fee covers Stripe's processing cost (~1.5% + 20p). Charged on top of the ticket price as an inclusive total at point of sale. Non-refundable on user-initiated cancellations; refunded in full on admin-initiated event cancellations.
+
+**Rationale:** Without this, the platform loses Stripe's fee on every cancellation inside the 48h refund window because `stripe.refunds.create` without an explicit `amount` defaults to a full refund.
+
+**Impact:** New columns `bookings.booking_fee_pence` and `bookings.stripe_fee_pence`. Updated `book_event_paid()` and `claim_waitlist_spot()` RPCs (3-arg signatures). `cancelBooking` issues partial refunds (`amount: price_at_booking`). New `cancelEventAndRefundBookings()` admin Server Action with bulk-refund + email cancellation flow.
+
+**Reference:** See `SYSTEM-DESIGN-refund-fee-deduction.md` for full schema, copy, and edge-case decisions.
+
 ---
 
 ## 7. Open Questions

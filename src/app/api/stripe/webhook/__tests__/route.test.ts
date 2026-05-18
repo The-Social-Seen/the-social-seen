@@ -4,10 +4,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 // All mocks must be set up before importing the route module.
 
 const constructEventMock = vi.fn()
+// refund-fee-deduction: webhook now retrieves the PaymentIntent to read
+// the BalanceTransaction.fee and write it to bookings.stripe_fee_pence.
+// Default to a valid-but-empty PaymentIntent so tests that don't care
+// about the BalanceTransaction path still pass.
+const paymentIntentsRetrieveMock = vi.fn()
 
 vi.mock('@/lib/stripe/server', () => ({
   getStripeClient: () => ({
     webhooks: { constructEvent: constructEventMock },
+    paymentIntents: { retrieve: paymentIntentsRetrieveMock },
   }),
 }))
 
@@ -74,6 +80,14 @@ describe('POST /api/stripe/webhook', () => {
     vi.stubEnv('STRIPE_WEBHOOK_SECRET', 'whsec_test')
     vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test_mock')
     constructEventMock.mockReset()
+    // Default the PaymentIntent retrieve mock to "no expanded charge" so
+    // tests that exercise non-BalanceTransaction paths don't accidentally
+    // write stripe_fee_pence. Specific tests override.
+    paymentIntentsRetrieveMock.mockReset()
+    paymentIntentsRetrieveMock.mockResolvedValue({
+      id: 'pi_default',
+      latest_charge: null,
+    })
   })
 
   afterEach(() => {
@@ -407,5 +421,194 @@ describe('POST /api/stripe/webhook', () => {
     const res = await POST(makeRequest('{}', 't=1,v1=sig'))
     expect(res.status).toBe(200)
     expect(supabaseHandle.chain.update).not.toHaveBeenCalled()
+  })
+
+  // ── refund-fee-deduction: stripe_fee_pence capture ─────────────────────
+  //
+  // After confirming the booking row on checkout.session.completed, the
+  // webhook retrieves the PaymentIntent with the BalanceTransaction
+  // expansion and writes the actual processing fee to
+  // bookings.stripe_fee_pence (reporting only — not used in refund math).
+
+  it('writes stripe_fee_pence after confirming the booking', async () => {
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    // First UPDATE returns the confirmed booking (status flip).
+    // The second UPDATE (stripe_fee_pence write) awaits the chain
+    // directly with no .maybeSingle() so the chain shape is enough.
+    supabaseHandle.maybeSingle.mockResolvedValue({
+      data: { id: 'b1', user_id: 'u1', event_id: 'e1' },
+      error: null,
+    })
+    // The email-send path triggers SELECTs (profile, event, booking).
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: { full_name: 'Charlotte', email: 'ch@example.com' },
+      error: null,
+    })
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: {
+        title: 'Wine & Wisdom',
+        slug: 'wine-wisdom',
+        date_time: '2026-05-07T19:00:00Z',
+        venue_name: 'Cellar',
+        venue_address: '1 Bank End',
+        venue_revealed: true,
+      },
+      error: null,
+    })
+
+    // PaymentIntent.retrieve resolves with the expanded BalanceTransaction.
+    paymentIntentsRetrieveMock.mockResolvedValueOnce({
+      id: 'pi_456',
+      latest_charge: {
+        id: 'ch_789',
+        balance_transaction: {
+          id: 'txn_abc',
+          // 41p — typical UK domestic card on a ~£20 charge.
+          fee: 41,
+        },
+      },
+    })
+
+    constructEventMock.mockReturnValue({
+      type: 'checkout.session.completed',
+      data: {
+        object: {
+          id: 'cs_123',
+          payment_status: 'paid',
+          payment_intent: 'pi_456',
+          metadata: { booking_id: 'b1' },
+        },
+      },
+    })
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+
+    // The retrieve call must request the expanded chain.
+    expect(paymentIntentsRetrieveMock).toHaveBeenCalledWith(
+      'pi_456',
+      expect.objectContaining({
+        expand: expect.arrayContaining(['latest_charge.balance_transaction']),
+      }),
+    )
+
+    // The chain.update was called at least twice: once for the booking
+    // confirmation, once for the stripe_fee_pence write. Find the call
+    // with stripe_fee_pence in the payload.
+    const updateCalls = (supabaseHandle.chain.update as ReturnType<typeof vi.fn>).mock.calls
+    const feeWrite = updateCalls.find(
+      (c) =>
+        (c[0] as Record<string, unknown>).stripe_fee_pence === 41,
+    )
+    expect(feeWrite).toBeTruthy()
+  })
+
+  it('continues when BalanceTransaction retrieve throws (booking still confirmed)', async () => {
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    supabaseHandle.maybeSingle.mockResolvedValue({
+      data: { id: 'b1', user_id: 'u1', event_id: 'e1' },
+      error: null,
+    })
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: { full_name: 'Charlotte', email: 'ch@example.com' },
+      error: null,
+    })
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: {
+        title: 'Wine & Wisdom',
+        slug: 'wine-wisdom',
+        date_time: '2026-05-07T19:00:00Z',
+        venue_name: 'Cellar',
+        venue_address: '1 Bank End',
+        venue_revealed: true,
+      },
+      error: null,
+    })
+
+    paymentIntentsRetrieveMock.mockRejectedValueOnce(
+      new Error('Stripe is down'),
+    )
+
+    constructEventMock.mockReturnValue({
+      type: 'checkout.session.completed',
+      data: {
+        object: {
+          id: 'cs_123',
+          payment_status: 'paid',
+          payment_intent: 'pi_456',
+          metadata: { booking_id: 'b1' },
+        },
+      },
+    })
+
+    // The webhook must still return 200 and the booking-confirm UPDATE
+    // must have fired. The fee-write UPDATE is silently skipped.
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+    const updateCalls = (supabaseHandle.chain.update as ReturnType<typeof vi.fn>).mock.calls
+    // The booking confirm payload includes status: 'confirmed'.
+    const confirm = updateCalls.find(
+      (c) => (c[0] as Record<string, unknown>).status === 'confirmed',
+    )
+    expect(confirm).toBeTruthy()
+    // No fee-write occurred (the throw happened before the UPDATE).
+    const feeWrite = updateCalls.find(
+      (c) => 'stripe_fee_pence' in (c[0] as Record<string, unknown>),
+    )
+    expect(feeWrite).toBeUndefined()
+  })
+
+  it('skips fee write when latest_charge is missing from the PaymentIntent', async () => {
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    supabaseHandle.maybeSingle.mockResolvedValue({
+      data: { id: 'b1', user_id: 'u1', event_id: 'e1' },
+      error: null,
+    })
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: { full_name: 'Charlotte', email: 'ch@example.com' },
+      error: null,
+    })
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: {
+        title: 'Wine & Wisdom',
+        slug: 'wine-wisdom',
+        date_time: '2026-05-07T19:00:00Z',
+        venue_name: 'Cellar',
+        venue_address: '1 Bank End',
+        venue_revealed: true,
+      },
+      error: null,
+    })
+
+    paymentIntentsRetrieveMock.mockResolvedValueOnce({
+      id: 'pi_456',
+      latest_charge: null, // Stripe didn't expand it for some reason
+    })
+
+    constructEventMock.mockReturnValue({
+      type: 'checkout.session.completed',
+      data: {
+        object: {
+          id: 'cs_123',
+          payment_status: 'paid',
+          payment_intent: 'pi_456',
+          metadata: { booking_id: 'b1' },
+        },
+      },
+    })
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+    const updateCalls = (supabaseHandle.chain.update as ReturnType<typeof vi.fn>).mock.calls
+    const feeWrite = updateCalls.find(
+      (c) => 'stripe_fee_pence' in (c[0] as Record<string, unknown>),
+    )
+    expect(feeWrite).toBeUndefined()
   })
 })

@@ -185,6 +185,15 @@ async function handleCheckoutCompleted(
     return
   }
 
+  // Capture the ACTUAL Stripe processing fee for reporting. Non-blocking
+  // — a failed BalanceTransaction lookup must not block confirmation
+  // (which has already happened above). Refund math does NOT use this
+  // value; it exists purely for admin reconciliation.
+  await captureStripeFeeForBooking({
+    bookingId: updated.id,
+    paymentIntentId,
+  })
+
   // Send the confirmation email. Non-blocking — Resend downtime mustn't
   // cause Stripe to retry.
   void sendPaidBookingConfirmationEmail({
@@ -193,13 +202,96 @@ async function handleCheckoutCompleted(
   })
 }
 
+/**
+ * Retrieves the BalanceTransaction for a PaymentIntent's latest charge
+ * and writes the actual processing fee to bookings.stripe_fee_pence.
+ *
+ * Reporting only — refunds always use price_at_booking, not this value.
+ *
+ * Failure modes are all logged-and-swallowed. The booking is already
+ * confirmed by the time this is called; nothing about the user
+ * experience depends on this lookup succeeding. A failed write leaves
+ * stripe_fee_pence at the default 0; admin reconciliation tooling can
+ * backfill from Stripe if needed.
+ *
+ * Idempotency: the UPDATE is guarded with `.eq('stripe_fee_pence', 0)`.
+ * If a `checkout.session.completed` re-delivery (or a manual ops
+ * reconciliation) has already set the column, we don't overwrite.
+ * First-write-wins.
+ */
+async function captureStripeFeeForBooking(args: {
+  bookingId: string
+  paymentIntentId: string
+}): Promise<void> {
+  try {
+    const stripe = getStripeClient()
+    const pi = await stripe.paymentIntents.retrieve(args.paymentIntentId, {
+      expand: ['latest_charge.balance_transaction'],
+    })
+
+    const latestCharge = pi.latest_charge
+    if (!latestCharge || typeof latestCharge === 'string') {
+      console.warn(
+        '[stripe/webhook] PaymentIntent missing expanded latest_charge:',
+        args.paymentIntentId,
+      )
+      return
+    }
+
+    const bt = latestCharge.balance_transaction
+    if (!bt || typeof bt === 'string') {
+      console.warn(
+        '[stripe/webhook] Charge missing expanded balance_transaction:',
+        latestCharge.id,
+      )
+      return
+    }
+
+    // BalanceTransaction.fee is in the smallest currency unit (pence for GBP).
+    const feePence = bt.fee
+    if (typeof feePence !== 'number' || feePence < 0) {
+      console.warn(
+        '[stripe/webhook] BalanceTransaction has invalid fee:',
+        feePence,
+      )
+      return
+    }
+
+    const admin = createAdminClient()
+    const { error } = await admin
+      .from('bookings')
+      .update({ stripe_fee_pence: feePence })
+      .eq('id', args.bookingId)
+      // First-write-wins: don't overwrite if a later webhook re-delivery
+      // or a manual reconciliation has already set the column.
+      .eq('stripe_fee_pence', 0)
+
+    if (error) {
+      console.warn(
+        '[stripe/webhook] Failed to write stripe_fee_pence:',
+        error.message,
+      )
+    }
+  } catch (err) {
+    // Network blip, Stripe outage, rate limit — log and move on. The
+    // booking is confirmed; this is reporting metadata.
+    console.warn(
+      '[stripe/webhook] captureStripeFeeForBooking threw:',
+      err instanceof Error ? err.message : err,
+    )
+  }
+}
+
 async function sendPaidBookingConfirmationEmail(args: {
   userId: string
   eventId: string
 }): Promise<void> {
   try {
     const admin = createAdminClient()
-    const [profileRes, eventRes] = await Promise.all([
+    // Look up the most-recent confirmed booking for this user/event so
+    // the email can show the ticket+fee breakdown. The booking has just
+    // been confirmed by the calling code, so it's guaranteed present.
+    const [profileRes, eventRes, bookingRes] = await Promise.all([
       admin
         .from('profiles')
         .select('full_name, email')
@@ -210,6 +302,16 @@ async function sendPaidBookingConfirmationEmail(args: {
         .select('title, slug, date_time, venue_name, venue_address, venue_revealed')
         .eq('id', args.eventId)
         .single(),
+      admin
+        .from('bookings')
+        .select('price_at_booking, booking_fee_pence')
+        .eq('user_id', args.userId)
+        .eq('event_id', args.eventId)
+        .eq('status', 'confirmed')
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
     ])
 
     const profile = profileRes.data
@@ -220,6 +322,20 @@ async function sendPaidBookingConfirmationEmail(args: {
       )
       return
     }
+
+    // Build the breakdown only for paid bookings (price > 0). Missing
+    // bookingRes is non-fatal — we still send the confirmation, just
+    // without the price table.
+    const booking = bookingRes?.data
+    const priceBreakdown =
+      booking && booking.price_at_booking > 0
+        ? {
+            ticketPence: booking.price_at_booking,
+            feePence: booking.booking_fee_pence ?? 0,
+            totalPence:
+              booking.price_at_booking + (booking.booking_fee_pence ?? 0),
+          }
+        : undefined
 
     const tpl = bookingConfirmationTemplate({
       fullName: profile.full_name?.trim() || 'there',
@@ -232,6 +348,7 @@ async function sendPaidBookingConfirmationEmail(args: {
       venueRevealed: event.venue_revealed,
       status: 'confirmed',
       waitlistPosition: null,
+      priceBreakdown,
     })
 
     await sendEmail({
