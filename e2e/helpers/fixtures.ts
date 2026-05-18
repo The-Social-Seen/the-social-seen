@@ -36,6 +36,12 @@ export interface CreateUserOpts {
   status?: UserStatus
   emailVerified?: boolean
   tag?: string
+  /**
+   * If 'admin', the seeded profile row is updated to role='admin' so
+   * the user passes the `requireAdmin()` gate on admin Server Actions
+   * and pages. Default 'member'.
+   */
+  role?: 'member' | 'admin'
 }
 
 /**
@@ -55,6 +61,7 @@ export async function createTestUser(
     status = 'active',
     emailVerified = true,
     tag = 'user',
+    role = 'member',
   } = opts
   const suffix = Math.random().toString(36).slice(2, 8)
   const email = `${E2E_EMAIL_PREFIX}${tag}-${suffix}@test.local`
@@ -77,6 +84,10 @@ export async function createTestUser(
       email_verified: emailVerified,
       status,
       full_name: `E2E ${tag}`,
+      // Default trigger sets role='member'. Only overwrite when caller
+      // explicitly asks for admin — keeps the seam tight (no accidental
+      // privilege grants).
+      ...(role === 'admin' ? { role: 'admin' } : {}),
     })
     .eq('id', created.user.id)
   if (updateErr) {

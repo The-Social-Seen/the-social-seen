@@ -19,6 +19,11 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/app/(admin)/admin/actions', () => ({
   softDeleteEvent: vi.fn(),
+  // refund-fee-deduction: EventsTable now imports these for the new
+  // "Cancel & Refund" mobile + desktop action. Mock to no-op stubs so
+  // the import resolves without touching real Supabase/Stripe.
+  cancelEventAndRefundBookings: vi.fn(),
+  getEventCancelPreview: vi.fn(),
 }))
 
 import EventsTable from '../EventsTable'
@@ -145,6 +150,105 @@ describe('EventsTable — mobile pass', () => {
     )
     const mobileCard = container.querySelector('ul.md\\:hidden article') as HTMLElement
     expect(mobileCard.textContent).toContain('Cancelled')
+  })
+
+  // ── refund-fee-deduction: new Cancel & Refund mobile button ───────────────
+  //
+  // Spec §8.8: the new admin "Cancel & Refund" action surfaces as a
+  // SECOND row beneath the existing 3-button primary action row so it
+  // doesn't crowd Edit/Bookings/Delete at 320px. These tests pin:
+  //   - the new button exists on a non-cancelled event,
+  //   - it carries a visible label (not icon-only) for mobile clarity,
+  //   - touch target ≥ 44px,
+  //   - it is HIDDEN on already-cancelled events (no double-cancel),
+  //   - the existing primary-row tests above (Edit/Bookings/Delete = 3
+  //     buttons) still pass — the new button lives in its own row.
+
+  it('mobile card renders a "Cancel & Refund" button as a separate row on non-cancelled events', () => {
+    const { container } = render(<EventsTable events={[baseEvent()]} />)
+    const mobileCard = container.querySelector('ul.md\\:hidden article') as HTMLElement
+    expect(mobileCard).toBeTruthy()
+
+    // The new button is rendered with a visible label so admin can
+    // tap it deliberately on mobile. Substring match because the
+    // button uses `Cancel &amp; Refund` (HTML entity).
+    const cancelBtn = [...mobileCard.querySelectorAll('button')].find((b) =>
+      /Cancel.*Refund/.test(b.textContent ?? ''),
+    )
+    expect(cancelBtn).toBeTruthy()
+
+    // The button is NOT inside the primary 3-button action row — that
+    // row is the one with `div.border-t`. The new button lives in its
+    // own `div.pt-2` block so it appears as a SECOND row, preserving
+    // the existing 3-buttons-in-primary-row contract.
+    const primaryActionRow = mobileCard.querySelector('div.border-t') as HTMLElement
+    expect(primaryActionRow.contains(cancelBtn!)).toBe(false)
+  })
+
+  it('mobile Cancel & Refund button has min-h-[44px] touch target', () => {
+    const { container } = render(<EventsTable events={[baseEvent()]} />)
+    const mobileCard = container.querySelector('ul.md\\:hidden article') as HTMLElement
+    const cancelBtn = [...mobileCard.querySelectorAll('button')].find((b) =>
+      /Cancel.*Refund/.test(b.textContent ?? ''),
+    ) as HTMLButtonElement
+
+    expect(cancelBtn.className).toContain('min-h-[44px]')
+  })
+
+  it('mobile Cancel & Refund button is HIDDEN on already-cancelled events', () => {
+    // Re-cancelling a cancelled event would loop the admin through the
+    // refund flow on rows with no money to move. Hidden by design.
+    const { container } = render(
+      <EventsTable events={[baseEvent({ is_cancelled: true })]} />,
+    )
+    const mobileCard = container.querySelector('ul.md\\:hidden article') as HTMLElement
+    const cancelBtn = [...mobileCard.querySelectorAll('button')].find((b) =>
+      /Cancel.*Refund/.test(b.textContent ?? ''),
+    )
+    expect(cancelBtn).toBeUndefined()
+  })
+
+  it('desktop Cancel & Refund icon button has min-w-[44px] min-h-[44px] for accessibility parity', () => {
+    // Desktop uses the compact icon-only version. CLAUDE.md mandates
+    // 44×44 touch target on every interactive element across viewports.
+    const { container } = render(<EventsTable events={[baseEvent()]} />)
+    const desktop = container.querySelector('div.hidden.md\\:block') as HTMLElement
+    const cancelBtn = [...desktop.querySelectorAll('button')].find((b) =>
+      /Cancel and refund/i.test(b.getAttribute('aria-label') ?? ''),
+    ) as HTMLButtonElement | undefined
+
+    expect(cancelBtn).toBeTruthy()
+    expect(cancelBtn!.className).toContain('min-w-[44px]')
+    expect(cancelBtn!.className).toContain('min-h-[44px]')
+  })
+
+  it('desktop Cancel & Refund icon button is HIDDEN on already-cancelled events', () => {
+    const { container } = render(
+      <EventsTable events={[baseEvent({ is_cancelled: true })]} />,
+    )
+    const desktop = container.querySelector('div.hidden.md\\:block') as HTMLElement
+    const cancelBtn = [...desktop.querySelectorAll('button')].find((b) =>
+      /Cancel and refund/i.test(b.getAttribute('aria-label') ?? ''),
+    )
+    expect(cancelBtn).toBeUndefined()
+  })
+
+  it('preserves the existing 3-buttons-in-primary-row contract (Edit / Bookings / Delete still exactly 3)', () => {
+    // Regression pin. Frontend handover flagged that the new Cancel &
+    // Refund button COULD have been added as a 4th button in the
+    // primary row — that would have squeezed the row at 320px. The
+    // implementation puts the new button in its own row instead. This
+    // test fails loudly if a future refactor re-introduces a 4th
+    // button in the primary action row.
+    const { container } = render(<EventsTable events={[baseEvent()]} />)
+    const mobileCard = container.querySelector('ul.md\\:hidden article') as HTMLElement
+    const primaryActionRow = mobileCard.querySelector('div.border-t') as HTMLElement
+
+    const actions = primaryActionRow.querySelectorAll('a, button')
+    // EXACTLY 3 — not 4, not more. The new button must NOT crowd this row.
+    expect(actions.length).toBe(3)
+    const labels = [...actions].map((a) => a.textContent?.trim())
+    expect(labels).toEqual(['Edit', 'Bookings', 'Delete'])
   })
 })
 
