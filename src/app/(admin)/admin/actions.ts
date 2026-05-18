@@ -835,6 +835,76 @@ export async function cancelEvent(eventId: string) {
   return { success: true }
 }
 
+// ── getEventCancelPreview ────────────────────────────────────────────────────
+
+/**
+ * Counts shown in the admin "Cancel & Refund" confirm modal.
+ *
+ * Read-only preview helper — does NOT mutate. Lets the UI pick the right
+ * copy variant (paid / free / waitlist-only / zero) and show the exact
+ * total refund amount before the admin commits.
+ *
+ * `totalRefundPence` is `SUM(price_at_booking + booking_fee_pence)`
+ * across confirmed bookings — the same formula the real cancel action
+ * uses (spec §8.8). Computed in this helper rather than the client so
+ * the admin sees the truth from the database, not the eventually-stale
+ * EventWithStats aggregate.
+ */
+export interface EventCancelPreview {
+  confirmedPaid: number
+  confirmedFree: number
+  waitlisted: number
+  totalRefundPence: number
+}
+
+export async function getEventCancelPreview(
+  eventId: string,
+): Promise<EventCancelPreview> {
+  await requireAdmin()
+
+  if (!eventId) throw new Error('Event ID is required')
+
+  // Use the admin client so the count works regardless of the per-row
+  // RLS gating — same pattern as cancelEventAndRefundBookings's loop.
+  const admin = createAdminClient()
+
+  const { data, error } = await admin
+    .from('bookings')
+    .select('status, price_at_booking, booking_fee_pence')
+    .eq('event_id', eventId)
+    .in('status', ['confirmed', 'waitlisted'])
+    .is('deleted_at', null)
+
+  if (error) {
+    throw new Error(`Failed to fetch booking preview: ${error.message}`)
+  }
+
+  const preview: EventCancelPreview = {
+    confirmedPaid: 0,
+    confirmedFree: 0,
+    waitlisted: 0,
+    totalRefundPence: 0,
+  }
+
+  for (const row of data ?? []) {
+    if (row.status === 'waitlisted') {
+      preview.waitlisted += 1
+      continue
+    }
+    // confirmed
+    const price = row.price_at_booking ?? 0
+    const fee = row.booking_fee_pence ?? 0
+    if (price > 0) {
+      preview.confirmedPaid += 1
+      preview.totalRefundPence += price + fee
+    } else {
+      preview.confirmedFree += 1
+    }
+  }
+
+  return preview
+}
+
 // ── cancelEventAndRefundBookings ─────────────────────────────────────────────
 
 /**

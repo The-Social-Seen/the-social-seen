@@ -72,7 +72,7 @@ export default async function CancellationConfirmedPage({
             <span className="font-semibold text-text-primary">
               {formatPrice(refundedPence)}
             </span>{' '}
-            to your card. Refunds usually appear within 2&ndash;3 working
+            to your card. Refunds usually appear within 5&ndash;10 working
             days. We hope to see you at another event soon.
           </p>
         ) : noRefundIssued ? (
