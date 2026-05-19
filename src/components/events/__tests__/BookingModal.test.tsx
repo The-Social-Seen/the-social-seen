@@ -286,6 +286,11 @@ describe('BookingModal', () => {
     expect(screen.getByText('£20.00')).toBeTruthy()
     expect(screen.getByText('£0.60')).toBeTruthy()
     expect(screen.getByText('£20.60')).toBeTruthy()
+    // Pre-purchase disclosure that the booking fee is non-refundable —
+    // pinned so it can't drift back to "good-to-have, not required".
+    expect(
+      screen.getByText(/Non-refundable if you cancel/i),
+    ).toBeTruthy()
     // Legacy "1 spot × £20" rendering must NOT appear for paid events.
     expect(screen.queryByText(/1 spot ×/)).toBeNull()
   })

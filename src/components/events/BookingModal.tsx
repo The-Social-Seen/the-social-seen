@@ -365,22 +365,27 @@ function PriceBreakdown({ pricePence }: { pricePence: number }) {
   const totalPence = pricePence + feePence;
 
   return (
-    <dl className="space-y-2 text-sm">
-      <div className="flex items-center justify-between">
-        <dt className="text-text-primary/60">Ticket</dt>
-        <dd className="text-text-primary">{formatPriceExact(pricePence)}</dd>
-      </div>
-      <div className="flex items-center justify-between">
-        <dt className="text-text-primary/60">Booking fee</dt>
-        <dd className="text-text-primary">{formatPriceExact(feePence)}</dd>
-      </div>
-      <div className="flex items-center justify-between border-t border-blush/40 pt-2">
-        <dt className="font-semibold text-text-primary">Total</dt>
-        <dd className="font-semibold text-text-primary">
-          {formatPriceExact(totalPence)}
-        </dd>
-      </div>
-    </dl>
+    <div>
+      <dl className="space-y-2 text-sm">
+        <div className="flex items-center justify-between">
+          <dt className="text-text-primary/60">Ticket</dt>
+          <dd className="text-text-primary">{formatPriceExact(pricePence)}</dd>
+        </div>
+        <div className="flex items-center justify-between">
+          <dt className="text-text-primary/60">Booking fee</dt>
+          <dd className="text-text-primary">{formatPriceExact(feePence)}</dd>
+        </div>
+        <div className="flex items-center justify-between border-t border-blush/40 pt-2">
+          <dt className="font-semibold text-text-primary">Total</dt>
+          <dd className="font-semibold text-text-primary">
+            {formatPriceExact(totalPence)}
+          </dd>
+        </div>
+      </dl>
+      <p className="mt-2 text-xs text-text-primary/60">
+        Booking fee covers card processing. Non-refundable if you cancel.
+      </p>
+    </div>
   );
 }
 

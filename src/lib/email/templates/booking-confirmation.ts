@@ -112,7 +112,10 @@ export function bookingConfirmationTemplate(
     <td style="padding:8px 0;font-size:14px;color:${COLORS.textSecondary};border-top:1px solid ${COLORS.border};"><strong>Total paid</strong></td>
     <td style="padding:8px 0;font-size:14px;color:${COLORS.charcoal};text-align:right;border-top:1px solid ${COLORS.border};"><strong>${escapeHtml(formatPriceExact(input.priceBreakdown.totalPence))}</strong></td>
   </tr>
-</table>`
+</table>
+<p style="margin:8px 0 0 0;font-size:12px;color:${COLORS.textSecondary};">
+  The booking fee covers card processing and isn&rsquo;t refundable.
+</p>`
       : ''
 
   const bodyHtml = `<h1 style="margin:0 0 16px 0;font-family:Georgia,'Times New Roman',Times,serif;font-size:28px;font-weight:bold;color:${COLORS.charcoal};">

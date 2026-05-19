@@ -126,4 +126,43 @@ describe('bookingConfirmationTemplate', () => {
     expect(tpl.html).not.toContain('<script>alert')
     expect(tpl.html).toContain('&lt;script&gt;')
   })
+
+  // ── Price breakdown + non-refundable disclosure ──────────────────────
+  //
+  // Paid bookings include the priceBreakdown block. The block ends with a
+  // small "non-refundable" disclosure so a customer who only reads their
+  // confirmation email still has that fact on the record before they ever
+  // try to cancel. Pinned so it can't quietly drift away.
+
+  it('renders the price breakdown when priceBreakdown is supplied', () => {
+    const tpl = bookingConfirmationTemplate({
+      ...baseInput,
+      priceBreakdown: { ticketPence: 2000, feePence: 60, totalPence: 2060 },
+    })
+    expect(tpl.html).toContain('Ticket')
+    expect(tpl.html).toContain('Booking fee')
+    expect(tpl.html).toContain('Total paid')
+    expect(tpl.html).toContain('£20.00')
+    expect(tpl.html).toContain('£0.60')
+    expect(tpl.html).toContain('£20.60')
+  })
+
+  it('includes the non-refundable disclosure under the breakdown', () => {
+    const tpl = bookingConfirmationTemplate({
+      ...baseInput,
+      priceBreakdown: { ticketPence: 2000, feePence: 60, totalPence: 2060 },
+    })
+    // Disclosure must appear when the breakdown is present. The HTML
+    // escapes the apostrophe in "isn't" to &rsquo;, so match around it.
+    expect(tpl.html).toMatch(/booking fee covers card processing and isn.{1,8}t refundable/i)
+  })
+
+  it('omits the breakdown block (and the disclosure) for free events', () => {
+    const tpl = bookingConfirmationTemplate({
+      ...baseInput,
+      // No priceBreakdown supplied — free/waitlisted/pending paths.
+    })
+    expect(tpl.html).not.toContain('Total paid')
+    expect(tpl.html).not.toMatch(/booking fee covers card processing/i)
+  })
 })
