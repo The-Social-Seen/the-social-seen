@@ -231,11 +231,17 @@ test.describe('Admin Cancel & Refund flow @payments', () => {
     // stripe_payment_id on the row → free branch in the action).
     await page.getByRole('button', { name: /Cancel Event & Refund/i }).click()
 
-    // Success status panel. The summary copy includes the event title
-    // wrapped in curly quotes plus the action-completed sentence.
-    await expect(page.getByText(/Cancelled.*notified/i)).toBeVisible({
-      timeout: 15_000,
-    })
+    // Success status panel. Scope to role="status" so a leftover
+    // "Cancelled" badge on another event row in the same table can't
+    // make this assertion pass vacuously. Modal renders
+    // `Cancelled "X". No refunds were needed.` for the free path
+    // (refundedCount=0).
+    await expect(
+      page.getByRole('status').filter({ hasText: /Cancelled/i }),
+    ).toBeVisible({ timeout: 15_000 })
+    await expect(
+      page.getByRole('status').filter({ hasText: /No refunds were needed/i }),
+    ).toBeVisible({ timeout: 5_000 })
 
     // Reality-check: the event row in the DB is now is_cancelled = true
     // AND the member's booking has flipped to cancelled. The page in
@@ -286,10 +292,14 @@ test.describe('Admin Cancel & Refund flow @payments', () => {
 
     await page.getByRole('button', { name: /Cancel Event & Refund/i }).click()
 
-    // Empty-variant success block.
-    await expect(page.getByText(/Cancelled/i).first()).toBeVisible({
-      timeout: 15_000,
-    })
+    // Success status panel — scope to role="status" because the events
+    // table behind the modal contains "Cancelled" badges on rows from
+    // earlier tests in the same describe block (purgeRun runs in
+    // afterAll, not afterEach). Without the role scope, a stale badge
+    // makes this pass vacuously and the DB check below races the action.
+    await expect(
+      page.getByRole('status').filter({ hasText: /Cancelled/i }),
+    ).toBeVisible({ timeout: 15_000 })
 
     const { data: refreshedEvent } = await admin
       .from('events')
