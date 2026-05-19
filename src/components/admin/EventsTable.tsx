@@ -3,13 +3,33 @@
 import { useState, useTransition } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
-import { Pencil, Users, Trash2 } from 'lucide-react'
+import { Pencil, Users, Trash2, Ban } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { formatDateCard } from '@/lib/utils/dates'
 import { formatPrice } from '@/lib/utils/currency'
 import { resolveEventImage } from '@/lib/utils/images'
-import { softDeleteEvent } from '@/app/(admin)/admin/actions'
+import {
+  softDeleteEvent,
+  cancelEventAndRefundBookings,
+  getEventCancelPreview,
+} from '@/app/(admin)/admin/actions'
+import CancelEventModal from './CancelEventModal'
 import type { EventWithStats } from '@/types'
+
+/**
+ * State for the cancel-and-refund modal. Holds the event being acted
+ * on plus the pre-fetched booking counts that drive the copy variant.
+ * `null` when the modal is closed.
+ */
+interface CancelModalState {
+  event: { id: string; title: string; slug: string }
+  bookingCounts: {
+    confirmedPaid: number
+    confirmedFree: number
+    waitlisted: number
+    totalRefundPence: number
+  }
+}
 
 interface EventsTableProps {
   events: EventWithStats[]
@@ -31,6 +51,11 @@ function statusBadge(event: EventWithStats) {
 export default function EventsTable({ events }: EventsTableProps) {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
+  // Pre-fetch booking counts on click so the modal renders the correct
+  // copy variant from real data, not a stale aggregate. Loading state
+  // lives on the row's "Cancel" button while the preview is in flight.
+  const [openingCancelId, setOpeningCancelId] = useState<string | null>(null)
+  const [cancelModal, setCancelModal] = useState<CancelModalState | null>(null)
 
   function handleDelete(eventId: string, title: string) {
     if (!confirm(`Are you sure you want to delete "${title}"? This cannot be undone.`)) return
@@ -42,6 +67,30 @@ export default function EventsTable({ events }: EventsTableProps) {
       }
       setDeletingId(null)
     })
+  }
+
+  // Open the "Cancel & Refund" modal for a given event. Pre-fetches the
+  // booking-count breakdown so the modal can render the right copy
+  // variant (paid / free / waitlist / empty) without an inline spinner
+  // once it opens. Errors fall back to a window.alert — matches the
+  // existing delete-error pattern in this component.
+  async function handleOpenCancel(event: EventWithStats) {
+    setOpeningCancelId(event.id)
+    try {
+      const preview = await getEventCancelPreview(event.id)
+      setCancelModal({
+        event: { id: event.id, title: event.title, slug: event.slug },
+        bookingCounts: preview,
+      })
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : 'Failed to load cancel preview. Please try again.',
+      )
+    } finally {
+      setOpeningCancelId(null)
+    }
   }
 
   if (events.length === 0) {
@@ -141,6 +190,23 @@ export default function EventsTable({ events }: EventsTableProps) {
                     >
                       <Users className="w-4 h-4 text-text-tertiary" />
                     </Link>
+                    {/*
+                      Cancel & Refund — only available on events that
+                      aren't already cancelled. Past events still allowed
+                      in case admin needs to refund retrospectively. The
+                      modal handles the "no-op" case (zero bookings).
+                    */}
+                    {!event.is_cancelled && (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenCancel(event)}
+                        disabled={openingCancelId === event.id}
+                        className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center disabled:opacity-50"
+                        aria-label={`Cancel and refund ${event.title}`}
+                      >
+                        <Ban className="w-4 h-4 text-red-500" />
+                      </button>
+                    )}
                     <button
                       onClick={() => handleDelete(event.id, event.title)}
                       disabled={isPending && deletingId === event.id}
@@ -265,11 +331,49 @@ export default function EventsTable({ events }: EventsTableProps) {
                     Delete
                   </button>
                 </div>
+
+                {/*
+                  Cancel & Refund — rendered as a second row to avoid
+                  overcrowding the primary 3-button action row at 320px.
+                  Hidden on already-cancelled events.
+                */}
+                {!event.is_cancelled && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenCancel(event)}
+                      disabled={openingCancelId === event.id}
+                      className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg border border-red-200 dark:border-red-900/40 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors text-sm font-medium disabled:opacity-50 min-h-[44px]"
+                      aria-label={`Cancel and refund ${event.title}`}
+                    >
+                      <Ban className="w-4 h-4" />
+                      Cancel &amp; Refund
+                    </button>
+                  </div>
+                )}
               </article>
             </li>
           )
         })}
       </ul>
+
+      {/*
+        Cancel & Refund modal — single instance shared by every row. The
+        action button on a row pre-fetches booking counts then sets
+        `cancelModal`. Server Action re-validates the events path on
+        success so the row's status badge flips to "Cancelled" on close.
+      */}
+      {cancelModal && (
+        <CancelEventModal
+          open={true}
+          event={cancelModal.event}
+          bookingCounts={cancelModal.bookingCounts}
+          onConfirm={async () => {
+            return await cancelEventAndRefundBookings(cancelModal.event.id)
+          }}
+          onClose={() => setCancelModal(null)}
+        />
+      )}
     </>
   )
 }

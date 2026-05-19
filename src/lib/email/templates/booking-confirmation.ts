@@ -7,6 +7,7 @@ import {
   renderDetailRow,
   renderShell,
 } from './_shared'
+import { formatPriceExact } from '@/lib/utils/currency'
 import type { RenderedTemplate } from './welcome'
 
 export interface BookingConfirmationInput {
@@ -20,6 +21,19 @@ export interface BookingConfirmationInput {
   venueRevealed: boolean
   status: 'confirmed' | 'waitlisted' | 'pending_payment'
   waitlistPosition: number | null
+  /**
+   * Optional price breakdown for paid bookings. Renders a "Ticket /
+   * Booking fee / Total paid" table beneath the event details. Omit for
+   * free events and the waitlist / pending_payment variants — the
+   * conditional render guards on totalPence > 0 too.
+   *
+   * Per SYSTEM-DESIGN-refund-fee-deduction.md §8.7.
+   */
+  priceBreakdown?: {
+    ticketPence: number
+    feePence: number
+    totalPence: number
+  }
 }
 
 /**
@@ -79,6 +93,31 @@ export function bookingConfirmationTemplate(
   <td style="padding:8px 0;font-size:14px;color:${COLORS.charcoal};font-weight:500;">${venueValue}</td>
 </tr>`
 
+  // Price-breakdown table — only rendered for paid bookings where the
+  // breakdown was supplied. Confirmed-paid emails (sent from the Stripe
+  // webhook) include this; waitlist / pending_payment / free-event paths
+  // do not pass priceBreakdown so this stays empty.
+  const breakdownTable =
+    input.priceBreakdown && input.priceBreakdown.totalPence > 0
+      ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:24px 0 0 0;">
+  <tr>
+    <td style="padding:8px 0;font-size:14px;color:${COLORS.textSecondary};">Ticket</td>
+    <td style="padding:8px 0;font-size:14px;color:${COLORS.charcoal};text-align:right;">${escapeHtml(formatPriceExact(input.priceBreakdown.ticketPence))}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0;font-size:14px;color:${COLORS.textSecondary};">Booking fee</td>
+    <td style="padding:8px 0;font-size:14px;color:${COLORS.charcoal};text-align:right;">${escapeHtml(formatPriceExact(input.priceBreakdown.feePence))}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0;font-size:14px;color:${COLORS.textSecondary};border-top:1px solid ${COLORS.border};"><strong>Total paid</strong></td>
+    <td style="padding:8px 0;font-size:14px;color:${COLORS.charcoal};text-align:right;border-top:1px solid ${COLORS.border};"><strong>${escapeHtml(formatPriceExact(input.priceBreakdown.totalPence))}</strong></td>
+  </tr>
+</table>
+<p style="margin:8px 0 0 0;font-size:12px;color:${COLORS.textSecondary};">
+  The booking fee covers card processing and isn&rsquo;t refundable.
+</p>`
+      : ''
+
   const bodyHtml = `<h1 style="margin:0 0 16px 0;font-family:Georgia,'Times New Roman',Times,serif;font-size:28px;font-weight:bold;color:${COLORS.charcoal};">
   ${statusCopy.heading}
 </h1>
@@ -93,6 +132,8 @@ export function bookingConfirmationTemplate(
   ${renderDetailRow({ label: 'Time', value: input.eventTime })}
   ${venueRow}
 </table>
+
+${breakdownTable}
 
 ${renderButton({ label: statusCopy.ctaLabel, href: eventUrl })}
 

@@ -21,7 +21,7 @@ import { getAdminClient, getE2EAnonKey, getE2EUrl } from './helpers/supabase'
 
 async function callRpc<T = unknown>(
   rpc: 'book_event' | 'book_event_paid' | 'claim_waitlist_spot',
-  args: Record<string, string>,
+  args: Record<string, unknown>,
   accessToken: string,
 ): Promise<T> {
   const res = await fetch(`${getE2EUrl()}/rest/v1/rpc/${rpc}`, {
@@ -154,9 +154,11 @@ test.describe('Booking RPCs — 12 scenarios', () => {
     const user = await createTestUser(admin, { tag: 's7' })
     const event = await createTestEvent(admin, { tag: 's7', price: 2500, capacity: 5 })
 
+    // calculateBookingFeePence(2500) = ceil((2500 * 0.015 + 20) / 0.985 / 10) * 10
+    //   = ceil(58.38 / 10) * 10 = 60p
     const result = await callRpc<RpcResult>(
       'book_event_paid',
-      { p_user_id: user.id, p_event_id: event.id },
+      { p_user_id: user.id, p_event_id: event.id, p_booking_fee_pence: 60 },
       user.accessToken,
     )
 
@@ -264,10 +266,11 @@ test.describe('Booking RPCs — 12 scenarios', () => {
       .eq('event_id', event.id)
     if (cancelErr) throw cancelErr
 
-    // Waiter claims.
+    // Waiter claims. Free event → fee is 0 (CHECK constraint enforces
+    // free events have booking_fee_pence = 0).
     const result = await callRpc<RpcResult>(
       'claim_waitlist_spot',
-      { p_user_id: waiter.id, p_event_id: event.id },
+      { p_user_id: waiter.id, p_event_id: event.id, p_booking_fee_pence: 0 },
       waiter.accessToken,
     )
 
@@ -310,7 +313,7 @@ test.describe('Booking RPCs — 12 scenarios', () => {
 
     const result = await callRpc<RpcResult>(
       'claim_waitlist_spot',
-      { p_user_id: waiter.id, p_event_id: event.id },
+      { p_user_id: waiter.id, p_event_id: event.id, p_booking_fee_pence: 0 },
       waiter.accessToken,
     )
 

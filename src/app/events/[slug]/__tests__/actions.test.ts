@@ -512,12 +512,67 @@ describe('cancelBooking', () => {
     expect(result.success).toBe(true)
     expect(result.refundEligible).toBe(true)
     expect(result.refundedPence).toBe(3500)
+    // Refund call MUST pass amount: price_at_booking explicitly.
+    // Without it, Stripe defaults to a full refund of the original
+    // charge (price + fee) — which was the bug refund-fee-deduction
+    // was created to fix. Asserting the exact arg now guards against
+    // a regression.
     expect(mockStripeRefundCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ payment_intent: 'pi_xyz' }),
+      expect.objectContaining({
+        payment_intent: 'pi_xyz',
+        amount: 3500,
+      }),
       // I2 fix: idempotency key ties the refund to the booking so a
       // double-click can't double-spend.
       expect.objectContaining({
         idempotencyKey: expect.stringMatching(/^refund-booking-/),
+      }),
+    )
+  })
+
+  // refund-fee-deduction: a paid booking that paid £20 ticket + 60p fee
+  // (total £20.60) gets a partial refund of £20.00 — the platform keeps
+  // the fee to absorb Stripe's processing cost.
+  it('partial-refunds the ticket price only (booking fee retained) on a £20 + 60p booking', async () => {
+    authenticateUser('user-1')
+    mockStripeRefundCreate.mockResolvedValueOnce({ id: 're_partial' })
+
+    stubCancelSequence({
+      booking: {
+        id: 'bk-partial',
+        user_id: 'user-1',
+        event_id: 'evt-paid',
+        status: 'confirmed',
+        // £20 ticket. The booking carries a 60p booking_fee_pence on
+        // the row but `cancelBooking`'s SELECT only reads
+        // price_at_booking — Stripe was charged 2060p originally; we
+        // refund 2000p.
+        price_at_booking: 2000,
+        stripe_payment_id: 'pi_partial',
+        refunded_amount_pence: 0,
+      },
+      event: {
+        date_time: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
+        slug: 'wine-tasting',
+      },
+    })
+
+    const result = await cancelBooking('bk-partial')
+
+    expect(result.success).toBe(true)
+    expect(result.refundEligible).toBe(true)
+    // The Server Action returns refundedPence = price_at_booking (the
+    // ticket only). The cancellation-confirmed page shows "£20.00" to
+    // the user.
+    expect(result.refundedPence).toBe(2000)
+    // Refund call asserts the partial amount.
+    expect(mockStripeRefundCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payment_intent: 'pi_partial',
+        amount: 2000,
+      }),
+      expect.objectContaining({
+        idempotencyKey: 'refund-booking-bk-partial',
       }),
     )
   })
@@ -600,7 +655,16 @@ describe('cancelBooking', () => {
     expect(result.success).toBe(true)
     expect(result.refundEligible).toBe(true)
     expect(result.refundedPence).toBe(8500)
-    expect(mockStripeRefundCreate).toHaveBeenCalled()
+    // refund-fee-deduction: the explicit `amount` arg must be present
+    // even on the custom-window path so the partial-refund policy
+    // applies uniformly.
+    expect(mockStripeRefundCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payment_intent: 'pi_custom',
+        amount: 8500,
+      }),
+      expect.any(Object),
+    )
   })
 
   it('does NOT refund paid booking inside a custom 168h (7-day) window', async () => {
@@ -700,6 +764,13 @@ describe('claimWaitlistSpot', () => {
 
   it('returns success and no checkoutUrl for a free-event claim', async () => {
     authenticateUser('user-1')
+    // refund-fee-deduction: the Server Action reads event.price before
+    // calling the RPC so it can compute the booking fee. Free event →
+    // price 0 → fee 0.
+    mockSupabaseChain({
+      data: { title: 'Sunday Run Club', slug: 'sunday-run', price: 0 },
+      error: null,
+    })
     mockRpc.mockResolvedValueOnce({
       data: { booking_id: 'bk-42', status: 'confirmed' },
       error: null,
@@ -710,6 +781,8 @@ describe('claimWaitlistSpot', () => {
     expect(mockRpc).toHaveBeenCalledWith('claim_waitlist_spot', {
       p_user_id: 'user-1',
       p_event_id: 'evt-1',
+      // Free event: fee is 0.
+      p_booking_fee_pence: 0,
     })
     expect(result.success).toBe(true)
     expect(result.status).toBe('confirmed')
@@ -718,6 +791,10 @@ describe('claimWaitlistSpot', () => {
 
   it('surfaces the RPC race-lost error verbatim', async () => {
     authenticateUser('user-1')
+    mockSupabaseChain({
+      data: { title: 'Wine Tasting', slug: 'wine-tasting', price: 2000 },
+      error: null,
+    })
     mockRpc.mockResolvedValueOnce({
       data: {
         error: "Someone else just claimed this spot. You're still on the waitlist.",

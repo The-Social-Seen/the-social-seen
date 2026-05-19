@@ -260,4 +260,73 @@ describe('BookingModal', () => {
 
     expect(screen.getByText('Special requirements')).toBeTruthy()
   })
+
+  // ── Price breakdown (refund-fee-deduction spec §8.2) ─────────────────
+  //
+  // Paid events render a three-row breakdown (Ticket / Booking fee /
+  // Total) in the confirm step. Free events keep the legacy
+  // "1 spot × Free" rendering. Amounts always use formatPriceExact so
+  // the totals always show pence ("£20.00", not "£20").
+
+  it('renders Ticket / Booking fee / Total breakdown for a £20 paid event', () => {
+    render(
+      <BookingModal
+        event={makeEvent({ price: 2000 })}
+        isOpen={true}
+        onClose={vi.fn()}
+        userName="Charlotte"
+      />,
+    )
+
+    // Three explicit labels.
+    expect(screen.getByText('Ticket')).toBeTruthy()
+    expect(screen.getByText('Booking fee')).toBeTruthy()
+    expect(screen.getByText('Total')).toBeTruthy()
+    // £20.00 ticket + £0.60 fee = £20.60 total — calculateBookingFeePence(2000) = 60.
+    expect(screen.getByText('£20.00')).toBeTruthy()
+    expect(screen.getByText('£0.60')).toBeTruthy()
+    expect(screen.getByText('£20.60')).toBeTruthy()
+    // Pre-purchase disclosure that the booking fee is non-refundable —
+    // pinned so it can't drift back to "good-to-have, not required".
+    expect(
+      screen.getByText(/Non-refundable if you cancel/i),
+    ).toBeTruthy()
+    // Legacy "1 spot × £20" rendering must NOT appear for paid events.
+    expect(screen.queryByText(/1 spot ×/)).toBeNull()
+  })
+
+  it('does NOT render the three-row breakdown for free events', () => {
+    render(
+      <BookingModal
+        event={makeEvent({ price: 0 })}
+        isOpen={true}
+        onClose={vi.fn()}
+        userName="Charlotte"
+      />,
+    )
+
+    // Free events keep the legacy "1 spot × Free" rendering.
+    expect(screen.queryByText('Ticket')).toBeNull()
+    expect(screen.queryByText('Booking fee')).toBeNull()
+    expect(screen.queryByText('Total')).toBeNull()
+    expect(screen.getByText(/1 spot × Free/)).toBeTruthy()
+  })
+
+  it('renders £50 / £1.00 / £51.00 breakdown for a £50 paid event', () => {
+    // Higher-price scenario — calculateBookingFeePence(5000) = 100
+    // (£1.00) so total = £51.00. Pins both the formula and the
+    // formatPriceExact rendering (always two-decimal places).
+    render(
+      <BookingModal
+        event={makeEvent({ price: 5000 })}
+        isOpen={true}
+        onClose={vi.fn()}
+        userName="Charlotte"
+      />,
+    )
+
+    expect(screen.getByText('£50.00')).toBeTruthy()
+    expect(screen.getByText('£1.00')).toBeTruthy()
+    expect(screen.getByText('£51.00')).toBeTruthy()
+  })
 })

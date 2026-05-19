@@ -4,6 +4,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockGetUser = vi.fn()
 const mockFrom = vi.fn()
+// refund-fee-deduction: cancelEventAndRefundBookings uses
+// createAdminClient() for the bulk-refund loop because it mutates rows
+// belonging to many users (service_role bypass — same pattern as the
+// webhook handler). Keep this mock separate from the user-context
+// `mockFrom` so we can assert on each independently.
+const mockAdminFrom = vi.fn()
 
 vi.mock('@/lib/supabase/server', () => ({
   createServerClient: vi.fn(() =>
@@ -15,8 +21,44 @@ vi.mock('@/lib/supabase/server', () => ({
   ),
 }))
 
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: () => ({
+    from: mockAdminFrom,
+  }),
+}))
+
 vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
+}))
+
+// `after()` runs in a Next.js request scope unavailable to Vitest. Mock
+// it to execute the callback immediately so any post-response side
+// effects (e.g. cancellation emails) are still exercised.
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next/server')>()
+  return {
+    ...actual,
+    after: (fn: () => unknown | Promise<unknown>) => {
+      void Promise.resolve(fn())
+    },
+  }
+})
+
+// refund-fee-deduction: cancelEventAndRefundBookings calls Stripe to
+// issue per-booking refunds. The mock returns a deterministic refund id;
+// individual tests override with mockRejectedValueOnce to exercise the
+// partial-failure branch.
+const mockStripeRefundCreate = vi.fn()
+vi.mock('@/lib/stripe/server', () => ({
+  getStripeClient: () => ({
+    refunds: { create: (...args: unknown[]) => mockStripeRefundCreate(...args) },
+  }),
+}))
+
+// Stub the email send wrapper so tests don't reach Resend.
+const mockSendEmail = vi.fn()
+vi.mock('@/lib/email/send', () => ({
+  sendEmail: (...args: unknown[]) => mockSendEmail(...args),
 }))
 
 vi.mock('@/lib/utils/slugify', () => ({
@@ -26,6 +68,7 @@ vi.mock('@/lib/utils/slugify', () => ({
 
 import {
   cancelEvent,
+  cancelEventAndRefundBookings,
   duplicateEvent,
   upsertEventInclusions,
   upsertEventHosts,
@@ -561,5 +604,350 @@ describe('upsertEventHosts', () => {
     await expect(
       upsertEventHosts('evt-1', [{ profileId: 'host-a', roleLabel: 'Host' }]),
     ).rejects.toThrow('Admin access required')
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// cancelEventAndRefundBookings (refund-fee-deduction)
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('cancelEventAndRefundBookings', () => {
+  /**
+   * Build a queued admin-client `from()` mock — each call returns the
+   * next response in the queue. Mirrors how Supabase's builder is
+   * chainable + await-able; tests pass a single `data` per call.
+   */
+  function queueAdminResponses(
+    responses: Array<{ data?: unknown; error?: unknown }>,
+  ) {
+    let idx = 0
+    mockAdminFrom.mockImplementation(() => {
+      const response = responses[idx] ?? responses[responses.length - 1]
+      idx++
+      return mockChain(response)
+    })
+  }
+
+  it('rejects unauthenticated callers via requireAdmin guard', async () => {
+    unauthenticateUser()
+    await expect(cancelEventAndRefundBookings('evt-1')).rejects.toThrow(
+      'Authentication required',
+    )
+  })
+
+  it('rejects non-admin callers via requireAdmin guard', async () => {
+    mockMemberUser()
+    await expect(cancelEventAndRefundBookings('evt-1')).rejects.toThrow(
+      'Admin access required',
+    )
+  })
+
+  it('returns error when eventId is empty', async () => {
+    authenticateAdmin()
+    mockFrom.mockImplementation(() => mockChain({ data: { role: 'admin' } }))
+    const result = await cancelEventAndRefundBookings('')
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('Event ID is required')
+  })
+
+  it('returns error when the event is not found', async () => {
+    authenticateAdmin()
+    mockFrom.mockImplementation(() => mockChain({ data: { role: 'admin' } }))
+    queueAdminResponses([
+      // events.select(...).single() → no row
+      { data: null, error: { message: 'no rows' } },
+    ])
+
+    const result = await cancelEventAndRefundBookings('evt-missing')
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('Event not found')
+  })
+
+  // Happy path — 3 confirmed paid bookings, all refunded full
+  // (price + booking fee).
+  it('refunds all confirmed paid bookings with price+fee', async () => {
+    authenticateAdmin()
+    mockFrom.mockImplementation(() => mockChain({ data: { role: 'admin' } }))
+
+    // 1) events.select  → event row (is_cancelled=false)
+    // 2) events.update  → is_cancelled flip (success)
+    // 3) bookings.select → three confirmed paid bookings
+    // 4-6) bookings.update × 3 (refund reconcile for each booking)
+    queueAdminResponses([
+      {
+        data: {
+          id: 'evt-1',
+          slug: 'wine-night',
+          title: 'Wine Night',
+          date_time: '2026-05-07T19:00:00Z',
+          is_cancelled: false,
+          deleted_at: null,
+        },
+      },
+      { error: null }, // update is_cancelled
+      {
+        data: [
+          {
+            id: 'bk-1',
+            user_id: 'u1',
+            status: 'confirmed',
+            price_at_booking: 2000,
+            booking_fee_pence: 60,
+            stripe_payment_id: 'pi_1',
+            refunded_amount_pence: 0,
+            waitlist_position: null,
+            profile: { full_name: 'A', email: 'a@example.com' },
+          },
+          {
+            id: 'bk-2',
+            user_id: 'u2',
+            status: 'confirmed',
+            price_at_booking: 2000,
+            booking_fee_pence: 60,
+            stripe_payment_id: 'pi_2',
+            refunded_amount_pence: 0,
+            waitlist_position: null,
+            profile: { full_name: 'B', email: 'b@example.com' },
+          },
+          {
+            id: 'bk-3',
+            user_id: 'u3',
+            status: 'confirmed',
+            price_at_booking: 2000,
+            booking_fee_pence: 60,
+            stripe_payment_id: 'pi_3',
+            refunded_amount_pence: 0,
+            waitlist_position: null,
+            profile: { full_name: 'C', email: 'c@example.com' },
+          },
+        ],
+      },
+      { error: null }, // bk-1 update
+      { error: null }, // bk-2 update
+      { error: null }, // bk-3 update
+    ])
+
+    mockStripeRefundCreate.mockResolvedValue({ id: 're_mock' })
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'm1' })
+
+    const result = await cancelEventAndRefundBookings('evt-1')
+
+    expect(result.success).toBe(true)
+    expect(result.summary).toBeTruthy()
+    expect(result.summary!.totalBookings).toBe(3)
+    expect(result.summary!.refundedCount).toBe(3)
+    // Each refund is 2060p (price + fee) — locked decision 3.
+    expect(result.summary!.refundedTotalPence).toBe(2060 * 3)
+    expect(result.summary!.failedRefunds).toHaveLength(0)
+
+    // Each refunds.create call must pass amount = price + fee.
+    expect(mockStripeRefundCreate).toHaveBeenCalledTimes(3)
+    const refundCalls = mockStripeRefundCreate.mock.calls
+    for (const [args] of refundCalls) {
+      expect(args).toMatchObject({
+        amount: 2060,
+        metadata: expect.objectContaining({
+          source: 'admin_event_cancelled',
+        }),
+      })
+    }
+  })
+
+  // Partial failure — middle booking's refund throws. The first and
+  // third should still be processed; the failed one surfaces in
+  // failedRefunds with the user email and Stripe error string.
+  it('surfaces a partial-failure when one Stripe refund throws', async () => {
+    authenticateAdmin()
+    mockFrom.mockImplementation(() => mockChain({ data: { role: 'admin' } }))
+
+    queueAdminResponses([
+      {
+        data: {
+          id: 'evt-1',
+          slug: 'wine-night',
+          title: 'Wine Night',
+          date_time: '2026-05-07T19:00:00Z',
+          is_cancelled: false,
+          deleted_at: null,
+        },
+      },
+      { error: null },
+      {
+        data: [
+          {
+            id: 'bk-1', user_id: 'u1', status: 'confirmed',
+            price_at_booking: 2000, booking_fee_pence: 60,
+            stripe_payment_id: 'pi_1', refunded_amount_pence: 0,
+            waitlist_position: null,
+            profile: { full_name: 'A', email: 'a@example.com' },
+          },
+          {
+            id: 'bk-2', user_id: 'u2', status: 'confirmed',
+            price_at_booking: 2000, booking_fee_pence: 60,
+            stripe_payment_id: 'pi_2', refunded_amount_pence: 0,
+            waitlist_position: null,
+            profile: { full_name: 'B', email: 'b@example.com' },
+          },
+          {
+            id: 'bk-3', user_id: 'u3', status: 'confirmed',
+            price_at_booking: 2000, booking_fee_pence: 60,
+            stripe_payment_id: 'pi_3', refunded_amount_pence: 0,
+            waitlist_position: null,
+            profile: { full_name: 'C', email: 'c@example.com' },
+          },
+        ],
+      },
+      { error: null }, // bk-1 update (success)
+      // bk-2's Stripe refund throws → no UPDATE issued for bk-2.
+      { error: null }, // bk-3 update (success)
+    ])
+
+    mockStripeRefundCreate
+      .mockResolvedValueOnce({ id: 're_1' })
+      .mockRejectedValueOnce(new Error('card_declined'))
+      .mockResolvedValueOnce({ id: 're_3' })
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'm' })
+
+    const result = await cancelEventAndRefundBookings('evt-1')
+
+    expect(result.success).toBe(true)
+    expect(result.summary!.refundedCount).toBe(2)
+    expect(result.summary!.failedRefunds).toHaveLength(1)
+    expect(result.summary!.failedRefunds[0]).toMatchObject({
+      bookingId: 'bk-2',
+      userEmail: 'b@example.com',
+      error: expect.stringContaining('card_declined'),
+    })
+  })
+
+  // The event is already cancelled — re-running the action should
+  // still process bookings (resume after a partial-failure mid-loop).
+  it('still iterates bookings when event.is_cancelled is already true', async () => {
+    authenticateAdmin()
+    mockFrom.mockImplementation(() => mockChain({ data: { role: 'admin' } }))
+
+    queueAdminResponses([
+      // is_cancelled = true already — skip the events.update step.
+      {
+        data: {
+          id: 'evt-1',
+          slug: 'wine-night',
+          title: 'Wine Night',
+          date_time: '2026-05-07T19:00:00Z',
+          is_cancelled: true,
+          deleted_at: null,
+        },
+      },
+      // bookings.select
+      {
+        data: [
+          {
+            id: 'bk-1', user_id: 'u1', status: 'confirmed',
+            price_at_booking: 2000, booking_fee_pence: 60,
+            stripe_payment_id: 'pi_1', refunded_amount_pence: 0,
+            waitlist_position: null,
+            profile: { full_name: 'A', email: 'a@example.com' },
+          },
+        ],
+      },
+      { error: null }, // bk-1 update
+    ])
+
+    mockStripeRefundCreate.mockResolvedValue({ id: 're_resume' })
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'm' })
+
+    const result = await cancelEventAndRefundBookings('evt-1')
+    expect(result.success).toBe(true)
+    expect(result.summary!.refundedCount).toBe(1)
+  })
+
+  // Mixed bookings — confirmed/free, waitlisted, pending_payment all
+  // get flipped to cancelled without a Stripe call.
+  it('handles non-paid statuses (free / waitlisted / pending) without Stripe', async () => {
+    authenticateAdmin()
+    mockFrom.mockImplementation(() => mockChain({ data: { role: 'admin' } }))
+
+    queueAdminResponses([
+      {
+        data: {
+          id: 'evt-1',
+          slug: 'run-club',
+          title: 'Sunday Run Club',
+          date_time: '2026-05-07T08:00:00Z',
+          is_cancelled: false,
+          deleted_at: null,
+        },
+      },
+      { error: null }, // update is_cancelled
+      {
+        data: [
+          {
+            id: 'bk-free', user_id: 'u-free', status: 'confirmed',
+            price_at_booking: 0, booking_fee_pence: 0,
+            stripe_payment_id: null, refunded_amount_pence: 0,
+            waitlist_position: null,
+            profile: { full_name: 'F', email: 'f@example.com' },
+          },
+          {
+            id: 'bk-wait', user_id: 'u-wait', status: 'waitlisted',
+            price_at_booking: 2000, booking_fee_pence: 60,
+            stripe_payment_id: null, refunded_amount_pence: 0,
+            waitlist_position: 1,
+            profile: { full_name: 'W', email: 'w@example.com' },
+          },
+          {
+            id: 'bk-pend', user_id: 'u-pend', status: 'pending_payment',
+            price_at_booking: 2000, booking_fee_pence: 60,
+            stripe_payment_id: null, refunded_amount_pence: 0,
+            waitlist_position: null,
+            profile: { full_name: 'P', email: 'p@example.com' },
+          },
+        ],
+      },
+      { error: null }, // free update
+      { error: null }, // waitlist update
+      { error: null }, // pending update
+    ])
+
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'm' })
+
+    const result = await cancelEventAndRefundBookings('evt-1')
+
+    expect(result.success).toBe(true)
+    expect(result.summary!.refundedCount).toBe(0)
+    expect(result.summary!.cancelledFreeCount).toBe(1)
+    expect(result.summary!.cancelledWaitlistCount).toBe(1)
+    expect(result.summary!.cancelledPendingCount).toBe(1)
+    // Stripe must NOT be touched for non-paid rows.
+    expect(mockStripeRefundCreate).not.toHaveBeenCalled()
+  })
+
+  // Zero bookings — the action should still succeed (event flipped to
+  // cancelled, summary all zeros).
+  it('succeeds with zero affected bookings', async () => {
+    authenticateAdmin()
+    mockFrom.mockImplementation(() => mockChain({ data: { role: 'admin' } }))
+
+    queueAdminResponses([
+      {
+        data: {
+          id: 'evt-empty',
+          slug: 'no-bookings',
+          title: 'No Bookings Event',
+          date_time: '2026-05-07T19:00:00Z',
+          is_cancelled: false,
+          deleted_at: null,
+        },
+      },
+      { error: null },
+      { data: [] },
+    ])
+
+    const result = await cancelEventAndRefundBookings('evt-empty')
+
+    expect(result.success).toBe(true)
+    expect(result.summary!.totalBookings).toBe(0)
+    expect(result.summary!.refundedCount).toBe(0)
+    expect(mockStripeRefundCreate).not.toHaveBeenCalled()
   })
 })

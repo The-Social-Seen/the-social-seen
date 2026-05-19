@@ -13,6 +13,20 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 
 ---
 
+## Refund-fee-deduction follow-ups
+**Source:** `SYSTEM-DESIGN-refund-fee-deduction.md` §9 and §10.3 (shipped 2026-05-18 as `feat(payments): non-refundable booking fee...`).
+
+- **Local migration apply verification not run** — Neither the backend agent (no Docker) nor the tester agent (no Docker in worktree, no `supabase start`) ran `supabase db reset` against the local stack to verify the two new migrations (`20260517000001_add_bookings_fee_columns`, `20260517000002_book_event_paid_with_fee`) apply cleanly. The migrations were `psql`-parse-checked only. **Operator MUST run `supabase db reset` locally before the production `supabase db push --include-all --linked`** to catch any silent SQL error. The Playwright RPC security suite at `e2e/refund-fee-rpc-security.spec.ts` is the verification gate once the local stack is up — it exercises every CHECK constraint and RPC guard added by the migrations.
+- **Admin reporting dashboard for `stripe_fee_pence`** — gross revenue, Stripe processing fees (sum of `bookings.stripe_fee_pence`), refunds split by source (user vs `admin_event_cancelled`), net. Surfaces from the new columns added in migration `20260517000001`. Priority: Medium.
+- **VAT on booking fees** — once we cross the HMRC threshold, the platform-charged booking fee likely becomes a taxable supply. Out of scope for v1. Priority: Low until volume threshold.
+- **Promotion-code-applied fee distortion** — `allow_promotion_codes: true` is on at Checkout. If codes are configured in Stripe Dashboard, the discount applies to the combined `unit_amount` (ticket + fee) so the fee:price ratio gets distorted. Re-evaluate when promo codes are actually used. Priority: Low.
+- **Admin-cancel orphan-payment race** — when an admin cancels an event while a user is mid-Stripe-Checkout (pending_payment → cancelled, then user completes payment), the webhook's `.eq('status', 'pending_payment')` guard no-ops and the user is charged with no booking. Runbook entry: after cancelling an event check Stripe for payments landing within 30 minutes; issue manual refunds for orphans. A code fix could either programmatically expire Stripe Checkout Sessions on admin cancel or auto-refund any payment that lands on a cancelled-event booking. Priority: Medium (real but rare).
+- **Refund-retry queue** — currently failed refunds in `cancelEventAndRefundBookings` surface in `summary.failedRefunds` for manual admin retry. A retry queue (Stripe idempotency keys already make this safe) would surface a single button in the admin UI. Priority: Low until partial-failure incidents start happening.
+- **Email dedup on `cancelEventAndRefundBookings`** — a user with multiple cancellations gets multiple cancellation emails. Fine for v1 (most users have at most one booking per event); consider a per-user summary email when multi-event cancellations become common. Priority: Low.
+- **Deprecate legacy `cancelEvent()`** — the legacy `cancelEvent()` admin action still exists and just flips `is_cancelled` without refunds. The admin UI will route through `cancelEventAndRefundBookings()` exclusively after the frontend prompt lands. Once nothing internal calls `cancelEvent()`, remove the export. Priority: Low.
+
+---
+
 ## 🔴 Bugs / regressions to investigate
 
 ### UTF-8 em-dashes mojibake'd in event seed copy

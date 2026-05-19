@@ -15,7 +15,8 @@ import {
   Loader2,
 } from "lucide-react";
 import { formatDateModal, formatTime } from "@/lib/utils/dates";
-import { formatPrice } from "@/lib/utils/currency";
+import { formatPrice, formatPriceExact } from "@/lib/utils/currency";
+import { calculateBookingFeePence } from "@/lib/utils/booking-fee";
 import { downloadIcsFile } from "@/lib/utils/calendar";
 import { buildEventShareUrl, buildShareText, nativeShareOrCopy } from "@/lib/utils/share";
 import { createBooking, createPaidCheckout } from "@/app/events/[slug]/actions";
@@ -282,14 +283,17 @@ function ConfirmStep({
         </div>
 
         <div className="border-t border-blush/40 pt-4">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-text-primary/60">
-              1 spot × {isFree ? "Free" : formatPrice(event.price)}
-            </span>
-            <span className="font-semibold text-text-primary">
-              {isFree ? "Free" : formatPrice(event.price)}
-            </span>
-          </div>
+          {isFree ? (
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-text-primary/60">1 spot × Free</span>
+              <span className="font-semibold text-text-primary">Free</span>
+            </div>
+          ) : (
+            // Paid event: three-row breakdown (Ticket / Booking fee / Total).
+            // formatPriceExact (not formatPrice) so amounts always render with
+            // pence at the decision point — spec §8.2.
+            <PriceBreakdown pricePence={event.price} />
+          )}
         </div>
       </div>
 
@@ -348,6 +352,42 @@ function ConfirmStep({
 
 // P2-7a: the mocked in-modal PaymentStep was removed — the paid flow now
 // redirects to Stripe-hosted Checkout. See handleBook() above.
+
+// ── Price breakdown (paid events) ────────────────────────────────────────────
+//
+// Renders the three-row breakdown (Ticket / Booking fee / Total) shown in the
+// confirm step before the user is redirected to Stripe. Uses
+// `calculateBookingFeePence` so the displayed total matches exactly what the
+// Server Action will persist + charge through Stripe — single source of
+// truth, no drift. Copy strings final per spec §8.2.
+function PriceBreakdown({ pricePence }: { pricePence: number }) {
+  const feePence = calculateBookingFeePence(pricePence);
+  const totalPence = pricePence + feePence;
+
+  return (
+    <div>
+      <dl className="space-y-2 text-sm">
+        <div className="flex items-center justify-between">
+          <dt className="text-text-primary/60">Ticket</dt>
+          <dd className="text-text-primary">{formatPriceExact(pricePence)}</dd>
+        </div>
+        <div className="flex items-center justify-between">
+          <dt className="text-text-primary/60">Booking fee</dt>
+          <dd className="text-text-primary">{formatPriceExact(feePence)}</dd>
+        </div>
+        <div className="flex items-center justify-between border-t border-blush/40 pt-2">
+          <dt className="font-semibold text-text-primary">Total</dt>
+          <dd className="font-semibold text-text-primary">
+            {formatPriceExact(totalPence)}
+          </dd>
+        </div>
+      </dl>
+      <p className="mt-2 text-xs text-text-primary/60">
+        Booking fee covers card processing. Non-refundable if you cancel.
+      </p>
+    </div>
+  );
+}
 
 // ── Ticket Card (confirmation) ───────────────────────────────────────────────
 

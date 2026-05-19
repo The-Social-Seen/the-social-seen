@@ -219,6 +219,10 @@ describe('createBookingCheckoutSession', () => {
       eventTitle: 'Wine Tasting at The Connaught',
       eventSlug: 'wine-tasting-connaught',
       priceInPence: 4500,
+      // refund-fee-deduction: fee is a required input now. The Server
+      // Action passes calculateBookingFeePence(event.price); the test
+      // hard-codes 90p as a representative value.
+      bookingFeePence: 90,
       successUrl: 'https://thesocialseen.test/events/wine-tasting-connaught/booking-success',
       cancelUrl: 'https://thesocialseen.test/events/wine-tasting-connaught',
       stripeCustomerId: 'cus_VALID',
@@ -247,17 +251,23 @@ describe('createBookingCheckoutSession', () => {
     )
     expect(sessionArgs.line_items).toHaveLength(1)
     expect(sessionArgs.line_items[0].price_data.currency).toBe('gbp')
-    expect(sessionArgs.line_items[0].price_data.unit_amount).toBe(4500)
+    // refund-fee-deduction: the single line item carries the inclusive
+    // total (ticket + fee). Locked decision per
+    // SYSTEM-DESIGN-refund-fee-deduction.md §4.
+    expect(sessionArgs.line_items[0].price_data.unit_amount).toBe(4590)
     expect(sessionArgs.metadata).toEqual({
       booking_id: 'booking-1',
       user_id: 'user-1',
       event_id: 'event-1',
       event_slug: 'wine-tasting-connaught',
+      // Stripe metadata values must be strings.
+      booking_fee_pence: '90',
     })
     expect(sessionArgs.payment_intent_data.metadata).toEqual({
       booking_id: 'booking-1',
       user_id: 'user-1',
       event_id: 'event-1',
+      booking_fee_pence: '90',
     })
     expect(typeof sessionArgs.expires_at).toBe('number')
 

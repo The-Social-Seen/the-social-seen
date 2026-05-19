@@ -23,7 +23,22 @@ export interface CheckoutSessionInput {
   eventId: string
   eventTitle: string
   eventSlug: string
+  /**
+   * Ticket price ONLY (event.price) — the booking fee is passed
+   * separately as bookingFeePence. Stripe charges
+   * priceInPence + bookingFeePence as a single line item; the customer
+   * sees one inclusive total. Locked decision per
+   * SYSTEM-DESIGN-refund-fee-deduction.md §4.
+   */
   priceInPence: number
+  /**
+   * Non-refundable booking fee charged ON TOP of priceInPence. Computed
+   * once via calculateBookingFeePence() and passed through to both the
+   * book_event_paid RPC (persistence) and here (Stripe line item) so the
+   * displayed total and the persisted snapshot are guaranteed identical.
+   * Free events: pass 0.
+   */
+  bookingFeePence: number
   successUrl: string
   cancelUrl: string
 }
@@ -148,7 +163,12 @@ export async function createBookingCheckoutSession(
       {
         price_data: {
           currency: 'gbp',
-          unit_amount: input.priceInPence,
+          // Single line item with the inclusive total — locked decision
+          // per SYSTEM-DESIGN-refund-fee-deduction.md §4. Stripe's hosted
+          // checkout shows "Event Title — £20.60"; the pre-checkout
+          // sidebar (frontend agent's work) discloses the ticket+fee
+          // breakdown to the customer ahead of redirect.
+          unit_amount: input.priceInPence + input.bookingFeePence,
           product_data: {
             name: input.eventTitle,
             // Description must be <= 500 chars per Stripe. Our event
@@ -164,14 +184,24 @@ export async function createBookingCheckoutSession(
       user_id: input.userId,
       event_id: input.eventId,
       event_slug: input.eventSlug,
+      // Capture the fee on the Checkout Session too so admin auditing
+      // from the Stripe dashboard can see the breakdown without
+      // round-tripping to our DB.
+      booking_fee_pence: String(input.bookingFeePence),
     },
     // payment_intent_data.metadata is what surfaces on refunds / on
     // the PaymentIntent dashboard — duplicate the key fields there too.
+    // Stripe metadata values must be strings; coerce explicitly.
     payment_intent_data: {
       metadata: {
         booking_id: input.bookingId,
         user_id: input.userId,
         event_id: input.eventId,
+        // When an admin opens a PaymentIntent in the Stripe dashboard
+        // to investigate a refund query, this surfaces immediately
+        // "this booking had a £0.60 fee, so the £20 partial-refund is
+        // correct". Cheap audit aid.
+        booking_fee_pence: String(input.bookingFeePence),
       },
     },
     // User can enter Stripe Dashboard-managed promotion codes at

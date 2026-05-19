@@ -113,6 +113,8 @@ function makeBooking(overrides: Partial<Booking> = {}): Booking {
     status: 'confirmed',
     waitlist_position: null,
     price_at_booking: 3500,
+    booking_fee_pence: 0,
+    stripe_fee_pence: 0,
     booked_at: '2026-04-01T10:00:00Z',
     created_at: '2026-04-01T10:00:00Z',
     updated_at: '2026-04-01T10:00:00Z',
@@ -258,6 +260,93 @@ describe('BookingSidebar', () => {
 
     fireEvent.click(screen.getByText('Need to cancel?'))
     expect(screen.getByText(/within 168h/i)).toBeTruthy()
+  })
+
+  // ── Cancel dialog fee disclosure (refund-fee-deduction spec §8.5) ─────
+  //
+  // Eligible-refund branch flips on `booking.booking_fee_pence`:
+  //   > 0 → fee-aware copy (post-migration paid booking)
+  //   = 0 → legacy copy (pre-migration row, refund full like before)
+  // Both paths use "5-10 working days" (not "2-3") per spec §8.5.
+
+  it('shows fee-aware refund copy when booking_fee_pence > 0', () => {
+    // Future event 7 days away with a 48h refund window → eligible.
+    render(
+      <BookingSidebar
+        event={makeEvent({
+          price: 2000,
+          refund_window_hours: 48,
+          date_time: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        })}
+        userBooking={makeBooking({
+          status: 'confirmed',
+          price_at_booking: 2000,
+          booking_fee_pence: 60,
+        })}
+        {...defaultProps}
+      />,
+    )
+
+    fireEvent.click(screen.getByText('Need to cancel?'))
+
+    // Spec §8.5: refund amount, the fee, the "covers card processing"
+    // explanation, and the 5-10 working days line all appear.
+    expect(screen.getByText(/£20.*£0\.60 booking fee.*5.10 working days/u)).toBeTruthy()
+    expect(screen.getByText(/covers card processing/)).toBeTruthy()
+  })
+
+  it('shows legacy refund copy (no fee mention) when booking_fee_pence = 0', () => {
+    // Pre-migration booking path — locked decision 2. The user only
+    // ever paid the ticket price, so no fee disclosure is appropriate.
+    render(
+      <BookingSidebar
+        event={makeEvent({
+          price: 2000,
+          refund_window_hours: 48,
+          date_time: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        })}
+        userBooking={makeBooking({
+          status: 'confirmed',
+          price_at_booking: 2000,
+          booking_fee_pence: 0,
+        })}
+        {...defaultProps}
+      />,
+    )
+
+    fireEvent.click(screen.getByText('Need to cancel?'))
+
+    // The refund amount + 5-10 days still appear; the fee disclosure
+    // does NOT.
+    expect(screen.getByText(/refund.*£20.*5.10 working days/u)).toBeTruthy()
+    expect(screen.queryByText(/booking fee/)).toBeNull()
+    expect(screen.queryByText(/covers card processing/)).toBeNull()
+  })
+
+  it('uses 5-10 working days (not 2-3) in the eligible refund copy', () => {
+    // Guards against a future regression to the older optimistic "2-3"
+    // Stripe-timing copy. Both branches (fee-aware and legacy) must use
+    // 5-10 — this case is the fee-aware one.
+    render(
+      <BookingSidebar
+        event={makeEvent({
+          price: 2000,
+          refund_window_hours: 48,
+          date_time: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        })}
+        userBooking={makeBooking({
+          status: 'confirmed',
+          price_at_booking: 2000,
+          booking_fee_pence: 60,
+        })}
+        {...defaultProps}
+      />,
+    )
+
+    fireEvent.click(screen.getByText('Need to cancel?'))
+
+    expect(screen.getByText(/5.10 working days/u)).toBeTruthy()
+    expect(screen.queryByText(/2.3 working days/u)).toBeNull()
   })
 
   // ── Waitlisted state ──

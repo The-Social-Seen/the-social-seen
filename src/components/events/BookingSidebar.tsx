@@ -404,7 +404,13 @@ function ConfirmedState({
                 {isNonRefundable
                   ? "This event is non-refundable."
                   : refundEligible
-                    ? `We\u2019ll refund ${formatPrice(booking.price_at_booking)} to your card (2\u20133 working days).`
+                    ? booking.booking_fee_pence > 0
+                      // Fee-aware copy (post-migration paid booking). Spec \u00a78.5.
+                      ? `We\u2019ll refund ${formatPrice(booking.price_at_booking)} to your card. The ${formatPrice(booking.booking_fee_pence)} booking fee covers card processing and isn\u2019t refundable. Refunds take 5\u201310 working days.`
+                      // Legacy copy for pre-migration bookings where the fee
+                      // wasn't charged (booking_fee_pence = 0). They refund
+                      // full price like before \u2014 locked decision 2.
+                      : `We\u2019ll refund ${formatPrice(booking.price_at_booking)} to your card. Refunds take 5\u201310 working days.`
                     : `Cancellations within ${refundWindowHours}h of the event aren\u2019t refundable.`}
               </p>
             )}

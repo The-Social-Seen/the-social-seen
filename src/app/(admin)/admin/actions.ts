@@ -1,13 +1,20 @@
 'use server'
 
 import { createServerClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { revalidatePath } from 'next/cache'
 import { after } from 'next/server'
 import { uniqueSlug } from '@/lib/utils/slugify'
-import { normaliseLondonDatetimeToUtc } from '@/lib/utils/dates'
+import { normaliseLondonDatetimeToUtc, formatDateFull, formatTime } from '@/lib/utils/dates'
 import { sendEmail } from '@/lib/email/send'
 import { adminAnnouncementTemplate } from '@/lib/email/templates/admin-announcement'
+import {
+  eventCancelledTemplate,
+  type EventCancelledVariant,
+} from '@/lib/email/templates/event-cancelled'
 import { isRedacted } from '@/lib/notifications/redaction'
+import { getStripeClient } from '@/lib/stripe/server'
+import * as Sentry from '@sentry/nextjs'
 import { z } from 'zod'
 import { PRIMARY_ELIGIBLE_TAG_SLUGS } from '@/lib/constants/tags'
 import {
@@ -828,6 +835,530 @@ export async function cancelEvent(eventId: string) {
   return { success: true }
 }
 
+// ── getEventCancelPreview ────────────────────────────────────────────────────
+
+/**
+ * Counts shown in the admin "Cancel & Refund" confirm modal.
+ *
+ * Read-only preview helper — does NOT mutate. Lets the UI pick the right
+ * copy variant (paid / free / waitlist-only / zero) and show the exact
+ * total refund amount before the admin commits.
+ *
+ * `totalRefundPence` is `SUM(price_at_booking + booking_fee_pence)`
+ * across confirmed bookings — the same formula the real cancel action
+ * uses (spec §8.8). Computed in this helper rather than the client so
+ * the admin sees the truth from the database, not the eventually-stale
+ * EventWithStats aggregate.
+ */
+export interface EventCancelPreview {
+  confirmedPaid: number
+  confirmedFree: number
+  waitlisted: number
+  totalRefundPence: number
+}
+
+export async function getEventCancelPreview(
+  eventId: string,
+): Promise<EventCancelPreview> {
+  await requireAdmin()
+
+  if (!eventId) throw new Error('Event ID is required')
+
+  // Use the admin client so the count works regardless of the per-row
+  // RLS gating — same pattern as cancelEventAndRefundBookings's loop.
+  const admin = createAdminClient()
+
+  const { data, error } = await admin
+    .from('bookings')
+    .select('status, price_at_booking, booking_fee_pence')
+    .eq('event_id', eventId)
+    .in('status', ['confirmed', 'waitlisted'])
+    .is('deleted_at', null)
+
+  if (error) {
+    throw new Error(`Failed to fetch booking preview: ${error.message}`)
+  }
+
+  const preview: EventCancelPreview = {
+    confirmedPaid: 0,
+    confirmedFree: 0,
+    waitlisted: 0,
+    totalRefundPence: 0,
+  }
+
+  for (const row of data ?? []) {
+    if (row.status === 'waitlisted') {
+      preview.waitlisted += 1
+      continue
+    }
+    // confirmed
+    const price = row.price_at_booking ?? 0
+    const fee = row.booking_fee_pence ?? 0
+    if (price > 0) {
+      preview.confirmedPaid += 1
+      preview.totalRefundPence += price + fee
+    } else {
+      preview.confirmedFree += 1
+    }
+  }
+
+  return preview
+}
+
+// ── cancelEventAndRefundBookings ─────────────────────────────────────────────
+
+/**
+ * One entry in the per-booking failure list returned to the admin UI.
+ */
+interface FailedRefund {
+  bookingId: string
+  userEmail: string
+  error: string
+}
+
+export interface CancelEventResult {
+  success: boolean
+  error?: string
+  summary?: {
+    eventId: string
+    eventTitle: string
+    /** Count of all non-cancelled bookings touched. */
+    totalBookings: number
+    /** Successful Stripe refunds issued (paid bookings only). */
+    refundedCount: number
+    /** Sum of price_at_booking + booking_fee_pence across refunded bookings (pence). */
+    refundedTotalPence: number
+    /** Free-event bookings flipped to cancelled (no refund needed). */
+    cancelledFreeCount: number
+    /** Waitlisted bookings flipped to cancelled. */
+    cancelledWaitlistCount: number
+    /** pending_payment bookings flipped to cancelled. */
+    cancelledPendingCount: number
+    /** Bookings where the Stripe refund failed — admin must follow up manually. */
+    failedRefunds: FailedRefund[]
+    /** Cancellation emails dispatched (best-effort; may differ from totalBookings on email failures). */
+    emailedCount: number
+  }
+}
+
+/**
+ * Cancel an event AND refund every confirmed booking. Admin-only.
+ *
+ * Refund amount per confirmed paid booking: price_at_booking +
+ * booking_fee_pence (full — platform absorbs the Stripe processing fee
+ * on admin-initiated cancellations, per locked decision 3 in
+ * SYSTEM-DESIGN-refund-fee-deduction.md §0). User-initiated cancellation
+ * keeps the fee (see cancelBooking in src/app/events/[slug]/actions.ts).
+ *
+ * Algorithm (spec §7.3):
+ *   1. requireAdmin guard.
+ *   2. Validate eventId + fetch event.
+ *   3. Flip events.is_cancelled = true (idempotent guard so a re-run
+ *      after a partial failure mid-loop is safe).
+ *   4. Iterate confirmed / waitlisted / pending_payment bookings:
+ *        - confirmed + paid: Stripe refund + UPDATE.
+ *        - confirmed + free: UPDATE only.
+ *        - waitlisted / pending_payment: UPDATE only (Stripe Checkout
+ *          Session auto-expires within 30 min; if the user happens to
+ *          complete payment in that window the webhook's
+ *          .eq('status','pending_payment') guard no-ops and admin
+ *          handles the orphan payment manually — flagged as a
+ *          follow-up).
+ *   5. Fire-and-forget the per-recipient cancellation email post-loop.
+ *   6. Return per-booking outcomes so the admin UI can surface partial
+ *      success (failedRefunds includes user email + Stripe error string
+ *      so admin can manually refund from the Stripe dashboard).
+ *
+ * Uses the service-role admin client for the loop because we're
+ * mutating rows that belong to many users — same pattern as the
+ * webhook's `handleChargeRefunded`. RLS is bypassed but the
+ * `requireAdmin()` gate at the entry enforces the admin check.
+ */
+export async function cancelEventAndRefundBookings(
+  eventId: string,
+  reason?: string,
+): Promise<CancelEventResult> {
+  await requireAdmin()
+
+  if (!eventId) return { success: false, error: 'Event ID is required' }
+
+  const admin = createAdminClient()
+
+  // 1) Fetch the event.
+  const { data: event, error: eventErr } = await admin
+    .from('events')
+    .select('id, slug, title, date_time, is_cancelled, deleted_at')
+    .eq('id', eventId)
+    .single()
+
+  if (eventErr || !event) {
+    return { success: false, error: 'Event not found' }
+  }
+
+  if (event.deleted_at) {
+    return { success: false, error: 'Event has been deleted' }
+  }
+
+  // 2) Flip is_cancelled = true. Optimistic guard so a concurrent
+  //    duplicate call doesn't double-flip — and the re-run case
+  //    (resuming after a partial-failure mid-loop) is supported by
+  //    falling through to the booking iteration even when the flag is
+  //    already true.
+  if (!event.is_cancelled) {
+    const { error: flipErr } = await admin
+      .from('events')
+      .update({ is_cancelled: true })
+      .eq('id', eventId)
+      .eq('is_cancelled', false)
+
+    if (flipErr) {
+      return {
+        success: false,
+        error: `Failed to mark event cancelled: ${flipErr.message}`,
+      }
+    }
+  }
+
+  // 3) Fetch all non-cancelled, non-deleted bookings for this event,
+  //    joined to the recipient profile so the cancellation email has
+  //    a name/email to send to.
+  const { data: bookings, error: bookingsErr } = await admin
+    .from('bookings')
+    .select(`
+      id, user_id, status,
+      price_at_booking, booking_fee_pence,
+      stripe_payment_id, refunded_amount_pence,
+      waitlist_position,
+      profile:profiles!bookings_user_id_fkey(full_name, email)
+    `)
+    .eq('event_id', eventId)
+    .in('status', ['confirmed', 'waitlisted', 'pending_payment'])
+    .is('deleted_at', null)
+
+  if (bookingsErr) {
+    return {
+      success: false,
+      error: `Failed to fetch bookings: ${bookingsErr.message}`,
+    }
+  }
+
+  const summary: NonNullable<CancelEventResult['summary']> = {
+    eventId: event.id,
+    eventTitle: event.title,
+    totalBookings: bookings?.length ?? 0,
+    refundedCount: 0,
+    refundedTotalPence: 0,
+    cancelledFreeCount: 0,
+    cancelledWaitlistCount: 0,
+    cancelledPendingCount: 0,
+    failedRefunds: [],
+    emailedCount: 0,
+  }
+
+  // Track the per-recipient email job. Variant + refund amount captured
+  // here so the post-loop `after()` can fire them without re-querying.
+  type EmailJob = {
+    userId: string
+    email: string
+    fullName: string
+    variant: EventCancelledVariant
+    refundedAmountPence?: number
+  }
+  const emailJobs: EmailJob[] = []
+
+  type BookingRow = {
+    id: string
+    user_id: string
+    status: string
+    price_at_booking: number
+    booking_fee_pence: number | null
+    stripe_payment_id: string | null
+    refunded_amount_pence: number | null
+    waitlist_position: number | null
+    profile: unknown
+  }
+
+  for (const raw of (bookings ?? []) as BookingRow[]) {
+    const profile = extractJoin<{ full_name: string | null; email: string | null }>(
+      raw.profile,
+    )
+    const userEmail = profile?.email ?? ''
+    const fullName = profile?.full_name ?? ''
+    const cancellationReason = reason ?? 'admin_event_cancelled'
+    const fee = raw.booking_fee_pence ?? 0
+
+    // ── confirmed + paid → Stripe refund + UPDATE ──────────────────────
+    if (
+      raw.status === 'confirmed' &&
+      raw.stripe_payment_id &&
+      (raw.refunded_amount_pence ?? 0) === 0
+    ) {
+      const refundTotal = raw.price_at_booking + fee
+      let refundId: string | null = null
+      try {
+        const stripe = getStripeClient()
+        const refund = await stripe.refunds.create(
+          {
+            payment_intent: raw.stripe_payment_id,
+            // Full amount — ticket + fee — because the cancellation is
+            // ours, not the customer's. Locked decision 3.
+            amount: refundTotal,
+            reason: 'requested_by_customer',
+            metadata: {
+              booking_id: raw.id,
+              user_id: raw.user_id,
+              source: 'admin_event_cancelled',
+            },
+          },
+          {
+            // Per-booking key so a re-run (resume after partial failure)
+            // returns the same refund object instead of double-charging.
+            idempotencyKey: `event-cancel-refund-${raw.id}`,
+          },
+        )
+        refundId = refund.id
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        console.error(
+          '[cancelEventAndRefundBookings] Stripe refund failed:',
+          raw.id,
+          message,
+        )
+        Sentry.captureException(err, {
+          tags: { surface: 'cancelEventAndRefundBookings' },
+          extra: { bookingId: raw.id, eventId, userId: raw.user_id },
+          level: 'error',
+        })
+        summary.failedRefunds.push({
+          bookingId: raw.id,
+          userEmail,
+          error: message,
+        })
+        // Do NOT flip status to cancelled — leaving the booking in a
+        // visibly-inconsistent state is better than silently cancelling
+        // without refund. Admin can retry the Server Action; the Stripe
+        // idempotency key will return the now-successful refund. No
+        // email sent for this user yet (the loop will get them on retry).
+        continue
+      }
+
+      const nowIso = new Date().toISOString()
+      const { error: updErr } = await admin
+        .from('bookings')
+        .update({
+          status: 'cancelled',
+          cancelled_at: nowIso,
+          cancellation_reason: cancellationReason,
+          refunded_amount_pence: refundTotal,
+          refunded_at: nowIso,
+          stripe_refund_id: refundId,
+        })
+        .eq('id', raw.id)
+        .eq('status', 'confirmed') // optimistic guard
+
+      if (updErr) {
+        // Refund went through but DB UPDATE failed — same severity as
+        // the cancelBooking refund-reconcile path. Log + Sentry with a
+        // filterable tag so the operator can find the orphan.
+        console.error(
+          '[cancelEventAndRefundBookings] Refund issued but UPDATE failed:',
+          raw.id,
+          refundId,
+          updErr.message,
+        )
+        Sentry.captureException(
+          new Error('Refund issued but booking UPDATE failed — manual reconciliation needed'),
+          {
+            tags: { surface: 'admin-refund-reconcile' },
+            extra: {
+              bookingId: raw.id,
+              stripeRefundId: refundId,
+              eventId,
+            },
+            level: 'error',
+          },
+        )
+        summary.failedRefunds.push({
+          bookingId: raw.id,
+          userEmail,
+          error: `Refund issued (${refundId}) but DB UPDATE failed: ${updErr.message}`,
+        })
+        continue
+      }
+
+      summary.refundedCount += 1
+      summary.refundedTotalPence += refundTotal
+      if (userEmail) {
+        emailJobs.push({
+          userId: raw.user_id,
+          email: userEmail,
+          fullName,
+          variant: 'confirmed_refunded',
+          refundedAmountPence: refundTotal,
+        })
+      }
+      continue
+    }
+
+    // ── confirmed + free → UPDATE only ────────────────────────────────
+    if (raw.status === 'confirmed' && !raw.stripe_payment_id) {
+      const nowIso = new Date().toISOString()
+      const { error: updErr } = await admin
+        .from('bookings')
+        .update({
+          status: 'cancelled',
+          cancelled_at: nowIso,
+          cancellation_reason: cancellationReason,
+        })
+        .eq('id', raw.id)
+        .eq('status', 'confirmed')
+
+      if (updErr) {
+        summary.failedRefunds.push({
+          bookingId: raw.id,
+          userEmail,
+          error: `Free-event UPDATE failed: ${updErr.message}`,
+        })
+        continue
+      }
+      summary.cancelledFreeCount += 1
+      if (userEmail) {
+        emailJobs.push({
+          userId: raw.user_id,
+          email: userEmail,
+          fullName,
+          variant: 'confirmed_free',
+        })
+      }
+      continue
+    }
+
+    // ── waitlisted → UPDATE only ───────────────────────────────────────
+    if (raw.status === 'waitlisted') {
+      const nowIso = new Date().toISOString()
+      const { error: updErr } = await admin
+        .from('bookings')
+        .update({
+          status: 'cancelled',
+          cancelled_at: nowIso,
+          cancellation_reason: cancellationReason,
+          waitlist_position: null,
+        })
+        .eq('id', raw.id)
+        .eq('status', 'waitlisted')
+
+      if (updErr) {
+        summary.failedRefunds.push({
+          bookingId: raw.id,
+          userEmail,
+          error: `Waitlist UPDATE failed: ${updErr.message}`,
+        })
+        continue
+      }
+      summary.cancelledWaitlistCount += 1
+      if (userEmail) {
+        emailJobs.push({
+          userId: raw.user_id,
+          email: userEmail,
+          fullName,
+          variant: 'waitlisted',
+        })
+      }
+      continue
+    }
+
+    // ── pending_payment → UPDATE only ─────────────────────────────────
+    if (raw.status === 'pending_payment') {
+      const nowIso = new Date().toISOString()
+      const { error: updErr } = await admin
+        .from('bookings')
+        .update({
+          status: 'cancelled',
+          cancelled_at: nowIso,
+          cancellation_reason: cancellationReason,
+        })
+        .eq('id', raw.id)
+        .eq('status', 'pending_payment')
+
+      if (updErr) {
+        summary.failedRefunds.push({
+          bookingId: raw.id,
+          userEmail,
+          error: `Pending-payment UPDATE failed: ${updErr.message}`,
+        })
+        continue
+      }
+      summary.cancelledPendingCount += 1
+      if (userEmail) {
+        emailJobs.push({
+          userId: raw.user_id,
+          email: userEmail,
+          fullName,
+          variant: 'pending_payment',
+        })
+      }
+      continue
+    }
+  }
+
+  // 4) Fire-and-forget the per-recipient cancellation emails.
+  //
+  // Snapshot the date/time strings once — the loop captures them inside
+  // `after()` so the closure outlives the request scope.
+  const eventDate = formatDateFull(event.date_time)
+  const eventTime = formatTime(event.date_time)
+  const eventTitleSnap = event.title
+
+  after(async () => {
+    for (const job of emailJobs) {
+      try {
+        const tpl = eventCancelledTemplate({
+          variant: job.variant,
+          fullName: job.fullName?.trim() || 'there',
+          eventTitle: eventTitleSnap,
+          eventDate,
+          eventTime,
+          refundedAmountPence: job.refundedAmountPence,
+        })
+
+        const result = await sendEmail({
+          to: job.email,
+          subject: tpl.subject,
+          html: tpl.html,
+          text: tpl.text,
+          templateName: 'event_cancelled',
+          relatedProfileId: job.userId,
+          tags: [
+            { name: 'template', value: 'event_cancelled' },
+            { name: 'variant', value: job.variant },
+            { name: 'event_id', value: eventId },
+          ],
+        })
+
+        if (result.success) summary.emailedCount += 1
+      } catch (err) {
+        console.warn(
+          '[cancelEventAndRefundBookings] cancellation email threw:',
+          err instanceof Error ? err.message : err,
+        )
+      }
+    }
+  })
+
+  // The summary.emailedCount returned to the synchronous caller is 0 —
+  // `after()` runs post-response so we can't await it here. Operators
+  // reconcile counts via the `notifications` table audit. Surface this
+  // expectation in the comment so a future reader doesn't expect the
+  // returned count to be accurate.
+
+  revalidatePath('/admin/events')
+  revalidatePath('/events')
+  revalidatePath(`/events/${event.slug}`)
+  revalidatePath('/bookings')
+
+  return { success: true, summary }
+}
+
 // ── Event CRUD Helpers ───────────────────────────────────────────────────────
 
 export async function getAdminEvents(): Promise<EventWithStats[]> {
@@ -1045,8 +1576,10 @@ export async function getEventBookings(
   let query = supabase
     .from('bookings')
     .select(`
-      id, status, waitlist_position, price_at_booking, booked_at, created_at,
+      id, status, waitlist_position, price_at_booking, booking_fee_pence,
+      stripe_fee_pence, booked_at, created_at,
       stripe_payment_id, stripe_refund_id, refunded_amount_pence, cancelled_at,
+      cancellation_reason,
       profile:profiles!bookings_user_id_fkey(id, full_name, email, avatar_url)
     `)
     .eq('event_id', eventId)
