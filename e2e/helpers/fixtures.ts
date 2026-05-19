@@ -187,6 +187,33 @@ export async function createTestEvent(
   if (error || !data) {
     throw new Error(`createTestEvent: insert failed: ${error?.message}`)
   }
+
+  // Seed a primary tag for the event. The admin events list query
+  // (`getAdminEvents` → `event_with_stats` + `event_tags!inner` filtered
+  // to `is_primary = true`) excludes events without a primary tag — so
+  // any test that navigates to /admin/events with seeded data needs
+  // this row. Use 'drinks-bars' as a stable default (seeded by migration
+  // 20260504000001). Failure here is non-fatal — only tests that hit
+  // the admin events list rely on the tag.
+  const { data: tagRow, error: tagLookupErr } = await admin
+    .from('tags')
+    .select('id')
+    .eq('slug', 'drinks-bars')
+    .single()
+  if (tagLookupErr || !tagRow) {
+    throw new Error(
+      `createTestEvent: primary-tag lookup failed (drinks-bars not seeded?): ${tagLookupErr?.message ?? 'no row'}`,
+    )
+  }
+  const { error: linkErr } = await admin.from('event_tags').insert({
+    event_id: data.id,
+    tag_id: tagRow.id,
+    is_primary: true,
+  })
+  if (linkErr) {
+    throw new Error(`createTestEvent: event_tags insert failed: ${linkErr.message}`)
+  }
+
   return data as TestEvent
 }
 
