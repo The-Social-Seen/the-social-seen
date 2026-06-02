@@ -31,6 +31,7 @@ interface TestBooking {
     full_name: string
     email: string
     avatar_url: string | null
+    phone_number: string | null
   } | null
 }
 
@@ -45,6 +46,7 @@ const booking = (overrides: Partial<TestBooking> = {}): TestBooking => ({
     full_name: 'Charlotte Davis',
     email: 'charlotte@example.com',
     avatar_url: null,
+    phone_number: null,
   },
   ...overrides,
 })
@@ -131,6 +133,7 @@ describe('BookingsTable — mobile pass', () => {
               full_name: 'James Hartley',
               email: 'james@example.com',
               avatar_url: null,
+              phone_number: null,
             },
           }),
         ]}

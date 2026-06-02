@@ -6,6 +6,7 @@ import { Download, UserX, Undo2 } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { exportEventAttendeesCSV, setNoShow } from '@/app/(admin)/admin/actions'
 import PromoteButton from './PromoteButton'
+import MobilePhoneValue from '@/components/shared/MobilePhoneValue'
 
 // Filter tabs use a shorter "Waitlist" label below md: so all five fit
 // in a wrap-to-2-rows segmented control without overflowing 375px.
@@ -24,7 +25,10 @@ interface BookingRow {
   stripe_refund_id?: string | null
   refunded_amount_pence?: number | null
   cancelled_at?: string | null
-  profile: { id: string; full_name: string; email: string; avatar_url: string | null } | null
+  // phone_number is admin-only PII merged server-side via the
+  // admin_get_user_phones() RPC (never part of the .select()); null when the
+  // member set no phone or their profile was soft-deleted.
+  profile: { id: string; full_name: string; email: string; avatar_url: string | null; phone_number: string | null } | null
 }
 
 function paymentBadge(b: BookingRow) {
@@ -153,6 +157,7 @@ export default function BookingsTable({
                 <tr className="border-b border-border text-left">
                   <th className="pb-3 font-medium text-text-tertiary">Name</th>
                   <th className="pb-3 font-medium text-text-tertiary">Email</th>
+                  <th className="pb-3 font-medium text-text-tertiary hidden lg:table-cell">Mobile</th>
                   <th className="pb-3 font-medium text-text-tertiary">Status</th>
                   <th className="pb-3 font-medium text-text-tertiary">Payment</th>
                   <th className="pb-3 font-medium text-text-tertiary">Booked</th>
@@ -172,6 +177,12 @@ export default function BookingsTable({
                       </td>
                       <td className="py-3 pr-4 text-text-secondary">
                         {profile?.email ?? '—'}
+                      </td>
+                      <td className="py-3 pr-4 hidden lg:table-cell">
+                        <MobilePhoneValue
+                          phoneNumber={profile?.phone_number ?? null}
+                          name={profile?.full_name ?? 'this attendee'}
+                        />
                       </td>
                       <td className="py-3 pr-4">{statusBadge(booking.status)}</td>
                       <td className="py-3 pr-4">
@@ -237,6 +248,16 @@ export default function BookingsTable({
 
                     {/* Body */}
                     <dl className="space-y-1.5 text-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <dt className="text-text-tertiary">Mobile</dt>
+                        <dd className="text-right">
+                          <MobilePhoneValue
+                            phoneNumber={profile?.phone_number ?? null}
+                            name={profile?.full_name ?? 'this attendee'}
+                            variant="card"
+                          />
+                        </dd>
+                      </div>
                       {payBadge && (
                         <div className="flex items-center justify-between gap-3">
                           <dt className="text-text-tertiary">Payment</dt>

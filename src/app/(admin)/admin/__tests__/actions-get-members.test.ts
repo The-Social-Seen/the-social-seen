@@ -31,12 +31,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockGetUser = vi.fn()
 const mockFrom = vi.fn()
+const mockRpc = vi.fn()
 
 vi.mock('@/lib/supabase/server', () => ({
   createServerClient: vi.fn(() =>
     Promise.resolve({
       auth: { getUser: mockGetUser },
       from: mockFrom,
+      rpc: mockRpc,
     }),
   ),
 }))
@@ -124,6 +126,12 @@ function wireSupabase(opts: {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // getAdminMembers now batch-fetches phone via the admin_get_user_phones()
+  // RPC. Default it to an empty result so the existing tests (which assert on
+  // the .select() column contract and booking aggregation, NOT on phone) run
+  // without NPE-ing on the new call. Tests that assert merged phone values
+  // override this with their own mockResolvedValueOnce.
+  mockRpc.mockResolvedValue({ data: [], error: null })
 })
 
 // ════════════════════════════════════════════════════════════════════════════

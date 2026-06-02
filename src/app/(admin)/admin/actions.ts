@@ -23,6 +23,7 @@ import {
   type RowWithPrimaryTagEmbed,
 } from '@/lib/supabase/queries/events'
 import type {
+  AdminEventBooking,
   BookingStatus,
   EventWithStats,
   MemberWithStats,
@@ -65,6 +66,43 @@ function extractField<T extends Record<string, unknown>>(
 ): T[keyof T] | null {
   const obj = extractJoin<T>(value)
   return obj ? obj[field] : null
+}
+
+/**
+ * Batch-fetches member phone numbers (admin-only PII) via the
+ * `admin_get_user_phones()` SECURITY DEFINER RPC and returns a
+ * Map<user_id, phone>.
+ *
+ * Phone was revoked from the `authenticated` SELECT GRANT on
+ * `public.profiles` (20260503000002), so it can NOT be read through a
+ * `.select()` — the RPC's in-body admin gate is the authorisation boundary.
+ * Callers pass the user-scoped client from `requireAdmin()` (the RPC carries
+ * its own gate; no service-role needed) and merge the result by id with a
+ * `?? null` fallback — never assume every input id yields a row (soft-deleted
+ * or phone-less members are absent / null). Exactly ONE RPC round-trip; ids
+ * are de-duped first.
+ */
+async function fetchPhoneMap(
+  supabase: Awaited<ReturnType<typeof requireAdmin>>['supabase'],
+  userIds: string[]
+): Promise<Map<string, string | null>> {
+  const map = new Map<string, string | null>()
+  if (userIds.length === 0) return map
+
+  const unique = [...new Set(userIds)]
+  const { data, error } = await supabase.rpc('admin_get_user_phones', {
+    target_user_ids: unique,
+  })
+
+  if (error) {
+    throw new Error(`Failed to fetch member phone numbers: ${error.message}`)
+  }
+
+  for (const row of (data ?? []) as Array<{ user_id: string; phone_number: string | null }>) {
+    map.set(row.user_id, row.phone_number ?? null)
+  }
+
+  return map
 }
 
 async function requireAdmin() {
@@ -1568,11 +1606,14 @@ export async function upsertEventHosts(eventId: string, hosts: HostInput[]) {
 export async function getEventBookings(
   eventId: string,
   statusFilter?: string
-) {
+): Promise<AdminEventBooking[]> {
   const { supabase } = await requireAdmin()
 
   if (!eventId) throw new Error('Event ID is required')
 
+  // NOTE: phone_number is deliberately NOT selected here (revoked from the
+  // `authenticated` GRANT in 20260503000002). It is merged below via the
+  // admin_get_user_phones() SECURITY DEFINER RPC.
   let query = supabase
     .from('bookings')
     .select(`
@@ -1594,7 +1635,30 @@ export async function getEventBookings(
 
   if (error) throw new Error(`Failed to fetch bookings: ${error.message}`)
 
-  return data ?? []
+  const rows = (data ?? []) as Array<
+    Omit<AdminEventBooking, 'profile'> & { profile: unknown }
+  >
+
+  // One batch RPC for every distinct attendee's phone — no N+1.
+  const profileIds = rows
+    .map((b) => extractField<{ id: string }>(b.profile, 'id'))
+    .filter((id): id is string => typeof id === 'string')
+  const phoneMap = await fetchPhoneMap(supabase, profileIds)
+
+  return rows.map((b) => {
+    const profile = extractJoin<{
+      id: string
+      full_name: string
+      email: string
+      avatar_url: string | null
+    }>(b.profile)
+    return {
+      ...b,
+      profile: profile
+        ? { ...profile, phone_number: phoneMap.get(profile.id) ?? null }
+        : null,
+    }
+  })
 }
 
 export async function promoteFromWaitlist(bookingId: string) {
@@ -1669,11 +1733,14 @@ export async function exportEventAttendeesCSV(eventId: string) {
 
   if (!eventId) throw new Error('Event ID is required')
 
+  // `id` is added to the join purely to key the phone merge; it is on the
+  // `authenticated` allow-list (safe). phone_number is NOT selected here
+  // (revoked in 20260503000002) — it is merged via admin_get_user_phones().
   const { data, error } = await supabase
     .from('bookings')
     .select(`
       booked_at,
-      profile:profiles!bookings_user_id_fkey(full_name, email)
+      profile:profiles!bookings_user_id_fkey(id, full_name, email)
     `)
     .eq('event_id', eventId)
     .eq('status', 'confirmed')
@@ -1682,19 +1749,39 @@ export async function exportEventAttendeesCSV(eventId: string) {
 
   if (error) throw new Error(`Failed to fetch attendees: ${error.message}`)
 
-  const rows = (data ?? []).map((b) => {
-    const profile = extractJoin<{ full_name: string; email: string }>(b.profile)
+  const parsed = (data ?? []).map((b) => {
+    const profile = extractJoin<{ id: string; full_name: string; email: string }>(
+      b.profile
+    )
     return {
+      id: profile?.id ?? null,
       name: profile?.full_name ?? '',
       email: profile?.email ?? '',
       booked_at: b.booked_at,
     }
   })
 
-  const header = 'Name,Email,Booked At'
+  // One batch RPC for the confirmed attendees' phones — no N+1.
+  const profileIds = parsed
+    .map((r) => r.id)
+    .filter((id): id is string => typeof id === 'string')
+  const phoneMap = await fetchPhoneMap(supabase, profileIds)
+
+  const rows = parsed.map((r) => ({
+    name: r.name,
+    email: r.email,
+    mobile: r.id ? phoneMap.get(r.id) ?? null : null,
+    booked_at: r.booked_at,
+  }))
+
+  // Mobile is column 3 (contact details grouped: Name, Email, Mobile; the
+  // timestamp stays last). The Mobile cell MUST pass through sanitizeCsvCell:
+  // phone numbers start with `+`, a CSV formula-injection lead char. NULL
+  // phone → empty quoted cell. See SYSTEM-DESIGN-member-phone-admin-read.md §3.
+  const header = 'Name,Email,Mobile,Booked At'
   const csvRows = rows.map(
     (r) =>
-      `"${sanitizeCsvCell(r.name)}","${sanitizeCsvCell(r.email)}","${r.booked_at}"`
+      `"${sanitizeCsvCell(r.name)}","${sanitizeCsvCell(r.email)}","${sanitizeCsvCell(r.mobile ?? '')}","${r.booked_at}"`
   )
 
   return [header, ...csvRows].join('\n')
@@ -1764,6 +1851,11 @@ export async function getAdminMembers(search?: string, sort?: string) {
     .in('user_id', profileIds)
     .is('deleted_at', null)
 
+  // Batch-fetch phone (admin-only PII) via the SECURITY DEFINER RPC, reusing
+  // the same id array. NOT added to the .select() above — see the comment in
+  // the .map() below and the guard test in actions-get-members.test.ts.
+  const phoneMap = await fetchPhoneMap(supabase, profileIds)
+
   // Aggregate booking stats per user
   const statsMap = new Map<string, { attended: number; confirmed: number; waitlisted: number }>()
 
@@ -1780,19 +1872,26 @@ export async function getAdminMembers(search?: string, sort?: string) {
 
   const result: MemberWithStats[] = profiles.map((p) => {
     const stats = statsMap.get(p.id) ?? { attended: 0, confirmed: 0, waitlisted: 0 }
-    // `phone_number` is intentionally absent from the explicit select() above
-    // (revoked from the `authenticated` GRANT in 20260503000002), so the
-    // narrowed row type doesn't include it — but `MemberWithStats extends
-    // Profile` still requires it. Cast through `unknown` to widen explicitly:
-    // MembersTable does not read `phone_number`, and any caller that ever
-    // does should switch to `admin_get_user_phone()` instead of relying on
-    // this list-view payload.
+    // `phone_number` is NOT in the explicit select() above (revoked from the
+    // `authenticated` GRANT in 20260503000002). It is fetched in one batch via
+    // the admin_get_user_phones() SECURITY DEFINER RPC and merged here, so the
+    // returned object satisfies `MemberWithStats` without the previous
+    // `as unknown` cast.
+    //
+    // Caveat: the narrowed select also omits other Profile-adjacent revoked
+    // columns (gender, age_range, stripe_customer_id,
+    // profile_nudge_email_sent_at). The CURRENT `Profile` interface does not
+    // declare those, so once phone_number is supplied the object satisfies
+    // `Profile` (and thus `MemberWithStats`) cleanly. If `Profile` is later
+    // extended to include those revoked columns, a narrower row type or a cast
+    // returns here.
     return {
       ...p,
+      phone_number: phoneMap.get(p.id) ?? null,
       events_attended: stats.attended,
       events_confirmed: stats.confirmed,
       events_waitlisted: stats.waitlisted,
-    } as unknown as MemberWithStats
+    } satisfies MemberWithStats
   })
 
   // Re-sort by most_active if needed (by events_attended desc)
