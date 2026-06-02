@@ -14,12 +14,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockGetUser = vi.fn()
 const mockFrom = vi.fn()
+const mockRpc = vi.fn()
 
 vi.mock('@/lib/supabase/server', () => ({
   createServerClient: vi.fn(() =>
     Promise.resolve({
       auth: { getUser: mockGetUser },
       from: mockFrom,
+      rpc: mockRpc,
     })
   ),
 }))
@@ -80,6 +82,10 @@ function mockAdminSearch(profileRows: unknown[] = [], bookingRows: unknown[] = [
 describe('getAdminMembers — ILIKE wildcard escaping', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // getAdminMembers now batch-fetches phone via the admin_get_user_phones()
+    // RPC. These tests assert only on the ILIKE search term passed to .or(),
+    // so an empty phone result keeps the function running without NPE.
+    mockRpc.mockResolvedValue({ data: [], error: null })
   })
 
   it('escapes % wildcard in search term', async () => {

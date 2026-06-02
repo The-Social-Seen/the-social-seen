@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils/cn'
 import { exportMembersCSV } from '@/app/(admin)/admin/actions'
 import type { MemberWithStats, UserStatus } from '@/types'
 import MemberModerationDialog from './MemberModerationDialog'
+import MobilePhoneValue from '@/components/shared/MobilePhoneValue'
 
 interface MembersTableProps {
   members: MemberWithStats[]
@@ -140,6 +141,7 @@ export default function MembersTable({ members }: MembersTableProps) {
                 <tr className="border-b border-border text-left">
                   <th className="pb-3 font-medium text-text-tertiary">Name</th>
                   <th className="pb-3 font-medium text-text-tertiary">Email</th>
+                  <th className="pb-3 font-medium text-text-tertiary hidden lg:table-cell">Mobile</th>
                   <th className="pb-3 font-medium text-text-tertiary hidden lg:table-cell">Job Title</th>
                   <th className="pb-3 font-medium text-text-tertiary hidden lg:table-cell">Company</th>
                   <th className="pb-3 font-medium text-text-tertiary">Events</th>
@@ -175,6 +177,12 @@ export default function MembersTable({ members }: MembersTableProps) {
                     </td>
                     <td className="py-3 pr-4 text-text-secondary truncate max-w-[200px]">
                       {member.email}
+                    </td>
+                    <td className="py-3 pr-4 whitespace-nowrap hidden lg:table-cell">
+                      <MobilePhoneValue
+                        phoneNumber={member.phone_number}
+                        name={member.full_name}
+                      />
                     </td>
                     <td className="py-3 pr-4 text-text-secondary hidden lg:table-cell">
                       {member.job_title ?? '—'}
@@ -282,6 +290,16 @@ export default function MembersTable({ members }: MembersTableProps) {
                           </dd>
                         </div>
                       )}
+                      <div className="flex items-center justify-between gap-3">
+                        <dt className="text-text-tertiary">Mobile</dt>
+                        <dd className="text-right">
+                          <MobilePhoneValue
+                            phoneNumber={member.phone_number}
+                            name={member.full_name}
+                            variant="card"
+                          />
+                        </dd>
+                      </div>
                       <div className="flex items-center justify-between gap-3">
                         <dt className="text-text-tertiary">Events</dt>
                         <dd className="text-text-secondary">{member.events_attended}</dd>

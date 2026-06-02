@@ -320,6 +320,39 @@ export interface MemberWithStats extends Profile {
   events_waitlisted: number
 }
 
+/**
+ * One booking row for the admin per-event attendees view
+ * (`getEventBookings`).
+ *
+ * `profile.phone_number` is admin-only PII merged in JS via the
+ * `admin_get_user_phones()` SECURITY DEFINER RPC — it is NEVER part of the
+ * `.select()` (revoked from the `authenticated` GRANT in 20260503000002).
+ * It is `null` when the member set no phone OR when the profile was
+ * soft-deleted (the RPC filters `deleted_at IS NULL`, so deleted-member PII
+ * does not resurface). The fee/refund/cancellation fields are typed
+ * permissively against the `bookings` table (refund + cancellation metadata
+ * is nullable; fee columns are NOT NULL DEFAULT 0).
+ */
+export interface AdminEventBooking {
+  id:                    string
+  status:                BookingStatus
+  waitlist_position:     number | null
+  price_at_booking:      number
+  booking_fee_pence:     number
+  stripe_fee_pence:      number
+  booked_at:             string
+  created_at:            string
+  stripe_payment_id:     string | null
+  stripe_refund_id:      string | null
+  refunded_amount_pence: number | null
+  cancelled_at:          string | null
+  cancellation_reason:   string | null
+  profile: Pick<
+    Profile,
+    'id' | 'full_name' | 'email' | 'avatar_url' | 'phone_number'
+  > | null
+}
+
 // ── Backwards-compatibility layer ─────────────────────────────────────────────
 // These types kept existing mock-data pages and components compiling until
 // they are rewritten in Batch 3 (Event Pages) and Batch 7 (Reviews & Gallery).

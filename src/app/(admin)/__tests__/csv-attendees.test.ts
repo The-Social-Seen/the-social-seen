@@ -10,12 +10,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockGetUser = vi.fn()
 const mockFrom = vi.fn()
+const mockRpc = vi.fn()
 
 vi.mock('@/lib/supabase/server', () => ({
   createServerClient: vi.fn(() =>
     Promise.resolve({
       auth: { getUser: mockGetUser },
       from: mockFrom,
+      rpc: mockRpc,
     })
   ),
 }))
@@ -39,7 +41,7 @@ function makeChain(response: { data?: unknown; error?: unknown }) {
   return chain
 }
 
-function mockAdminWithBookings(bookings: unknown[]) {
+function mockAdminWithBookings(bookings: unknown[], phones: unknown[] = []) {
   mockGetUser.mockResolvedValue({ data: { user: { id: 'admin-1' } }, error: null })
   let call = 0
   mockFrom.mockImplementation(() => {
@@ -47,6 +49,10 @@ function mockAdminWithBookings(bookings: unknown[]) {
     if (call === 1) return makeChain({ data: { role: 'admin' } })
     return makeChain({ data: bookings, error: null })
   })
+  // exportEventAttendeesCSV now batch-fetches phones via the
+  // admin_get_user_phones() RPC. Stub it so the function runs; tests that
+  // care about phone values pass an explicit `phones` array.
+  mockRpc.mockResolvedValue({ data: phones, error: null })
 }
 
 function mockMemberUser() {
@@ -63,7 +69,7 @@ describe('exportEventAttendeesCSV — CSV injection prevention', () => {
 
   it('T2-1: prefixes = (formula trigger) with single-quote in name field', async () => {
     mockAdminWithBookings([
-      { booked_at: '2026-01-01T10:00:00Z', profile: { full_name: '=CMD("rm -rf /")', email: 'safe@example.com' } },
+      { booked_at: '2026-01-01T10:00:00Z', profile: { id: 'usr-1', full_name: '=CMD("rm -rf /")', email: 'safe@example.com' } },
     ])
     const csv = await exportEventAttendeesCSV('evt-1')
     expect(csv).toContain(`"'=CMD(`)
@@ -71,16 +77,16 @@ describe('exportEventAttendeesCSV — CSV injection prevention', () => {
 
   it('T2-2: prefixes + (formula trigger) with single-quote in email field', async () => {
     mockAdminWithBookings([
-      { booked_at: '2026-01-01T10:00:00Z', profile: { full_name: 'Normal Name', email: '+1234@attacker.com' } },
+      { booked_at: '2026-01-01T10:00:00Z', profile: { id: 'usr-1', full_name: 'Normal Name', email: '+1234@attacker.com' } },
     ])
     const csv = await exportEventAttendeesCSV('evt-1')
     expect(csv).toContain(`"'+1234@attacker.com"`)
   })
 
-  it('T2-3: CSV header line is exactly Name,Email,Booked At', async () => {
+  it('T2-3: CSV header line is exactly Name,Email,Mobile,Booked At', async () => {
     mockAdminWithBookings([])
     const csv = await exportEventAttendeesCSV('evt-1')
-    expect(csv.startsWith('Name,Email,Booked At')).toBe(true)
+    expect(csv.startsWith('Name,Email,Mobile,Booked At')).toBe(true)
   })
 
   // NOTE: This test mocks Supabase. RLS enforcement is in supabase/migrations/ — verify there.
