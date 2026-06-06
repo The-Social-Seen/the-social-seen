@@ -118,6 +118,12 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 **Action:** When ANY trigger fires (second admin added, host-delegation pattern introduced, UGC URL submission gated by admin), re-evaluate. Four compensating-control options (hostname allowlist / server-side image proxy / referrer policy / hybrid) documented in `memory/project_image_allowlist_revisit_on_multi_admin.md`.
 **Priority:** Parked — not urgent under current single-admin operating model. Trigger-driven, not date-driven.
 
+### `event_reviews` admin writes — column-restricting trigger (Option B) when multi-admin lands
+**Source:** `SYSTEM-DESIGN-event-reviews-rls.md` §3.4 / §8 — deferred decision on migration `20260604000001` (admin review Hide/Show RLS fix, 2026-06-04).
+**Rationale:** That migration ships a **permissive** admin `WITH CHECK` on `reviews_update` (Option A): an admin may technically write any column (incl. `rating`, `review_text`) on any member's review. Bounded today because `toggleReviewVisibility` is the ONLY `event_reviews` UPDATE path in the codebase and writes `is_visible` only — so no app path can exploit it — and the single-admin trust model holds. Same single-admin-contingent posture as the image-allowlist entry above.
+**Action:** When ANY trigger fires (second admin, delegated host, or any new admin write path that touches more than `is_visible`), add the pre-drafted `BEFORE UPDATE` trigger from `SYSTEM-DESIGN-event-reviews-rls.md` §3.4 so a non-owner admin can only change `is_visible` (+ `updated_at`), enforced at the DB. Memory cross-ref: `project_admin_review_rls_drift` + `project_image_allowlist_revisit_on_multi_admin`.
+**Priority:** Parked — trigger-driven, not date-driven. Not a present bug.
+
 ### `email_verified` reconciliation path
 **Source:** P2-3 backend handover.
 **Rationale:** `verifyEmailOtp()` soft-succeeds if the DB update to `profiles.email_verified = true` fails after Supabase already accepted the OTP. User sees success but their flag is still false; they can't book until they verify again.
@@ -261,6 +267,12 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 **Rationale:** The three booking RPCs enforce security-critical invariants (email-verified, active-status, capacity race-safety, waitlist transitions). Vitest can't exercise plpgsql. Manual 12-scenario checklist documented in `docs/BOOKING-RPCS-TEST-PLAN.md`.
 **Action:** Stand up Playwright + `supabase start` in CI, seed test users per status × verification combo, automate the 12 scenarios.
 **Priority:** **HIGH — do before the first real member signs up in production.** Estimate ~1-1.5 days.
+
+### DB-level RLS test harness (pgTAP / local Supabase)
+**Source:** `event_reviews` admin-moderation RLS fix (migration `20260604000001`, 2026-06-04) — root-cause analysis.
+**Rationale:** The admin "Hide review" bug (`new row violates row-level security policy for table "event_reviews"`) shipped because **no automated test exercises Postgres RLS**. Every "RLS" test in the suite mocks the Supabase client, which cannot evaluate a `USING`/`WITH CHECK` clause — so policy drift and missing-branch defects are invisible to CI. The interim guard added in that fix (`src/lib/supabase/__tests__/event-reviews-rls-drift.test.ts`) asserts policy *shape in the migration SQL* only, not runtime enforcement.
+**Action:** Stand up a pgTAP (or `supabase start` + SQL) RLS harness in `supabase/tests/` once Docker is reachable in CI. Cover the highest-value cases per `SYSTEM-DESIGN-event-reviews-rls.md` §7: admin-not-owner Hide succeeds, admin reads a hidden review, non-admin/non-owner UPDATE denied, owner reads/edits own hidden review. Pairs naturally with the booking-RPC Playwright E2E entry above (same "Vitest can't test plpgsql/RLS" gap).
+**Priority:** Medium — this is the structural gap that let a customer-facing admin bug ship. Do alongside the booking-RPC E2E scaffold.
 
 ### Countdown-tick test in verify-form
 **Source:** P2-3 polish pass.
