@@ -29,6 +29,11 @@ Open technical debt and polish items — things deliberately scoped out of a bat
 
 ## 🔴 Bugs / regressions to investigate
 
+### Partial Stripe coupons leave `price_at_booking` at full face value
+**Source:** `SYSTEM-DESIGN-zero-total-coupon-bookings.md` §5 (flagged out-of-scope while shipping the full-comp / 100%-off webhook fix, 2026-06-08).
+Partial Stripe coupons leave `price_at_booking` at full face value → `revenue_collected` overcounts AND `cancelBooking` attempts a refund larger than the charge (cancellation fails). Needs line-item restructure + product call on whether a discount touches the booking fee. Surfaced in SYSTEM-DESIGN-zero-total-coupon-bookings §5.
+**Priority:** Medium — latent until a partial-discount code is actually used on a cancellable event; the founder's current comp programme is 100%-off only (fully served by the in-scope webhook fix).
+
 ### UTF-8 em-dashes mojibake'd in event seed copy
 **Source:** Spotted on iOS preview (PR #53 verification, 2026-04-25). Visible on the Summer Party event detail and likely many others.
 **Symptom:** Em-dashes in event titles / descriptions render as `,Äî` instead of `—`. Example: "Mayfair ,Äî the Social Seen's summer party" should be "Mayfair — the Social Seen's summer party". Visible on hosted production, not just local.

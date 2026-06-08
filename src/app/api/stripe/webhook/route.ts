@@ -10,9 +10,15 @@
  *   2. Verify the `Stripe-Signature` header against STRIPE_WEBHOOK_SECRET.
  *      Reject with 401 on mismatch.
  *   3. Switch on event.type:
- *        - checkout.session.completed → confirm the matching booking,
- *          record the PaymentIntent id. Idempotent via the partial
- *          UNIQUE index on bookings.stripe_payment_id.
+ *        - checkout.session.completed → confirm the matching booking.
+ *          Paid path: record the PaymentIntent id (idempotent via the
+ *          partial UNIQUE index on bookings.stripe_payment_id).
+ *          Comp path (100%-off promotion code → £0 total): Stripe sets
+ *          payment_status='no_payment_required' and creates NO
+ *          PaymentIntent, so we confirm with stripe_payment_id=null and
+ *          zero both money columns. Idempotent via the
+ *          .eq('status','pending_payment') optimistic guard. See
+ *          docs/SYSTEM-DESIGN-zero-total-coupon-bookings.md.
  *        - Everything else → log + ACK 200 so Stripe doesn't retry.
  *   4. Always return 200 after signature verification succeeds, even if
  *      the handler encountered a database error — otherwise Stripe will
@@ -115,47 +121,98 @@ async function handleCheckoutCompleted(
     return
   }
 
-  if (session.payment_status !== 'paid') {
-    // Unusual — Stripe only fires this event when payment_status=paid
-    // for mode=payment sessions. Skip defensively.
+  // Fulfillment eligibility. Two confirmable shapes (per Stripe's
+  // recommended `payment_status != 'unpaid'` gate, tightened for us — see
+  // docs/SYSTEM-DESIGN-zero-total-coupon-bookings.md §2.1):
+  //
+  //   1. Paid session — the normal flow. payment_status='paid', a
+  //      PaymentIntent exists.
+  //   2. Comp session — a 100%-off promotion code reduced the total to
+  //      £0. Stripe sets payment_status='no_payment_required', creates NO
+  //      PaymentIntent (session.payment_intent is null), and still fires
+  //      this event with status='complete' / amount_total=0. We require
+  //      all three signals so a genuinely-unpaid/abandoned/expired session
+  //      (which we still reject, exactly as before) can't slip through.
+  const isPaidSession = session.payment_status === 'paid'
+  const isCompSession =
+    session.payment_status === 'no_payment_required' &&
+    session.status === 'complete' &&
+    session.amount_total === 0
+
+  if (!(isPaidSession || isCompSession)) {
+    // Genuinely unpaid / abandoned / inconsistent — do nothing. Same
+    // rejection as the old `payment_status !== 'paid'` gate, now also
+    // logging the fields that distinguish a comp from these.
     console.warn(
-      '[stripe/webhook] checkout.session.completed with unpaid status:',
-      session.payment_status,
+      '[stripe/webhook] checkout.session.completed not fulfillable:',
+      {
+        payment_status: session.payment_status,
+        status: session.status,
+        amount_total: session.amount_total,
+      },
     )
     return
   }
 
+  // Resolve the PaymentIntent — present (string) for a paid session, null
+  // for a comp. Do NOT reject on null any more: a £0 comp legitimately has
+  // no PaymentIntent. This value gates fee capture and the
+  // stripe_payment_id write below.
   const paymentIntentId = typeof session.payment_intent === 'string'
     ? session.payment_intent
     : session.payment_intent?.id ?? null
 
-  if (!paymentIntentId) {
-    console.error(
-      '[stripe/webhook] checkout.session.completed missing payment_intent',
-      session.id,
-    )
-    return
+  const admin = createAdminClient()
+
+  // Build the confirm payload. Both paths flip status → confirmed and
+  // clear waitlist_position. The comp path additionally zeros BOTH money
+  // columns (see below); the paid path leaves the RPC snapshot intact (it
+  // already equals what Stripe charged — one line item, no coupon).
+  const updatePayload: {
+    status: 'confirmed'
+    stripe_payment_id: string | null
+    waitlist_position: null
+    price_at_booking?: number
+    booking_fee_pence?: number
+  } = {
+    status: 'confirmed',
+    // null on the comp path — there is no PaymentIntent to record. The
+    // partial UNIQUE index is `WHERE stripe_payment_id IS NOT NULL`, so a
+    // null can never collide; comp idempotency rests on the status guard.
+    stripe_payment_id: paymentIntentId,
+    // Clear waitlist_position now that the booking is a confirmed
+    // seat — the P2-7b RPC preserves the position through the
+    // pending_payment transition so the user can be restored to
+    // waitlist if Stripe fails. On successful payment, position is
+    // no longer meaningful.
+    waitlist_position: null,
   }
 
-  const admin = createAdminClient()
+  if (isCompSession) {
+    // Reconcile to the actual collected amount: £0. session.amount_total
+    // is 0 here.
+    //
+    // LOAD-BEARING — both money columns MUST be zeroed together. CHECK
+    // chk_bookings_free_no_booking_fee is `price_at_booking > 0 OR
+    // booking_fee_pence = 0`. book_event_paid already stamped a NON-ZERO
+    // booking_fee_pence (the event has a real price; the comp only happens
+    // later at Stripe). Setting price_at_booking=0 while leaving the fee
+    // non-zero violates the CHECK (23514) → the UPDATE fails → the booking
+    // stays pending_payment → the reaper cancels it → the fix looks
+    // broken. With both at 0: `0 > 0 OR 0 = 0` → TRUE.
+    updatePayload.price_at_booking = 0
+    updatePayload.booking_fee_pence = 0
+  }
 
   // Idempotency: the partial UNIQUE index ux_bookings_stripe_payment_id
   // means a second UPDATE with the same payment id on a different
-  // booking fails with 23505. And we guard with `.eq('status',
-  // 'pending_payment')` so re-delivery to an already-confirmed row
-  // no-ops gracefully.
+  // booking fails with 23505 (paid path only). And we guard with
+  // `.eq('status', 'pending_payment')` so re-delivery to an
+  // already-confirmed row no-ops gracefully — this guard is the SOLE
+  // idempotency mechanism on the comp path (stripe_payment_id is null).
   const { data: updated, error: updErr } = await admin
     .from('bookings')
-    .update({
-      status: 'confirmed',
-      stripe_payment_id: paymentIntentId,
-      // Clear waitlist_position now that the booking is a confirmed
-      // seat — the P2-7b RPC preserves the position through the
-      // pending_payment transition so the user can be restored to
-      // waitlist if Stripe fails. On successful payment, position is
-      // no longer meaningful.
-      waitlist_position: null,
-    })
+    .update(updatePayload)
     .eq('id', bookingId)
     .eq('status', 'pending_payment')
     .select('id, user_id, event_id')
@@ -189,10 +246,18 @@ async function handleCheckoutCompleted(
   // — a failed BalanceTransaction lookup must not block confirmation
   // (which has already happened above). Refund math does NOT use this
   // value; it exists purely for admin reconciliation.
-  await captureStripeFeeForBooking({
-    bookingId: updated.id,
-    paymentIntentId,
-  })
+  //
+  // Guard on PI: a comp session has no PaymentIntent, so there is no
+  // BalanceTransaction and no Stripe fee to capture. An unconditional call
+  // would pass null to stripe.paymentIntents.retrieve and throw a spurious
+  // (caught-and-logged) error on every comp. stripe_fee_pence stays at its
+  // DEFAULT 0, which is correct — Stripe took no fee on a £0 order.
+  if (paymentIntentId) {
+    await captureStripeFeeForBooking({
+      bookingId: updated.id,
+      paymentIntentId,
+    })
+  }
 
   // Send the confirmation email. Non-blocking — Resend downtime mustn't
   // cause Stripe to retry.
