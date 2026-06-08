@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { sendEmail } from '@/lib/email/send'
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 // All mocks must be set up before importing the route module.
@@ -27,6 +28,12 @@ function makeSupabaseMock() {
     eq: vi.fn(() => chain),
     is: vi.fn(() => chain),
     limit: vi.fn(() => chain),
+    // order() is used by sendPaidBookingConfirmationEmail's booking lookup
+    // (route.ts: .order('created_at', ...).limit(1).maybeSingle()). Without
+    // it the email path throws (caught-and-logged) and sendEmail is never
+    // reached — invisible until a test asserts on sendEmail. Returning the
+    // chain keeps the lookup fluent.
+    order: vi.fn(() => chain),
     single,
     maybeSingle,
   }
@@ -88,6 +95,12 @@ describe('POST /api/stripe/webhook', () => {
       id: 'pi_default',
       latest_charge: null,
     })
+    // sendEmail is a module-level vi.fn() created once by the vi.mock
+    // factory; its call count accumulates across tests. Clear (not reset)
+    // so the resolved value survives while the comp/paid cases can assert
+    // call counts cleanly. No existing test asserts on it, so clearing is
+    // a no-op for them.
+    vi.mocked(sendEmail).mockClear()
   })
 
   afterEach(() => {
@@ -183,6 +196,33 @@ describe('POST /api/stripe/webhook', () => {
     })
     expect(supabaseHandle.chain.eq).toHaveBeenCalledWith('id', 'b1')
     expect(supabaseHandle.chain.eq).toHaveBeenCalledWith('status', 'pending_payment')
+
+    // zero-total-coupon §2.3 / §6.4 regression guard: the paid path MUST
+    // NOT touch the money columns — the book_event_paid snapshot already
+    // equals what Stripe charged (one line item, no coupon). The
+    // toHaveBeenCalledWith above is exact, but make the intent explicit so
+    // a future change that starts writing price_at_booking/booking_fee_pence
+    // on the paid path fails loudly here.
+    const paidPayload = (supabaseHandle.chain.update as ReturnType<typeof vi.fn>)
+      .mock.calls[0][0] as Record<string, unknown>
+    expect(paidPayload).toEqual(
+      expect.not.objectContaining({ price_at_booking: expect.anything() }),
+    )
+    expect(paidPayload).toEqual(
+      expect.not.objectContaining({ booking_fee_pence: expect.anything() }),
+    )
+    expect(Object.keys(paidPayload).sort()).toEqual(
+      ['status', 'stripe_payment_id', 'waitlist_position'].sort(),
+    )
+
+    // Paid path runs fee capture (PI present) and sends the email.
+    expect(paymentIntentsRetrieveMock).toHaveBeenCalledWith(
+      'pi_456',
+      expect.objectContaining({
+        expand: expect.arrayContaining(['latest_charge.balance_transaction']),
+      }),
+    )
+    expect(vi.mocked(sendEmail)).toHaveBeenCalledTimes(1)
   })
 
   it('treats duplicate payment_intent (23505) as already-processed', async () => {
@@ -235,6 +275,13 @@ describe('POST /api/stripe/webhook', () => {
   })
 
   it('ignores payment_status other than "paid"', async () => {
+    // NOTE (zero-total-coupon §6.3a): 'unpaid' is still rejected under the
+    // new triple-gate — a payment is expected but hasn't landed, so
+    // confirming would oversell. This is NOT the comp shape (comp is
+    // 'no_payment_required' + 'complete' + amount_total===0), so this test
+    // does not contradict the new £0-comp behaviour; it pins the
+    // still-rejected 'unpaid' branch. See the dedicated comp suite below
+    // for the £0-complete case that DOES confirm.
     const POST = await importRoute()
 
     supabaseHandle = makeSupabaseMock()
@@ -253,6 +300,7 @@ describe('POST /api/stripe/webhook', () => {
     const res = await POST(makeRequest('{}', 't=1,v1=sig'))
     expect(res.status).toBe(200)
     expect(supabaseHandle.chain.update).not.toHaveBeenCalled()
+    expect(vi.mocked(sendEmail)).not.toHaveBeenCalled()
   })
 
   it('returns 200 even when the DB handler throws (no Stripe retries for app bugs)', async () => {
@@ -276,6 +324,253 @@ describe('POST /api/stripe/webhook', () => {
 
     const res = await POST(makeRequest('{}', 't=1,v1=sig'))
     expect(res.status).toBe(200)
+  })
+
+  // ── zero-total comp (100%-off promotion code → £0) ─────────────────────
+  //
+  // docs/SYSTEM-DESIGN-zero-total-coupon-bookings.md §6. A full comp lands
+  // as checkout.session.completed with payment_status='no_payment_required',
+  // status='complete', amount_total=0, and payment_intent=null. The webhook
+  // must confirm it — zeroing BOTH money columns together (the
+  // chk_bookings_free_no_booking_fee CHECK trap, §2.3 / §8) — without
+  // calling paymentIntents.retrieve (there is no PI / no Stripe fee).
+
+  // Build a comp-shaped Checkout.Session with only the fields the handler
+  // reads. Overrides let the genuinely-unpaid cases flip a single signal.
+  function compSessionEvent(
+    overrides: Partial<{
+      payment_status: string
+      status: string
+      amount_total: number
+      payment_intent: string | null
+      metadata: Record<string, string>
+      id: string
+    }> = {},
+  ) {
+    return {
+      type: 'checkout.session.completed',
+      data: {
+        object: {
+          id: overrides.id ?? 'cs_comp',
+          payment_status: overrides.payment_status ?? 'no_payment_required',
+          status: overrides.status ?? 'complete',
+          amount_total: overrides.amount_total ?? 0,
+          payment_intent:
+            'payment_intent' in overrides ? overrides.payment_intent : null,
+          metadata:
+            'metadata' in overrides
+              ? overrides.metadata
+              : { booking_id: 'b_comp' },
+        },
+      },
+    }
+  }
+
+  it('comp (£0 100%-off): confirms with both money columns zeroed, no PI retrieve', async () => {
+    // INVARIANT (zero-total-coupon §2.3 / §8 primary risk): a £0 comp
+    // confirm MUST set price_at_booking=0 AND booking_fee_pence=0 in the
+    // SAME UPDATE. Zeroing price while leaving the non-zero fee from
+    // book_event_paid violates chk_bookings_free_no_booking_fee (23514),
+    // the UPDATE fails, the row stays pending_payment, and the reaper
+    // cancels it — the fix would look "unfixed". booking_fee_pence:0 is
+    // the only unit-level guard for that trap.
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    // The confirm UPDATE returns the row. The email path's booking lookup
+    // also calls maybeSingle (shared mock) — it returns this same row, but
+    // the handler reads price_at_booking defensively (undefined > 0 ===
+    // false) so priceBreakdown is omitted and the email still sends.
+    supabaseHandle.maybeSingle.mockResolvedValue({
+      data: { id: 'b_comp', user_id: 'u1', event_id: 'e1' },
+      error: null,
+    })
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: { full_name: 'Charlotte', email: 'ch@example.com' },
+      error: null,
+    })
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: {
+        title: 'Wine & Wisdom',
+        slug: 'wine-wisdom',
+        date_time: '2026-05-07T19:00:00Z',
+        venue_name: 'Cellar',
+        venue_address: '1 Bank End',
+        venue_revealed: true,
+      },
+      error: null,
+    })
+
+    constructEventMock.mockReturnValue(compSessionEvent())
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ received: true })
+
+    // The confirm UPDATE payload — exact shape (no extra/missing keys).
+    expect(supabaseHandle.chain.update).toHaveBeenCalledWith({
+      status: 'confirmed',
+      stripe_payment_id: null,
+      waitlist_position: null,
+      price_at_booking: 0,
+      booking_fee_pence: 0,
+    })
+    // Explicit CHECK-trap guard (§8): assert booking_fee_pence:0 on its own
+    // so the intent survives even if the exact-match above is later relaxed.
+    const compPayload = (supabaseHandle.chain.update as ReturnType<typeof vi.fn>)
+      .mock.calls[0][0] as Record<string, unknown>
+    expect(compPayload.booking_fee_pence).toBe(0)
+    expect(compPayload.price_at_booking).toBe(0)
+    expect(compPayload.stripe_payment_id).toBeNull()
+
+    // Optimistic idempotency guard retained verbatim.
+    expect(supabaseHandle.chain.eq).toHaveBeenCalledWith('id', 'b_comp')
+    expect(supabaseHandle.chain.eq).toHaveBeenCalledWith('status', 'pending_payment')
+
+    // No PaymentIntent on a comp → fee capture is skipped entirely.
+    expect(paymentIntentsRetrieveMock).not.toHaveBeenCalled()
+
+    // Confirmation email still sent.
+    expect(vi.mocked(sendEmail)).toHaveBeenCalledTimes(1)
+  })
+
+  it('comp re-delivery is idempotent: 0-row UPDATE no-ops, no email, 200', async () => {
+    // INVARIANT (zero-total-coupon §4.2): comp idempotency rests ENTIRELY
+    // on the .eq('status','pending_payment') guard (stripe_payment_id is
+    // null, so the partial UNIQUE index can't dedupe). A second delivery's
+    // UPDATE matches 0 rows → maybeSingle → null → handler returns at
+    // `if (!updated) return`. No double-confirm, no second email.
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    // Second delivery: the row is already confirmed, so the
+    // status=pending_payment filter matches nothing.
+    supabaseHandle.maybeSingle.mockResolvedValue({ data: null, error: null })
+
+    constructEventMock.mockReturnValue(compSessionEvent())
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+
+    // The UPDATE was attempted (optimistic guard fired) but matched no row.
+    expect(supabaseHandle.chain.update).toHaveBeenCalledTimes(1)
+    expect(supabaseHandle.chain.eq).toHaveBeenCalledWith('status', 'pending_payment')
+    // No side-effects on the no-op path.
+    expect(paymentIntentsRetrieveMock).not.toHaveBeenCalled()
+    expect(vi.mocked(sendEmail)).not.toHaveBeenCalled()
+  })
+
+  it('genuinely-unpaid (payment_status=unpaid): rejected, no UPDATE, no email, 200', async () => {
+    // Triple-gate sub-case (a): 'unpaid' means payment is expected but
+    // hasn't landed — confirming would oversell. Still rejected.
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    constructEventMock.mockReturnValue(
+      compSessionEvent({ payment_status: 'unpaid', payment_intent: 'pi_x' }),
+    )
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+    expect(supabaseHandle.chain.update).not.toHaveBeenCalled()
+    expect(paymentIntentsRetrieveMock).not.toHaveBeenCalled()
+    expect(vi.mocked(sendEmail)).not.toHaveBeenCalled()
+  })
+
+  it('no_payment_required but status=open (not complete): rejected, no UPDATE, 200', async () => {
+    // Triple-gate sub-case (b): no_payment_required can surface on a
+    // non-complete session mid-lifecycle. We only fulfill a *completed*
+    // session, so status='open' is rejected.
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    constructEventMock.mockReturnValue(
+      compSessionEvent({ status: 'open' }),
+    )
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+    expect(supabaseHandle.chain.update).not.toHaveBeenCalled()
+    expect(vi.mocked(sendEmail)).not.toHaveBeenCalled()
+  })
+
+  it('no_payment_required + complete but amount_total>0 (inconsistent): rejected, no UPDATE, 200', async () => {
+    // Triple-gate sub-case (c): amount_total>0 with no_payment_required is
+    // an inconsistent shape — not a genuine full comp. Rejected.
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    constructEventMock.mockReturnValue(
+      compSessionEvent({ amount_total: 1500 }),
+    )
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+    expect(supabaseHandle.chain.update).not.toHaveBeenCalled()
+    expect(vi.mocked(sendEmail)).not.toHaveBeenCalled()
+  })
+
+  it('comp path never issues the fee-capture UPDATE (.eq stripe_fee_pence, 0)', async () => {
+    // zero-total-coupon §6.5 (focused): on the comp path captureStripeFee
+    // is gated out, so the fee-capture UPDATE — identified by its
+    // .eq('stripe_fee_pence', 0) first-write-wins guard — is never issued.
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    supabaseHandle.maybeSingle.mockResolvedValue({
+      data: { id: 'b_comp', user_id: 'u1', event_id: 'e1' },
+      error: null,
+    })
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: { full_name: 'Charlotte', email: 'ch@example.com' },
+      error: null,
+    })
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: {
+        title: 'Wine & Wisdom',
+        slug: 'wine-wisdom',
+        date_time: '2026-05-07T19:00:00Z',
+        venue_name: 'Cellar',
+        venue_address: '1 Bank End',
+        venue_revealed: true,
+      },
+      error: null,
+    })
+
+    constructEventMock.mockReturnValue(compSessionEvent())
+
+    await POST(makeRequest('{}', 't=1,v1=sig'))
+
+    // No fee-write UPDATE: scan every .eq call for the fee-capture guard.
+    const eqCalls = (supabaseHandle.chain.eq as ReturnType<typeof vi.fn>).mock.calls
+    const issuedFeeWrite = eqCalls.some(
+      ([col]) => col === 'stripe_fee_pence',
+    )
+    expect(issuedFeeWrite).toBe(false)
+    // And no UPDATE payload carried stripe_fee_pence either.
+    const updateCalls = (supabaseHandle.chain.update as ReturnType<typeof vi.fn>).mock.calls
+    const feePayload = updateCalls.find(
+      (c) => 'stripe_fee_pence' in (c[0] as Record<string, unknown>),
+    )
+    expect(feePayload).toBeUndefined()
+  })
+
+  it('comp-shaped but missing booking_id metadata: hard-rejects, no UPDATE, 200', async () => {
+    // zero-total-coupon §6.6: the new eligibility gate must not have moved
+    // the metadata check — a comp-shaped session with no booking_id still
+    // returns early before any UPDATE.
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    constructEventMock.mockReturnValue(
+      compSessionEvent({ metadata: {} }),
+    )
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+    expect(supabaseHandle.chain.update).not.toHaveBeenCalled()
+    expect(paymentIntentsRetrieveMock).not.toHaveBeenCalled()
+    expect(vi.mocked(sendEmail)).not.toHaveBeenCalled()
   })
 
   // ── charge.refunded (P2-7b) ────────────────────────────────────────────
