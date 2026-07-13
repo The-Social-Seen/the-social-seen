@@ -85,7 +85,39 @@ jobs:
 
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # Pinned, NOT "latest". This was "latest" until the
+          # 2026-07-13 incident: main had no CI runs for 5 weeks, and
+          # whatever the CLI resolved to on that gap silently started
+          # authenticating local dev's anon/service_role JWTs
+          # differently — Supabase has deprecated those in favour of a
+          # new publishable/secret key pair that a client library and
+          # the local Kong gateway must both understand to actually
+          # authenticate a request (it is not a drop-in JWT any more —
+          # see supabase.com/docs/guides/getting-started/api-keys:
+          # "It is no longer possible to use a publishable or secret
+          # key inside the Authorization header"). Whether this
+          # project's pinned @supabase/supabase-js (2.101.1) and this
+          # CLI's local Kong config fully support that new flow yet is
+          # unverified — three live-CI attempts (this environment has
+          # no Docker to test against directly) got the RIGHT key
+          # VALUES extracted via `supabase status -o json` (see "Export
+          # live Supabase keys" below) but every RLS-gated table/view
+          # still returned "permission denied", pointing at the
+          # gateway/client layer rather than which key string is used.
+          # 2.105.0 (2026-06-04) is the newest stable release before
+          # the last confirmed-green run on main (2026-06-08) — the
+          # version this workflow was actually passing against.
+          # Pinning restores that known-good behaviour instead of
+          # continuing to chase an evolving, only-partly-documented
+          # migration blind. The "Export live Supabase keys" step
+          # keeps its field-name fallback (preferring
+          # PUBLISHABLE_KEY/SECRET_KEY, falling back to
+          # ANON_KEY/SERVICE_ROLE_KEY) rather than being reverted, so
+          # bumping this pin forward later — once the new key flow is
+          # confirmed working end-to-end, ideally with a Docker-capable
+          # environment to iterate against directly — is a one-line
+          # change, not another round of rediscovering all of this.
+          version: "2.105.0"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
