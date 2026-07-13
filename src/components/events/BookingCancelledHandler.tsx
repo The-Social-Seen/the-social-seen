@@ -30,11 +30,14 @@ export default function BookingCancelledHandler({ eventId }: Props) {
   useEffect(() => {
     if (sp.get('cancelled') !== '1') return
 
-    // If the user reached Stripe via a waitlist-claim flow (Stripe
-    // redirects back with ?cancelled=1&from=claim on abandon), we want
-    // to restore them to `waitlisted` rather than `cancelled` so they
-    // keep their queue position for the next cancellation email.
-    const isFromClaim = sp.get('from') === 'claim'
+    // If the user reached Stripe via a waitlist-claim or admin-promotion
+    // hold (Stripe redirects back with ?cancelled=1&from=claim|admin_hold
+    // on abandon), we want to restore them to `waitlisted` rather than
+    // `cancelled` so they keep their queue position.
+    const fromParam = sp.get('from')
+    const from: 'book' | 'claim' | 'admin_hold' =
+      fromParam === 'claim' || fromParam === 'admin_hold' ? fromParam : 'book'
+    const isFromClaim = from === 'claim' || from === 'admin_hold'
     // The lint rule flags setState inside useEffect to discourage render
     // loops, but this is a one-shot mount-time read of a URL param — the
     // setter runs at most once per page load and has no dependency cycle.
@@ -43,10 +46,7 @@ export default function BookingCancelledHandler({ eventId }: Props) {
 
     let cancelled = false
     void (async () => {
-      const result = await abandonPendingCheckout(
-        eventId,
-        isFromClaim ? { from: 'claim' } : { from: 'book' },
-      )
+      const result = await abandonPendingCheckout(eventId, { from })
       if (cancelled) return
       if (!result.success) {
         console.warn(

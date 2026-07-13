@@ -584,7 +584,7 @@ async function resolveOrigin(): Promise<string> {
  */
 export async function abandonPendingCheckout(
   eventId: string,
-  options?: { from?: 'book' | 'claim' },
+  options?: { from?: 'book' | 'claim' | 'admin_hold' },
 ): Promise<ActionResult> {
   if (!eventId) {
     return { success: false, error: 'Event ID is required' }
@@ -599,18 +599,32 @@ export async function abandonPendingCheckout(
     return { success: false, error: 'Authentication required' }
   }
 
-  // When the user arrived via a waitlist claim, rolling their
-  // pending_payment row back to `cancelled` would lose their waitlist
-  // position AND their eligibility for future "spot available" emails.
-  // Restore to `waitlisted` instead. For the regular book-flow abandon,
-  // keep the original `cancelled` semantics (they made a new booking and
-  // decided not to pay).
+  // When the user arrived via a waitlist claim OR an admin-created
+  // payment-link hold (createAdminBookingHold — cancel_url carries
+  // &from=admin_hold, see
+  // SYSTEM-DESIGN-admin-waitlist-promotion-payment.md §5 site #2),
+  // rolling their pending_payment row back to `cancelled` would lose
+  // their waitlist position AND their eligibility for future "spot
+  // available" / re-promotion. Restore to `waitlisted` instead. For the
+  // regular book-flow abandon, keep the original `cancelled` semantics
+  // (they made a new booking and decided not to pay).
   const rollbackStatus: BookingStatus =
-    options?.from === 'claim' ? 'waitlisted' : 'cancelled'
+    options?.from === 'claim' || options?.from === 'admin_hold'
+      ? 'waitlisted'
+      : 'cancelled'
 
   const { error } = await supabase
     .from('bookings')
-    .update({ status: rollbackStatus })
+    .update({
+      status: rollbackStatus,
+      // Unconditionally clear the admin-hold flag — a harmless no-op on
+      // the 'book'/'claim' paths (already false/null there), and
+      // required on 'admin_hold' so the row doesn't violate
+      // chk_bookings_admin_hold_requires_pending_payment the instant
+      // status leaves pending_payment.
+      is_admin_hold: false,
+      admin_hold_expires_at: null,
+    })
     .eq('user_id', user.id)
     .eq('event_id', eventId)
     .eq('status', 'pending_payment')

@@ -193,6 +193,14 @@ describe('POST /api/stripe/webhook', () => {
       // restore it on Stripe failure; webhook clears it once the seat
       // is confirmed and queue position is no longer meaningful.
       waitlist_position: null,
+      // admin-waitlist-promotion-payment §5 site #1: unconditionally
+      // cleared on every confirm, whether or not this row was ever an
+      // admin-created hold — harmless no-op for ordinary bookings
+      // (already false/null), required so a hold-originated row doesn't
+      // violate chk_bookings_admin_hold_requires_pending_payment the
+      // instant status leaves pending_payment.
+      is_admin_hold: false,
+      admin_hold_expires_at: null,
     })
     expect(supabaseHandle.chain.eq).toHaveBeenCalledWith('id', 'b1')
     expect(supabaseHandle.chain.eq).toHaveBeenCalledWith('status', 'pending_payment')
@@ -212,7 +220,7 @@ describe('POST /api/stripe/webhook', () => {
       expect.not.objectContaining({ booking_fee_pence: expect.anything() }),
     )
     expect(Object.keys(paidPayload).sort()).toEqual(
-      ['status', 'stripe_payment_id', 'waitlist_position'].sort(),
+      ['admin_hold_expires_at', 'is_admin_hold', 'status', 'stripe_payment_id', 'waitlist_position'].sort(),
     )
 
     // Paid path runs fee capture (PI present) and sends the email.
@@ -414,6 +422,10 @@ describe('POST /api/stripe/webhook', () => {
       waitlist_position: null,
       price_at_booking: 0,
       booking_fee_pence: 0,
+      // admin-waitlist-promotion-payment §5 site #1 — same unconditional
+      // clear as the paid path above.
+      is_admin_hold: false,
+      admin_hold_expires_at: null,
     })
     // Explicit CHECK-trap guard (§8): assert booking_fee_pence:0 on its own
     // so the intent survives even if the exact-match above is later relaxed.
@@ -905,5 +917,137 @@ describe('POST /api/stripe/webhook', () => {
       (c) => 'stripe_fee_pence' in (c[0] as Record<string, unknown>),
     )
     expect(feeWrite).toBeUndefined()
+  })
+
+  // ── admin-waitlist-promotion-payment: hold reconciliation ──────────────
+  //
+  // SYSTEM-DESIGN-admin-waitlist-promotion-payment.md §5 site #1. A
+  // `pending_payment` row created by an admin promotion
+  // (createAdminBookingHold / admin_promote_waitlist_to_hold) carries
+  // is_admin_hold=true. When the member actually pays, this webhook must
+  // reconcile it exactly like an ordinary paid booking — confirmed,
+  // stripe_payment_id set — AND additionally flip is_admin_hold back to
+  // false / admin_hold_expires_at back to null, or the row would violate
+  // chk_bookings_admin_hold_requires_pending_payment the instant status
+  // leaves pending_payment.
+
+  it('INVARIANT: a hold-originated pending_payment row (is_admin_hold=true) is confirmed AND both hold columns are cleared', async () => {
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    // The row being confirmed IS a hold (is_admin_hold=true,
+    // admin_hold_expires_at=null — this PR's actual shape, since
+    // holdExpiresAt is hardcoded null). The webhook's UPDATE doesn't
+    // branch on the row's prior is_admin_hold value at all — it clears
+    // both columns unconditionally — so the returned row here only needs
+    // to prove the UPDATE payload the webhook SENDS, not echo back the
+    // pre-image. What matters is that this scenario (a real hold, not an
+    // ordinary checkout) is the one under test.
+    supabaseHandle.maybeSingle.mockResolvedValue({
+      data: { id: 'bk-hold', user_id: 'amy-1', event_id: 'evt-screening' },
+      error: null,
+    })
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: { full_name: 'Amy Sangam', email: 'amy@example.com' },
+      error: null,
+    })
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: {
+        title: 'France vs Spain Screening',
+        slug: 'france-vs-spain-screening',
+        date_time: '2026-07-14T19:00:00Z',
+        venue_name: 'The Pub',
+        venue_address: '1 High St',
+        venue_revealed: true,
+      },
+      error: null,
+    })
+
+    constructEventMock.mockReturnValue({
+      type: 'checkout.session.completed',
+      data: {
+        object: {
+          id: 'cs_hold_paid',
+          payment_status: 'paid',
+          payment_intent: 'pi_hold_paid',
+          metadata: { booking_id: 'bk-hold' },
+        },
+      },
+    })
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+
+    expect(supabaseHandle.chain.update).toHaveBeenCalledWith({
+      status: 'confirmed',
+      stripe_payment_id: 'pi_hold_paid',
+      waitlist_position: null,
+      is_admin_hold: false,
+      admin_hold_expires_at: null,
+    })
+    // Confirmed via the SAME optimistic guard as any other booking — the
+    // webhook has no special-cased "hold" code path, which is precisely
+    // the point (one UPDATE payload, unconditionally correct for both
+    // ordinary and hold-originated rows).
+    expect(supabaseHandle.chain.eq).toHaveBeenCalledWith('id', 'bk-hold')
+    expect(supabaseHandle.chain.eq).toHaveBeenCalledWith('status', 'pending_payment')
+  })
+
+  it("defensive gap check: the .eq('status','pending_payment') guard still protects an ALREADY-confirmed row from being re-processed", async () => {
+    // The architect flagged this as the core defensive risk to prove
+    // (spec, webhook reconciliation section): if a Checkout Session were
+    // somehow created against a row that is already 'confirmed' — not
+    // the code path this PR ships (createAdminBookingHold only ever
+    // creates a session for a row the RPC just flipped to
+    // pending_payment), but worth proving the guard holds regardless of
+    // HOW such a session came to exist. The .eq('status',
+    // 'pending_payment') filter means the UPDATE matches zero rows, so
+    // the webhook can never re-confirm (or double-process side effects
+    // for) an already-confirmed booking.
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    // Simulates the filter matching nothing: the row exists but is not
+    // in pending_payment, so the optimistic-guarded UPDATE affects 0 rows
+    // and maybeSingle() resolves null — identical wire behaviour to the
+    // "already processed" cases covered elsewhere in this file.
+    supabaseHandle.maybeSingle.mockResolvedValue({ data: null, error: null })
+
+    constructEventMock.mockReturnValue({
+      type: 'checkout.session.completed',
+      data: {
+        object: {
+          id: 'cs_already_confirmed',
+          payment_status: 'paid',
+          payment_intent: 'pi_already_confirmed',
+          metadata: { booking_id: 'bk-already-confirmed' },
+        },
+      },
+    })
+
+    const consoleInfoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+
+    // The UPDATE was attempted (the guard itself is what protects, not a
+    // pre-check) but the .eq('status','pending_payment') filter is
+    // demonstrably present on every attempt.
+    const eqCalls = (supabaseHandle.chain.eq as ReturnType<typeof vi.fn>).mock.calls
+    const hasStatusGuard = eqCalls.some(
+      ([col, val]) => col === 'status' && val === 'pending_payment',
+    )
+    expect(hasStatusGuard).toBe(true)
+
+    // No confirmation email fires for a no-op — the row was never
+    // (re-)confirmed by this delivery.
+    expect(vi.mocked(sendEmail)).not.toHaveBeenCalled()
+
+    // The "no row matched" breadcrumb is logged (same operator signal as
+    // the admin-mid-checkout-race suite) so a genuinely unexpected
+    // already-confirmed collision is still discoverable in logs.
+    const logged = consoleInfoSpy.mock.calls.flat().join(' ')
+    expect(logged).toMatch(/no pending_payment booking matched/i)
+    consoleInfoSpy.mockRestore()
   })
 })

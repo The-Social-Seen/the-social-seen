@@ -14,6 +14,7 @@ import {
 } from '@/lib/email/templates/event-cancelled'
 import { isRedacted } from '@/lib/notifications/redaction'
 import { getStripeClient } from '@/lib/stripe/server'
+import { createAdminBookingHold } from '@/lib/bookings/admin-hold'
 import * as Sentry from '@sentry/nextjs'
 import { z } from 'zod'
 import { PRIMARY_ELIGIBLE_TAG_SLUGS } from '@/lib/constants/tags'
@@ -1314,6 +1315,15 @@ export async function cancelEventAndRefundBookings(
           status: 'cancelled',
           cancelled_at: nowIso,
           cancellation_reason: cancellationReason,
+          // Unconditionally clear the admin-hold flag — required if this
+          // pending_payment row happens to be an outstanding admin-
+          // created hold (createAdminBookingHold), or the row would
+          // violate chk_bookings_admin_hold_requires_pending_payment the
+          // instant status leaves pending_payment. Harmless no-op
+          // otherwise (already false/null). See
+          // SYSTEM-DESIGN-admin-waitlist-promotion-payment.md §5 site #4.
+          is_admin_hold: false,
+          admin_hold_expires_at: null,
         })
         .eq('id', raw.id)
         .eq('status', 'pending_payment')
@@ -1620,7 +1630,7 @@ export async function getEventBookings(
       id, status, waitlist_position, price_at_booking, booking_fee_pence,
       stripe_fee_pence, booked_at, created_at,
       stripe_payment_id, stripe_refund_id, refunded_amount_pence, cancelled_at,
-      cancellation_reason,
+      cancellation_reason, is_admin_hold, admin_hold_expires_at,
       profile:profiles!bookings_user_id_fkey(id, full_name, email, avatar_url)
     `)
     .eq('event_id', eventId)
@@ -1661,6 +1671,28 @@ export async function getEventBookings(
   })
 }
 
+/**
+ * Promote a waitlisted booking. Branches on the event's price
+ * (SYSTEM-DESIGN-admin-waitlist-promotion-payment.md §4.1):
+ *
+ *   - FREE event: confirmed directly. This is exactly the pre-existing
+ *     behaviour, unchanged in shape — the only deliberate deviation is
+ *     the capacity-check predicate (see comment below).
+ *   - PAID event: held as `pending_payment` via createAdminBookingHold()
+ *     (RPC transition + Stripe Checkout Session + payment-link email).
+ *     NEVER confirmed directly with zero payment collection — that was
+ *     the production incident this rewrite fixes (Amy Sangam / Yasemin
+ *     Salp, 2026-07-13): the old code set status='confirmed' on ANY
+ *     waitlisted booking regardless of event.price.
+ *
+ * `holdExpiresAt` is hardcoded to `null` for every paid promotion in
+ * this pass (not `computeHoldExpiresAt(event.date_time)`) — the cron
+ * that would act on a non-null deadline (`revert_expired_admin_holds`,
+ * migration 20260713000003) doesn't exist yet. Setting a real deadline
+ * now would create holds nothing ever reverts. See spec §8.1 step 6 /
+ * §8.2 step 2 — flipping this to the computed deadline is a deliberate,
+ * separate, one-line follow-up once the cron ships.
+ */
 export async function promoteFromWaitlist(bookingId: string) {
   const { supabase } = await requireAdmin()
 
@@ -1677,28 +1709,70 @@ export async function promoteFromWaitlist(bookingId: string) {
   if (bookingError || !booking) return { error: 'Booking not found' }
   if (booking.status !== 'waitlisted') return { error: 'Booking is not waitlisted' }
 
-  // 2. Fetch the event and check capacity
+  // 2. Fetch the event. `price` added (vs the pre-existing 'id, slug,
+  // capacity' select) so we can branch free vs paid below.
   const { data: event } = await supabase
     .from('events')
-    .select('id, slug, capacity')
+    .select('id, slug, capacity, price')
     .eq('id', booking.event_id)
     .single()
 
   if (!event) return { error: 'Event not found' }
 
-  // Count current confirmed bookings
-  const { count: confirmedCount } = await supabase
+  // ── Paid event: hold the seat + collect payment ─────────────────────────
+  // Spec-faithful `!== 0` (paid) / implicit `=== 0` (free, fallthrough
+  // below) — matches the SQL-side convention used throughout this RPC
+  // family (book_event_paid, claim_waitlist_spot, and
+  // admin_promote_waitlist_to_hold itself all branch on `price = 0`).
+  // event.price is always a well-defined non-negative integer for any
+  // real row (events.price has a `>= 0` CHECK constraint and is
+  // NOT NULL) — this is never ambiguous in production.
+  if (event.price !== 0) {
+    const result = await createAdminBookingHold(supabase, bookingId, {
+      holdExpiresAt: null,
+    })
+
+    if (!result.success) return { error: result.error }
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', booking.user_id)
+      .single()
+
+    revalidatePath('/admin/events')
+    revalidatePath(`/events/${event.slug}`)
+    revalidatePath('/bookings')
+
+    return {
+      success: true,
+      promotedName: profile?.full_name ?? 'Member',
+      status: 'pending_payment' as const,
+      holdExpiresAt: result.holdExpiresAt ?? null,
+    }
+  }
+
+  // ── Free event: confirm directly ─────────────────────────────────────────
+  // Capacity predicate widened to IN ('confirmed', 'pending_payment') to
+  // match the paid branch's RPC-internal check (spec §4.2). A no-op today
+  // — a free event can never carry a pending_payment row (book_event()
+  // never creates one; book_event_paid()/claim_waitlist_spot() both
+  // reject free events) — but this is one shared, correct capacity
+  // expression instead of two subtly-different ones, and it defends
+  // against a hypothetical future bug that creates a stray
+  // pending_payment row against a free event.
+  const { count: seatCount } = await supabase
     .from('bookings')
     .select('id', { count: 'exact', head: true })
     .eq('event_id', booking.event_id)
-    .eq('status', 'confirmed')
+    .in('status', ['confirmed', 'pending_payment'])
     .is('deleted_at', null)
 
-  if (event.capacity !== null && (confirmedCount ?? 0) >= event.capacity) {
+  if (event.capacity !== null && (seatCount ?? 0) >= event.capacity) {
     return { error: 'Event is at full capacity — cannot promote' }
   }
 
-  // 3. Update booking to confirmed
+  // Update booking to confirmed
   const { error: updateError } = await supabase
     .from('bookings')
     .update({ status: 'confirmed', waitlist_position: null })
@@ -1706,12 +1780,12 @@ export async function promoteFromWaitlist(bookingId: string) {
 
   if (updateError) return { error: updateError.message }
 
-  // 4. Recompute waitlist positions
+  // Recompute waitlist positions
   await supabase.rpc('recompute_waitlist_positions', {
     p_event_id: booking.event_id,
   })
 
-  // 5. Get promoted user's name for the success message
+  // Get promoted user's name for the success message
   const { data: profile } = await supabase
     .from('profiles')
     .select('full_name')

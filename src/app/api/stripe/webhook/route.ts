@@ -172,6 +172,8 @@ async function handleCheckoutCompleted(
     status: 'confirmed'
     stripe_payment_id: string | null
     waitlist_position: null
+    is_admin_hold: false
+    admin_hold_expires_at: null
     price_at_booking?: number
     booking_fee_pence?: number
   } = {
@@ -186,6 +188,16 @@ async function handleCheckoutCompleted(
     // waitlist if Stripe fails. On successful payment, position is
     // no longer meaningful.
     waitlist_position: null,
+    // Unconditionally clear the admin-hold flag now that the booking is
+    // genuinely confirmed via a real Stripe payment (or a £0 comp).
+    // Harmless no-op for every non-hold booking (already false/null
+    // there). Required for admin-created holds
+    // (createAdminBookingHold / admin_promote_waitlist_to_hold) — once
+    // status leaves 'pending_payment', chk_bookings_admin_hold_requires_
+    // pending_payment demands is_admin_hold=false in the SAME statement.
+    // See SYSTEM-DESIGN-admin-waitlist-promotion-payment.md §5 site #1.
+    is_admin_hold: false,
+    admin_hold_expires_at: null,
   }
 
   if (isCompSession) {

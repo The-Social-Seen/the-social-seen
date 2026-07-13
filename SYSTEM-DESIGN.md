@@ -920,6 +920,14 @@ When admin promotes from waitlist:
 
 **Reference:** See `SYSTEM-DESIGN-refund-fee-deduction.md` for full schema, copy, and edge-case decisions.
 
+### ADR-15: Admin Waitlist Promotion Must Collect Payment (Paid Events)
+
+**Decision:** `promoteFromWaitlist` must not confirm a paid-event seat directly. Promoting a waitlisted booking on a paid event holds the seat as `pending_payment` (new `bookings.is_admin_hold` / `bookings.admin_hold_expires_at` columns) and sends the member a real Stripe Checkout link. Free-event promotion is unchanged. Unpaid holds with a deadline auto-revert to `waitlisted` via a new pg_cron job; holds with no deadline (event too close for a 4h window, or an explicit one-off) require a human to follow up.
+
+**Rationale:** The original implementation set `status = 'confirmed'` with zero price-awareness, letting an admin hand out a free seat on a paid event. Fixed as a production incident (Amy Sangam / Yasemin Salp, 2026-07-13).
+
+**Reference:** See `SYSTEM-DESIGN-admin-waitlist-promotion-payment.md` for the full schema, the `admin_promote_waitlist_to_hold` RPC, the `revert_expired_admin_holds` cron, and the urgent-vs-systemic sequencing plan.
+
 ---
 
 ## 7. Open Questions
