@@ -928,6 +928,14 @@ When admin promotes from waitlist:
 
 **Reference:** See `SYSTEM-DESIGN-admin-waitlist-promotion-payment.md` for the full schema, the `admin_promote_waitlist_to_hold` RPC, the `revert_expired_admin_holds` cron, and the urgent-vs-systemic sequencing plan.
 
+### ADR-16: `event_with_stats.spots_left` Must Count `pending_payment` Seats, Not Just `confirmed`
+
+**Decision:** Add a new `occupied_count` column to `event_with_stats` (`confirmed + pending_payment`) and rebase `spots_left` on it, so the public availability signal matches the real booking-gate RPCs. `confirmed_count` and `revenue_collected` are deliberately left unchanged (they back the admin Booked/Revenue columns and must stay audit-correct); `total_attending` is also deliberately not widened (separate "who's actually coming" concept). Requires a matching, **required** code change to `getEventBySlug()` (`src/lib/supabase/queries/events.ts`), which re-derives `spots_left` locally rather than reading the view's own column — the migration alone does not fix the bug on the event detail page.
+
+**Rationale:** Fixed as a production incident (discovered 2026-07-13) surfaced by the admin payment-remediation hold mechanism (ADR-15): moving a booking from `confirmed` to `pending_payment` made the event's public "spots left" go up, even though the seat was still correctly held by the real booking RPCs.
+
+**Reference:** See `SYSTEM-DESIGN-spots-left-display-fix.md` for the full field-by-field classification, the migration SQL, the call-site audit, and the side-effect judgment (widened predicate vs. the status-quo bug).
+
 ---
 
 ## 7. Open Questions

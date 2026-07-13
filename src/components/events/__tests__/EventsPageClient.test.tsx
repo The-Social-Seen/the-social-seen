@@ -82,6 +82,7 @@ function makeEvent(overrides: Partial<EventWithStats> = {}): EventWithStats {
     updated_at: '2026-01-01T00:00:00Z',
     deleted_at: null,
     confirmed_count: 10,
+    occupied_count: 10,
     total_attending: 10,
     revenue_collected: 0,
     avg_rating: 0,
