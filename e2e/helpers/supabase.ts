@@ -45,10 +45,21 @@ let cachedLocalStatus: { anonKey: string; serviceRoleKey: string } | null = null
  * already set via env — CI always sets them explicitly (see
  * .github/workflows/ci.yml), so this path is local-dev-only.
  *
- * Field-name fallback (ANON_KEY/PUBLISHABLE_KEY,
- * SERVICE_ROLE_KEY/SECRET_KEY) mirrors the same jq logic in that
- * workflow, for the same reason: this CLI's output field names have
- * changed across versions, so there is no single name safe to assume.
+ * Field-name fallback prefers PUBLISHABLE_KEY/SECRET_KEY over the
+ * legacy ANON_KEY/SERVICE_ROLE_KEY names, mirroring the same jq logic
+ * in that workflow — and for the same hard-won reason: Supabase has
+ * deprecated anon/service_role JWTs in favour of publishable/secret
+ * keys, but a CLI in the deprecation window still EMITS the legacy
+ * field names in `status -o json` with a value that no longer
+ * authenticates as anything. Preferring ANON_KEY first (the original,
+ * more obvious-looking order) silently picks the dead credential and
+ * fails with an opaque "permission denied" at the Postgres layer
+ * instead of here — confirmed directly by a Supabase maintainer
+ * (github.com/supabase/cli/issues/4211, sweatybridge): "please use
+ * the publishable and secret keys in place of deprecated anon and
+ * service role keys. It's a drop in replacement." Falling back to the
+ * legacy names only matters for a CLI old enough to predate the new
+ * key pair existing at all.
  */
 function resolveLocalSupabaseStatus(): { anonKey: string; serviceRoleKey: string } {
   if (cachedLocalStatus) return cachedLocalStatus
@@ -69,11 +80,11 @@ function resolveLocalSupabaseStatus(): { anonKey: string; serviceRoleKey: string
     )
   }
 
-  const anonKey = (statusJson.ANON_KEY ?? statusJson.PUBLISHABLE_KEY) as
+  const anonKey = (statusJson.PUBLISHABLE_KEY ?? statusJson.ANON_KEY) as
     | string
     | undefined
-  const serviceRoleKey = (statusJson.SERVICE_ROLE_KEY ??
-    statusJson.SECRET_KEY) as string | undefined
+  const serviceRoleKey = (statusJson.SECRET_KEY ??
+    statusJson.SERVICE_ROLE_KEY) as string | undefined
 
   if (!anonKey || !serviceRoleKey) {
     throw new Error(
