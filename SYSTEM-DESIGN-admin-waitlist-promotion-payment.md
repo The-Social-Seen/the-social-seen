@@ -664,3 +664,851 @@ Ships as one PR. Everything here is required; nothing here is deferred.
 Add to `SYSTEM-DESIGN.md`, near ADR-14 (the other Stripe/booking-fee-adjacent decision):
 
 > **Reference:** See `SYSTEM-DESIGN-admin-waitlist-promotion-payment.md` for the admin waitlist-promotion payment-hold mechanism (`is_admin_hold` / `admin_hold_expires_at`, `admin_promote_waitlist_to_hold` RPC, `revert_expired_admin_holds` cron).
+
+---
+
+# Addendum (2026-07-13, same day) — Gap A: remediate an unpaid `confirmed` booking; Gap B: manually release an active hold
+
+> Produced by: Architect agent (addendum pass, mid-incident)
+> Date: 2026-07-13
+> Status: Spec — hand to `backend-developer` for implementation
+> Base branch: `claude/event-payment-confirmation-175811` (PR #113, not yet merged). The base spec above (§0–§9) is already implemented on this branch — migrations `20260713000001` and `20260713000002` are live in the repo, `admin-hold.ts`, `waitlist-promotion.ts`, `promoteFromWaitlist`, the webhook fix, and the `abandonPendingCheckout` fix are all shipped and match the base spec exactly. This addendum builds directly on that code — see §Addendum-D for the precise diff shape.
+
+This addendum does not replace or revise §0–§9 above. Two new, narrow gaps, discovered mid-incident, both real production bookings (Amy Sangam, Yasemin Salp — confirmed, paid event, `stripe_payment_id IS NULL`) blocking a payment link that needs to go out **today**.
+
+---
+
+## Addendum §0 — TL;DR
+
+| Item | Detail |
+|---|---|
+| Gap A | Two production bookings are `status='confirmed'` on a paid event with `stripe_payment_id IS NULL` — the exact bug this whole PR fixes, except it already happened to them *before* the fix existed. `admin_promote_waitlist_to_hold` cannot touch them (hard-rejects anything not `waitlisted`). |
+| Gap B | No admin action exists to manually release an active `pending_payment` hold back to `waitlisted` if the member doesn't pay. Stand-in for the still-deferred, still-not-being-built 4h auto-revert cron. |
+| New RPC (Gap A) | `public.admin_hold_confirmed_booking_for_payment(p_booking_id, p_booking_fee_pence, p_hold_expires_at)` — admin-gated, requires `status='confirmed' AND stripe_payment_id IS NULL`, on a **paid** event, **capacity check deliberately skipped** (§A.1). |
+| New RPC (Gap B) | `public.admin_revert_hold_to_waitlist(p_booking_id)` — admin-gated, origin-agnostic (`is_admin_hold=true AND status='pending_payment'` is the whole predicate), always reverts to `waitlisted`, never `confirmed`. |
+| Schema changes | **None.** Both gaps are solved entirely with the columns migration `20260713000001` already shipped (`is_admin_hold`, `admin_hold_expires_at`). No new columns, no new enum values, no RLS changes. |
+| TS refactor | `src/lib/bookings/admin-hold.ts`: `createAdminBookingHold` (existing, unchanged public contract) is re-implemented as a thin wrapper over a new internal `runAdminHoldFlow()`, driven by a small origin-config lookup table — so the rollback-destination difference (§Addendum-A.4) is structurally impossible to mix up, not just "commented carefully." New public export `createAdminPaymentRemediationHold()` is the second thin wrapper. New, separate public export `releaseAdminBookingHold()` for Gap B. |
+| New email | `confirmedUnpaidPaymentLinkTemplate()` in new file `src/lib/email/templates/confirmed-unpaid-payment-link.ts` — deliberately NOT `waitlistPromotionTemplate` (wrong framing — these two never left the waitlist this cycle; see §Addendum-A.5). |
+| New Server Actions | `sendPaymentLinkForConfirmedBooking(bookingId)` and `demoteAdminHold(bookingId)` in `src/app/(admin)/admin/actions.ts`. |
+| New UI | `SendPaymentLinkButton.tsx` and `DemoteHoldButton.tsx` in `src/components/admin/`, wired into `BookingsTable.tsx` alongside the existing `PromoteButton`/`NoShowButton`. |
+| Migration | One new file, `supabase/migrations/20260713000004_admin_hold_confirmed_booking_and_release_rpcs.sql`. Deliberately numbered **past** the reserved `20260713000003` slot (the still-deferred cron migration) so it can never collide when that PR eventually lands — see §Addendum-D. |
+| Stripe session expiry on manual demote | **Yes, actively call `stripe.checkout.sessions.expire()`** — but ordered *after* the DB-side revert commits, as a best-effort close, not a precondition gate. Full reasoning in §Addendum-B.2 (this refines, not just confirms, the brief's own instinct). |
+| Cron relationship | Gap B's RPC is **not** called by, and does not call, the still-unbuilt `revert_expired_admin_holds()` (§6.1). Deliberately kept as a sibling with a different WHERE-predicate (time-gated bulk vs ungated single-row-admin-gated). Reasoning in §Addendum-B.6. The deferred cron migration file is not touched. |
+
+---
+
+## Addendum §0.1 — Validating the brief's own reasoning
+
+Going through the five numbered points in the brief in order, since it explicitly asked for validation rather than silent agreement:
+
+1. **Separate RPC, not a modification of `admin_promote_waitlist_to_hold`; capacity check skipped.** Confirmed on both counts — see §Addendum-A.1 for the full capacity-check argument (I agree with it and can't find a hole in it). Refined: the precondition needs to be tighter than stated. `status='confirmed' AND stripe_payment_id IS NULL AND deleted_at IS NULL` is necessary but not sufficient — the RPC also needs a defensive `price_at_booking > 0` check, because `booking_fee_pence` is about to be set to a positive number and the existing `chk_bookings_free_no_booking_fee` CHECK (`price_at_booking > 0 OR booking_fee_pence = 0`) will reject that combination if `price_at_booking` is ever 0 on a row that shouldn't be. See §Addendum-A.2.
+2. **One RPC, origin-agnostic, always reverts to `waitlisted`.** Confirmed — this is exactly right, and the reasoning ("reverting to `confirmed` would silently recreate the bug") is correct. On "reuse/extract the same UPDATE shape... your call which is cleaner": I decided **not** to make the future cron call this new RPC in a loop — full reasoning in §Addendum-B.6. The UPDATE shape is kept textually identical in spirit (same three column assignments, same post-recompute step) without an actual call-through relationship, because the two functions' WHERE-predicates are genuinely different (time-gated bulk vs ungated single-row), not just two copies of the same operation.
+3. **Actively call `stripe.checkout.sessions.expire()`.** Confirmed the instinct, refined the mechanics: it should run *after* the DB revert (not before, not as a gate), best-effort, non-blocking. I considered and rejected calling it first — full ordering argument in §Addendum-B.2.
+4. **Shared internal logic, two thin entry points, rollback-destination must be impossible to mix up.** Confirmed and concretized: this is exactly what an origin-config lookup table (§Addendum-A.4) buys you that a comment doesn't. On the email question ("your call, but flag it"): a new template is needed, not a conditional branch — same reasoning the base spec already used to justify `waitlist-promotion.ts` as its own file rather than reusing `waitlist-spot-available.ts`. Flagged and resolved in §Addendum-A.5.
+5. **UI trace.** Confirmed the diagnosis exactly: `BookingRow` in `BookingsTable.tsx` doesn't carry the two hold columns; the data already flows through at runtime (the page's `...b` spread includes them via `AdminEventBooking`), only the TypeScript *type* blocks reading them. Refined: the page's `getEventBookings` **select does not need to change** — `is_admin_hold`/`admin_hold_expires_at` are already selected (line 1633 of `admin/actions.ts`, shipped in the base PR). The only page-level change needed is a one-line new prop (`isPaidEvent={event.price > 0}`), and `event.price` is already fetched (`getAdminEventById` does `select('*')`). Full trace in §Addendum-C.
+
+---
+
+## Addendum §A — Gap A: `admin_hold_confirmed_booking_for_payment`
+
+### A.1 — Why the capacity check is skipped (confirming the brief's reasoning)
+
+Agreed, and worth stating precisely why, since every sibling RPC in this family (`book_event`, `book_event_paid`, `claim_waitlist_spot`, `admin_promote_waitlist_to_hold`) *does* have a capacity check, so a reader could reasonably assume its absence here is a bug.
+
+The capacity check in every sibling RPC answers the question "is there a free seat for this NEW admission?" Gap A never admits anyone new — the booking is already `status='confirmed'`, which by this codebase's own accounting (`admin_promote_waitlist_to_hold`'s capacity query counts `status IN ('confirmed', 'pending_payment')`, i.e. `confirmed` already counts as an occupied seat) already occupies a seat today, this instant, before this RPC runs or doesn't. Transitioning `confirmed → pending_payment` doesn't change the seat count in that accounting at all (`pending_payment` is counted exactly the same as `confirmed` everywhere else in this codebase). Adding a capacity gate here would be checking a condition that is, by construction, always already satisfied by the row's own pre-existing state — and worse, on the exact subset of events where it could theoretically read as "over capacity" (e.g. if `capacity` was edited down after the booking was made — `EC-04` in `SYSTEM-DESIGN.md` already establishes the app tolerates this), it would block the one action that fixes the underlying incident. Skipping it is correct, not an oversight — the SQL comment says so explicitly (see §A.2).
+
+### A.2 — SQL: `admin_hold_confirmed_booking_for_payment`
+
+Same shape/family as `admin_promote_waitlist_to_hold` (lock booking, lock event, validate, transition) — admin-gated via the identical in-body role check, same `jsonb_build_object('error', ...)` convention, same `SET search_path = public, pg_catalog` posture, same `p_booking_id / p_booking_fee_pence / p_hold_expires_at` parameter shape (deliberately identical names/order to `admin_promote_waitlist_to_hold` so the shared TS orchestration in §Addendum-A.4 can call either RPC generically).
+
+```sql
+CREATE OR REPLACE FUNCTION public.admin_hold_confirmed_booking_for_payment(
+  p_booking_id        uuid,
+  p_booking_fee_pence integer,
+  p_hold_expires_at   timestamptz   -- NULL = no auto-revert (same convention as admin_promote_waitlist_to_hold)
+)
+RETURNS jsonb AS $$
+DECLARE
+  v_is_admin          boolean;
+  v_event_id          uuid;
+  v_user_id           uuid;
+  v_current_status    booking_status;
+  v_stripe_payment_id text;
+  v_price_at_booking  integer;
+  v_price             integer;
+  v_event_date        timestamptz;
+  v_is_cancelled      boolean;
+BEGIN
+  -- Admin gate — identical pattern to admin_promote_waitlist_to_hold.
+  SELECT EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE id = auth.uid() AND role = 'admin'
+  ) INTO v_is_admin;
+
+  IF NOT v_is_admin THEN
+    RETURN jsonb_build_object('error', 'Admin access required');
+  END IF;
+
+  IF p_booking_fee_pence < 0 THEN
+    RETURN jsonb_build_object('error', 'Invalid booking fee');
+  END IF;
+
+  -- Lock the booking row.
+  SELECT event_id, user_id, status, stripe_payment_id, price_at_booking
+  INTO   v_event_id, v_user_id, v_current_status, v_stripe_payment_id, v_price_at_booking
+  FROM   public.bookings
+  WHERE  id = p_booking_id
+    AND  deleted_at IS NULL
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('error', 'Booking not found');
+  END IF;
+
+  IF v_current_status != 'confirmed' THEN
+    RETURN jsonb_build_object(
+      'error',
+      CASE
+        WHEN v_current_status = 'waitlisted'      THEN 'This booking is still on the waitlist — use Promote instead'
+        WHEN v_current_status = 'pending_payment' THEN 'This booking already has a payment link outstanding'
+        WHEN v_current_status = 'cancelled'       THEN 'This booking was cancelled'
+        WHEN v_current_status = 'no_show'         THEN 'This booking is marked as a no-show'
+        ELSE 'Only confirmed bookings can be sent a payment link'
+      END
+    );
+  END IF;
+
+  -- The defining precondition. The row IS 'confirmed' at this point
+  -- either way — only stripe_payment_id distinguishes "paid, all good,
+  -- leave alone" from "the exact bug this RPC exists to remediate."
+  -- Checked as its own branch (not folded into the status CASE above)
+  -- because it needs a different, more specific message: sending a
+  -- second payment link to someone who has already paid risks a
+  -- duplicate charge, which is a materially worse mistake than any of
+  -- the status-mismatch cases above.
+  IF v_stripe_payment_id IS NOT NULL THEN
+    RETURN jsonb_build_object('error', 'This booking has already been paid');
+  END IF;
+
+  -- Lock the event row.
+  SELECT price, date_time, is_cancelled
+  INTO   v_price, v_event_date, v_is_cancelled
+  FROM   public.events
+  WHERE  id = v_event_id AND deleted_at IS NULL
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('error', 'Event not found');
+  END IF;
+
+  IF v_is_cancelled THEN
+    RETURN jsonb_build_object('error', 'Event is cancelled');
+  END IF;
+
+  IF v_event_date < now() THEN
+    RETURN jsonb_build_object('error', 'Event has already passed');
+  END IF;
+
+  -- Nothing to remediate on a free event — a confirmed seat there is
+  -- already correct and final. Mirrors admin_promote_waitlist_to_hold's
+  -- own "free events aren't held" guard.
+  IF v_price = 0 THEN
+    RETURN jsonb_build_object('error', 'This is a free event — nothing to remediate');
+  END IF;
+
+  -- Defensive: chk_bookings_free_no_booking_fee
+  -- (price_at_booking > 0 OR booking_fee_pence = 0) would reject setting
+  -- a nonzero booking_fee_pence on a row whose price_at_booking is <= 0.
+  -- That combination should be impossible for a genuinely paid event,
+  -- but if some historical data anomaly produced it (e.g. the booking
+  -- was created back when the event was priced differently, or a prior
+  -- manual data fix went wrong), fail with a clear, specific message
+  -- instead of a raw, confusing 23514 constraint-violation error.
+  IF v_price_at_booking <= 0 THEN
+    RETURN jsonb_build_object(
+      'error',
+      'This booking has no ticket price on record — cannot collect payment. Needs manual investigation before retrying.'
+    );
+  END IF;
+
+  -- Deliberately NO capacity check — see
+  -- SYSTEM-DESIGN-admin-waitlist-promotion-payment.md Addendum §A.1.
+  -- This booking already occupies its seat as 'confirmed' today;
+  -- requiring payment for a seat already held is not a new admission.
+  -- Gating this on capacity would perversely block remediation on
+  -- exactly the at-capacity events most likely to need it (the ones
+  -- with a waitlist in the first place).
+
+  -- Transition. waitlist_position is untouched — a 'confirmed' booking
+  -- never carries one (the state machine never sets it for this
+  -- status), so there is nothing to preserve or null out.
+  UPDATE public.bookings
+  SET    status                 = 'pending_payment',
+         booking_fee_pence      = p_booking_fee_pence,
+         is_admin_hold          = true,
+         admin_hold_expires_at  = p_hold_expires_at
+  WHERE  id                 = p_booking_id
+    AND  status             = 'confirmed'
+    AND  stripe_payment_id IS NULL;
+
+  RETURN jsonb_build_object(
+    'booking_id', p_booking_id,
+    'user_id',    v_user_id,
+    'status',     'pending_payment'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+   SET search_path = public, pg_catalog;
+
+REVOKE EXECUTE ON FUNCTION public.admin_hold_confirmed_booking_for_payment(uuid, integer, timestamptz) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION public.admin_hold_confirmed_booking_for_payment(uuid, integer, timestamptz) TO authenticated;
+```
+
+**Why this name, not the brief's suggested `admin_send_payment_link_for_confirmed_booking`:** this RPC only performs the DB transition — it doesn't send anything (no Stripe call, no email; that's the TS orchestration layer, §Addendum-A.4). `admin_promote_waitlist_to_hold` sets the precedent: its TS wrapper also sends a payment-link email, but the RPC's own name describes the DB transition ("to `hold`"), not the downstream side-effect. `admin_hold_confirmed_booking_for_payment` follows that exact pattern. The Server Action that *does* describe the full user-facing effect is named `sendPaymentLinkForConfirmedBooking` (§Addendum-A.6) — the same two-tier split that already exists between `admin_promote_waitlist_to_hold` (RPC) and `promoteFromWaitlist` (Server Action).
+
+**No new CHECK constraints needed.** Both existing constraints from migration `20260713000001` already cover this RPC's writes as column-level invariants, not RPC-specific ones: `chk_bookings_admin_hold_requires_pending_payment` is satisfied because the UPDATE sets `status='pending_payment'` in the same statement as `is_admin_hold=true`; `chk_bookings_admin_hold_expiry_requires_flag` is satisfied regardless of whether `p_hold_expires_at` is NULL, since `is_admin_hold=true` makes it vacuously true.
+
+### A.3 — `sendPaymentLinkForConfirmedBooking` hardcodes `holdExpiresAt: null`, same as `promoteFromWaitlist`
+
+For exactly the same reason already accepted and documented for the base spec (§8.1 step 6 / §8.2 step 2): the revert-cron that would act on a non-null deadline (`revert_expired_admin_holds`, migration `20260713000003`) still doesn't exist and isn't being built now (explicit constraint on this task). Setting a real deadline today would create a hold nothing ever reverts automatically — Gap B (manual release) exists precisely to cover that gap in the interim. `computeHoldExpiresAt()` (already exported from `admin-hold.ts`, unused by design) is **not** wired up for Gap A either, for full symmetry with the waitlist-promotion path — there is no reason for the two remediation paths to have different deadline policies while the cron doesn't exist for either. When the systemic cron slice eventually ships, flipping both callers from `null` to `computeHoldExpiresAt(event.date_time)` is a one-line change each, in the same pass.
+
+### A.4 — TS: refactoring `admin-hold.ts` around a shared flow + origin config
+
+**Constraint that must hold:** `createAdminBookingHold`'s existing public signature, behavior, and test coverage (`src/lib/bookings/__tests__/admin-hold.test.ts`, `src/app/(admin)/admin/__tests__/actions-promote-waitlist-paid.test.ts`) must be preserved byte-for-byte. This is a refactor of *internals only* — the waitlist-promotion path must not change in any observable way.
+
+Add a small origin-config table and an internal flow function. The two existing per-origin differences — which RPC to call, and where to roll back to on Stripe/profile failure — become table lookups instead of hand-written duplicate logic, which is what makes the rollback-destination mistake the brief is worried about structurally impossible rather than merely "commented against":
+
+```ts
+// ── Origin config (Addendum §A.4) ───────────────────────────────────────────
+//
+// The two admin-hold flows (waitlist promotion, confirmed-booking payment
+// remediation) share every step except: which RPC transitions the row,
+// where to roll back to if Stripe/profile lookup fails AFTER the RPC has
+// already committed, and which email template to send. Expressing those
+// three differences as one lookup table — instead of two near-duplicate
+// functions — means a future edit to one origin's rollback destination
+// can't accidentally leak into the other by copy-paste.
+
+type AdminHoldOrigin = 'waitlist_promotion' | 'payment_remediation'
+
+/** Fields every hold-notification email needs, regardless of origin.
+ *  Deliberately NOT imported from waitlist-promotion.ts (whose
+ *  `WaitlistPromotionInput` name is specific to that origin) — kept
+ *  local here so the already-shipped, tested waitlist-promotion.ts file
+ *  requires zero changes. Both waitlistPromotionTemplate's existing
+ *  input type and the new confirmedUnpaidPaymentLinkTemplate's input
+ *  type are structurally identical to this, so TypeScript accepts
+ *  either as `renderEmail` below without any explicit coupling. */
+interface AdminHoldEmailContext {
+  fullName: string
+  eventTitle: string
+  eventSlug: string
+  eventDate: string
+  eventTime: string
+  priceInPence: number
+  bookingFeePence: number
+  checkoutUrl: string
+  holdExpiresAt: string | null
+}
+
+interface AdminHoldOriginConfig {
+  rpcName: 'admin_promote_waitlist_to_hold' | 'admin_hold_confirmed_booking_for_payment'
+  /** Where to roll back to if Stripe/profile lookup fails AFTER the RPC
+   *  already committed the transition. THE field this whole refactor
+   *  exists to make foolproof. */
+  rollbackStatus: 'waitlisted' | 'confirmed'
+  templateName: string
+  notificationType: 'waitlist' | 'reminder'
+  renderEmail: (input: AdminHoldEmailContext) => RenderedTemplate
+}
+
+const ADMIN_HOLD_ORIGINS: Record<AdminHoldOrigin, AdminHoldOriginConfig> = {
+  waitlist_promotion: {
+    rpcName: 'admin_promote_waitlist_to_hold',
+    rollbackStatus: 'waitlisted',   // unchanged from today's behaviour
+    templateName: 'waitlist_promotion',
+    notificationType: 'waitlist',
+    renderEmail: waitlistPromotionTemplate,
+  },
+  payment_remediation: {
+    rpcName: 'admin_hold_confirmed_booking_for_payment',
+    // NOT 'waitlisted' — they were never waitlisted this cycle. If
+    // Stripe/profile lookup fails after the RPC already flipped them to
+    // pending_payment, the honest rollback is back to 'confirmed'
+    // (unpaid) — functionally a no-op that leaves them exactly where
+    // they started, still needing remediation, not worse off.
+    rollbackStatus: 'confirmed',
+    templateName: 'confirmed_unpaid_payment_link',
+    notificationType: 'reminder',
+    renderEmail: confirmedUnpaidPaymentLinkTemplate,
+  },
+}
+
+async function runAdminHoldFlow(
+  origin: AdminHoldOrigin,
+  supabaseUserScoped: SupabaseClient,
+  bookingId: string,
+  options: { holdExpiresAt: Date | null },
+): Promise<CreateAdminBookingHoldResult> {
+  const config = ADMIN_HOLD_ORIGINS[origin]
+  const admin = createAdminClient()
+
+  // Steps 1–3 (fetch booking, fetch event, defensive free-event guard,
+  // compute bookingFeePence) — IDENTICAL to today's createAdminBookingHold
+  // steps 1–3, unchanged.
+  //
+  // Step 4 — the only RPC-call-site change: config.rpcName instead of the
+  // literal 'admin_promote_waitlist_to_hold' string.
+  const { data: rpcData, error: rpcError } = await supabaseUserScoped.rpc(
+    config.rpcName,
+    {
+      p_booking_id: bookingId,
+      p_booking_fee_pence: bookingFeePence, // from step 3
+      p_hold_expires_at: options.holdExpiresAt?.toISOString() ?? null,
+    },
+  )
+  // Step 5 — unwrap RPC error — IDENTICAL.
+  // Steps 6–8 (profile fetch, ensureStripeCustomer, Checkout Session) —
+  // IDENTICAL.
+  // Step 9a (persist session id) — IDENTICAL.
+  // Step 9b (email) — config.renderEmail(...) instead of the literal
+  // waitlistPromotionTemplate(...) call; config.templateName /
+  // config.notificationType instead of the literal 'waitlist_promotion'
+  // string and 'waitlist' value passed to sendEmail().
+  // Step 9c (success return) — IDENTICAL.
+  //
+  // Step 10 (catch — Stripe/profile failure) — THE parameterized branch:
+  //   await admin.from('bookings').update({
+  //     status: config.rollbackStatus,
+  //     is_admin_hold: false,
+  //     admin_hold_expires_at: null,
+  //   }).eq('id', bookingId).eq('status', 'pending_payment')
+  // ...
+}
+
+export async function createAdminBookingHold(
+  supabaseUserScoped: SupabaseClient,
+  bookingId: string,
+  options: { holdExpiresAt: Date | null },
+): Promise<CreateAdminBookingHoldResult> {
+  return runAdminHoldFlow('waitlist_promotion', supabaseUserScoped, bookingId, options)
+}
+
+export async function createAdminPaymentRemediationHold(
+  supabaseUserScoped: SupabaseClient,
+  bookingId: string,
+  options: { holdExpiresAt: Date | null },
+): Promise<CreateAdminBookingHoldResult> {
+  return runAdminHoldFlow('payment_remediation', supabaseUserScoped, bookingId, options)
+}
+```
+
+`CreateAdminBookingHoldResult` (existing interface) is reused unchanged for both — its shape (`success`, `error?`, `status?: 'pending_payment'`, `checkoutUrl?`, `holdExpiresAt?`) is already origin-agnostic.
+
+### A.5 — New email: `confirmedUnpaidPaymentLinkTemplate`
+
+**Why a new file, not a conditional branch inside `waitlist-promotion.ts`:** the same three reasons the base spec (§7) already used to reject reusing `waitlist-spot-available.ts`, applied to this new pairing:
+
+- `waitlistPromotionTemplate`'s copy is explicitly framed as "you were on the waitlist... we've set a seat aside." That is **factually wrong** for Amy/Yasemin — they were never told they left a confirmed seat, and telling them they were "on the waitlist" when they believe they already hold a ticket is actively confusing, and could read as a mistake or a scam attempt ("wait, was I on a waitlist? I thought I had a ticket").
+- A conditional branch bolted onto a single-purpose template muddies it for two audiences — the exact anti-pattern the base spec already rejected for `booking-confirmation.ts`'s dead `pending_payment` branch.
+- A new file costs nothing extra — it reuses the same shared primitives (`COLORS`, `renderButton`, `renderDetailRow`, `renderShell`, `escapeHtml`, `htmlToText`, `getSiteUrl`, `formatPriceExact`) with zero new shared infrastructure, exactly like every other template in this directory.
+
+New file: `src/lib/email/templates/confirmed-unpaid-payment-link.ts`, exporting `confirmedUnpaidPaymentLinkTemplate()`.
+
+```ts
+export interface ConfirmedUnpaidPaymentLinkInput {
+  fullName: string
+  eventTitle: string
+  eventSlug: string
+  eventDate: string        // pre-formatted (formatDateFull)
+  eventTime: string        // pre-formatted (formatTime)
+  priceInPence: number
+  bookingFeePence: number
+  checkoutUrl: string
+  holdExpiresAt: string | null   // pre-formatted, or null — see below
+}
+```
+
+Structural differences from `waitlistPromotionTemplate` (everything else — the price breakdown table, the CTA button, the urgency-block conditional shape — is identical, reused verbatim as a pattern):
+
+- **Subject** (illustrative, not final — see disclaimer below): `Action needed: complete payment for {eventTitle}` — not `You're in: {eventTitle}` (which implies a fresh admission).
+- **Heading/opening line** (illustrative): "Let's finish confirming your spot." / "Hi {firstName} — you have a confirmed place at {eventTitle}, but we're missing a completed payment on our side. To keep your spot, please complete payment below." — explicitly does **not** mention the waitlist anywhere.
+- Urgency block: same conditional structure as `waitlistPromotionTemplate` (deadline text if `holdExpiresAt` is set, neutral "complete payment to secure your spot" line if `null`) — reused as-is; the underlying claim ("after that we may need to offer the spot to someone else") is equally true for a remediated hold, since Gap B's demote is exactly the mechanism that would carry that out.
+
+**Illustrative only, not final** — same discipline as the base spec's §7: exact wording and the amount shown to Amy/Yasemin is the user's own explicitly-reserved review step, not resolved here. The backend-developer implementing this should mark the copy "first draft in house style, not final" in the file header, exactly matching `waitlist-promotion.ts`'s own existing disclaimer comment.
+
+### A.6 — New Server Action: `sendPaymentLinkForConfirmedBooking`
+
+In `src/app/(admin)/admin/actions.ts`, alongside `promoteFromWaitlist`:
+
+```ts
+export async function sendPaymentLinkForConfirmedBooking(bookingId: string) {
+  const { supabase } = await requireAdmin()
+
+  if (!bookingId) return { error: 'Booking ID is required' }
+
+  const { data: booking, error: bookingError } = await supabase
+    .from('bookings')
+    .select('id, event_id, user_id, status, stripe_payment_id')
+    .eq('id', bookingId)
+    .is('deleted_at', null)
+    .single()
+
+  if (bookingError || !booking) return { error: 'Booking not found' }
+  if (booking.status !== 'confirmed') {
+    return { error: 'Only confirmed bookings can be sent a payment link' }
+  }
+  if (booking.stripe_payment_id) {
+    return { error: 'This booking has already been paid' }
+  }
+
+  const { data: event } = await supabase
+    .from('events')
+    .select('id, slug, price')
+    .eq('id', booking.event_id)
+    .single()
+
+  if (!event) return { error: 'Event not found' }
+  if (event.price === 0) {
+    return { error: 'This is a free event — nothing to remediate' }
+  }
+
+  // holdExpiresAt hardcoded null — same deferred-cron tradeoff as
+  // promoteFromWaitlist. See Addendum §A.3.
+  const result = await createAdminPaymentRemediationHold(supabase, bookingId, {
+    holdExpiresAt: null,
+  })
+
+  if (!result.success) return { error: result.error }
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('full_name')
+    .eq('id', booking.user_id)
+    .single()
+
+  revalidatePath('/admin/events')
+  revalidatePath(`/admin/events/${event.id}/bookings`)
+  revalidatePath(`/events/${event.slug}`)
+  revalidatePath('/bookings')
+
+  return {
+    success: true,
+    memberName: profile?.full_name ?? 'Member',
+    status: 'pending_payment' as const,
+    holdExpiresAt: result.holdExpiresAt ?? null,
+  }
+}
+```
+
+This pre-validates `status`/`stripe_payment_id`/`event.price` in TS *before* ever calling the RPC — belt-and-braces, matching this family's established habit of the Server Action pre-checking what the RPC will re-validate anyway under lock (see `promoteFromWaitlist`'s own pre-fetch-and-branch, and `admin_promote_waitlist_to_hold`'s independent re-validation of everything `promoteFromWaitlist` already checked).
+
+**Note on `revalidatePath`:** unlike the existing `promoteFromWaitlist`, this includes `/admin/events/${event.id}/bookings` — the actual page this button lives on. The existing `promoteFromWaitlist` does *not* revalidate that nested path today (only `/admin/events`, which is a sibling list page, not this detail page) — a plausible pre-existing gap, flagged here but **not fixed**, since it's outside this addendum's two named gaps. Both new Server Actions in this addendum correctly include the nested path from the start.
+
+---
+
+## Addendum §B — Gap B: `admin_revert_hold_to_waitlist`
+
+### B.1 — Confirming the origin-agnostic design
+
+Agreed without reservation: `is_admin_hold=true AND status='pending_payment'` is a complete, self-sufficient predicate, and the RPC genuinely does not need to know or care whether the row arrived there via `admin_promote_waitlist_to_hold` (Gap A's sibling, the original feature) or via `admin_hold_confirmed_booking_for_payment` (Gap A, this addendum) — both leave the row in an identical `is_admin_hold`/`status` shape. Always reverting to `waitlisted`, never `confirmed`, is correct for the same reason the brief states: reverting a remediated hold to `confirmed`-unpaid would silently recreate the exact incident this whole feature exists to fix. `waitlisted` is the only exit that's safe for every origin.
+
+### B.2 — Stripe Checkout Session expiry: yes, but ordered *after* the DB revert, not before
+
+The brief's own instinct ("yes, since this path has a live request context") is right; here is the refinement on *how*.
+
+**Two possible orderings, and why DB-first wins:**
+
+- **Stripe-expire-first, then DB-revert:** if `expire()` succeeds, the race window is provably zero from that point on — the session is dead, no payment can ever complete on it, and the DB revert that follows is safe by construction. Attractive on paper. But it requires interpreting Stripe's error response to decide whether to proceed: if `expire()` fails because the session already has a successful payment, the DB revert must be **aborted**, not attempted — reverting a booking that was just legitimately paid for would be actively wrong. This makes the DB-revert conditional on correctly parsing a third-party error shape, which is fragile, and this codebase has no existing precedent anywhere for typed Stripe-error inspection (every existing catch block does `err instanceof Error ? err.message : String(err)` — see `cancelEventAndRefundBookings`, `claimWaitlistSpot`, `createAdminBookingHold` itself).
+- **DB-revert-first (via the RPC, under `FOR UPDATE`), then Stripe-expire as best-effort:** the RPC's own locked `WHERE is_admin_hold = true AND status = 'pending_payment'` guard means the revert **only actually happens** if the row was still genuinely an active hold at that exact instant inside that transaction. If the webhook had *already* confirmed the booking microseconds earlier (payment succeeded, webhook landed, status flipped to `confirmed`, `is_admin_hold` cleared per the base spec's fix #1), the RPC's UPDATE simply matches zero rows — Postgres's own row-locking means the two writers (this RPC's transaction and the webhook's `.eq('status', 'pending_payment')` UPDATE) are already correctly serialized against each other with no extra code, exactly as the base spec's §6.1 already reasoned through for the cron case. The RPC detects the zero-rows case and returns a clear error rather than silently succeeding (§B.3).
+
+DB-first is simpler, doesn't require guessing at Stripe's error taxonomy, and matches this codebase's dominant, already-established philosophy everywhere else in this family: **the locked SQL transition is the one and only source of truth; everything layered around it (Stripe, email) is best-effort and non-blocking.** I'm going with DB-first.
+
+**Residual risk, named explicitly (same discipline as the base spec's §6.4):** there remains a narrow window — the time between the DB revert committing and the `expire()` call landing at Stripe, typically milliseconds within the same request — during which a payment could theoretically complete. If it does, the webhook's own `.eq('status', 'pending_payment')` guard will find the row already `waitlisted` and no-op: money taken, no reconciliation. This is not a new risk Gap B introduces — it's the same class of risk already accepted for the natural-expiry path throughout the base spec (§6.4's own "residual risk, named explicitly" section) and it's fundamentally the "webhook hasn't landed yet" lag that exists in *any* ordering, not something Stripe-expire-first would have actually eliminated either (Stripe-expire-first only protects the case where our own code is the slow one; it does nothing for genuine webhook-delivery lag on a payment that already succeeded moments before we ever touched this row). Gap B's ordering narrows this window from "up to 15 minutes of cron-polling lag" (the accepted risk for the automatic path) down to "typically sub-second, within one request" for the manual path — a real improvement, not a full close.
+
+**On detecting the "already paid" case specifically:** the TS orchestration (§B.4) should still special-case a `stripe.checkout.sessions.expire()` failure that looks like "session already complete" and escalate it to Sentry with a distinct tag, since — per the above — that specific failure shape is the one case where it might mean a payment just raced the revert. I'm not confident enough in Stripe Node SDK's exact error message/code for this to assert it here (this codebase has no existing precedent to check against, per above) — flagged as an open question for the implementer to verify empirically against the live SDK types (§Addendum-Open-Questions, item 2).
+
+### B.3 — SQL: `admin_revert_hold_to_waitlist`
+
+```sql
+CREATE OR REPLACE FUNCTION public.admin_revert_hold_to_waitlist(
+  p_booking_id uuid
+)
+RETURNS jsonb AS $$
+DECLARE
+  v_is_admin     boolean;
+  v_event_id     uuid;
+  v_status       booking_status;
+  v_is_hold      boolean;
+  v_new_position integer;
+BEGIN
+  -- Admin gate — identical pattern to the other two admin_* RPCs in this family.
+  SELECT EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE id = auth.uid() AND role = 'admin'
+  ) INTO v_is_admin;
+
+  IF NOT v_is_admin THEN
+    RETURN jsonb_build_object('error', 'Admin access required');
+  END IF;
+
+  -- Lock the booking row.
+  SELECT event_id, status, is_admin_hold
+  INTO   v_event_id, v_status, v_is_hold
+  FROM   public.bookings
+  WHERE  id = p_booking_id
+    AND  deleted_at IS NULL
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('error', 'Booking not found');
+  END IF;
+
+  -- Deliberately origin-agnostic — see Addendum §B.1. This RPC doesn't
+  -- need to know or care whether the row became a hold via
+  -- admin_promote_waitlist_to_hold or admin_hold_confirmed_booking_for_payment.
+  -- Also the guard that makes the DB-first Stripe-expiry ordering safe
+  -- (Addendum §B.2): if the webhook already confirmed this booking a
+  -- moment ago, this branch fires and the caller learns the hold is
+  -- already gone, instead of the UPDATE below silently matching zero
+  -- rows and returning a falsely-successful response.
+  IF NOT v_is_hold OR v_status != 'pending_payment' THEN
+    RETURN jsonb_build_object(
+      'error',
+      'This booking is not an active payment hold — it may have already been paid, cancelled, or reverted.'
+    );
+  END IF;
+
+  -- Always reverts to 'waitlisted' — never 'confirmed', even for a hold
+  -- that originated from admin_hold_confirmed_booking_for_payment (Gap
+  -- A). Reverting a remediated hold to an unpaid 'confirmed' would
+  -- silently recreate the exact incident this whole feature exists to
+  -- fix. 'waitlisted' is the only sane exit for ANY hold, regardless of
+  -- origin. See Addendum §B.1.
+  UPDATE public.bookings
+  SET    status                 = 'waitlisted',
+         is_admin_hold          = false,
+         admin_hold_expires_at  = NULL
+  WHERE  id                     = p_booking_id
+    AND  status                 = 'pending_payment'
+    AND  is_admin_hold          = true;
+
+  -- Recompute waitlist numbering for the affected event — this
+  -- booking's frozen waitlist_position can now collide with positions
+  -- reassigned while it was held. Identical reasoning to
+  -- revert_expired_admin_holds() (base spec §2.3, §6.3) — deliberately
+  -- NOT calling that (still-unbuilt) function; see Addendum §B.6.
+  -- recompute_waitlist_positions is GRANTed to `authenticated` only
+  -- (not service_role), but that grant governs external PostgREST
+  -- invocation, not this in-body PERFORM from another SECURITY DEFINER
+  -- function owned by the same role — identical reasoning already
+  -- established for revert_expired_admin_holds' own call (base spec
+  -- §6.1). No additional grant needed.
+  PERFORM public.recompute_waitlist_positions(v_event_id);
+
+  SELECT waitlist_position INTO v_new_position
+  FROM   public.bookings
+  WHERE  id = p_booking_id;
+
+  RETURN jsonb_build_object(
+    'booking_id',         p_booking_id,
+    'event_id',           v_event_id,
+    'status',             'waitlisted',
+    'waitlist_position',  v_new_position
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+   SET search_path = public, pg_catalog;
+
+REVOKE EXECUTE ON FUNCTION public.admin_revert_hold_to_waitlist(uuid) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION public.admin_revert_hold_to_waitlist(uuid) TO authenticated;
+```
+
+No `event_date < now()` guard, deliberately — releasing a hold doesn't depend on the event being in the future. If anything it's *more* useful for after-the-fact cleanup on a just-passed event (same spirit as `SYSTEM-DESIGN.md`'s `EC-03`, which already accepts past-event waitlist entries as an admin-managed cleanup case, not an error state).
+
+No `p_reason` / audit column, deliberately — matching the base spec's own explicit restraint (§9, item 6): `notifications` (the email log) plus Sentry (for the Stripe-race case, §B.2/§B.4) already provide adequate audit surface for a demo-scale admin tool. If a permanent "who demoted what, when, why" log becomes a real product need, that's a separate, small addition later.
+
+### B.4 — TS: `releaseAdminBookingHold`
+
+New export in `src/lib/bookings/admin-hold.ts`, alongside `createAdminBookingHold` / `createAdminPaymentRemediationHold`. Structurally separate from the `runAdminHoldFlow`/`ADMIN_HOLD_ORIGINS` machinery (§A.4) — releasing is a fundamentally different operation (reverting an existing hold, not creating one), and forcing it through the same config table would add branching complexity for zero code reuse (there's no RPC-name/rollback-status/email-template axis to share — release has exactly one RPC, one destination, no email in this design).
+
+```ts
+export interface ReleaseAdminBookingHoldResult {
+  success: boolean
+  error?: string
+  status?: 'waitlisted'
+  waitlistPosition?: number | null
+}
+
+export async function releaseAdminBookingHold(
+  supabaseUserScoped: SupabaseClient,
+  bookingId: string,
+): Promise<ReleaseAdminBookingHoldResult> {
+  // 1. DB-side revert FIRST — authoritative. See Addendum §B.2 for why
+  // this must happen before the Stripe-expire call, not after or
+  // gated-by-it.
+  const { data: rpcData, error: rpcError } = await supabaseUserScoped.rpc(
+    'admin_revert_hold_to_waitlist',
+    { p_booking_id: bookingId },
+  )
+
+  if (rpcError) {
+    console.error('[releaseAdminBookingHold] RPC error:', rpcError.message)
+    return { success: false, error: 'Something went wrong. Please try again.' }
+  }
+
+  const rpcResult = rpcData as Record<string, unknown>
+  if (rpcResult.error) {
+    return { success: false, error: rpcResult.error as string }
+  }
+
+  // 2. Best-effort: proactively expire the outstanding Stripe Checkout
+  // Session so a stale link can't be paid after the DB-side revert has
+  // already committed. NOT a precondition for step 1 — that already
+  // succeeded. A failure here is logged but never rolled back and never
+  // surfaced as an error to the admin: the seat is already correctly
+  // freed either way. See Addendum §B.2.
+  const admin = createAdminClient()
+  const { data: booking } = await admin
+    .from('bookings')
+    .select('stripe_checkout_session_id')
+    .eq('id', bookingId)
+    .single()
+
+  const sessionId = booking?.stripe_checkout_session_id
+  if (sessionId) {
+    try {
+      const stripe = getStripeClient()
+      await stripe.checkout.sessions.expire(sessionId)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      // Heuristic, NOT verified against the live Stripe SDK — see
+      // Addendum open question #2. Intent: Stripe refuses to expire a
+      // Session that already has a successful payment. If that's what
+      // just happened, the member may have paid in the webhook-lag
+      // window between our DB revert committing and this call landing
+      // (Addendum §B.2's named residual risk) — escalate loudly so an
+      // operator reconciles by hand, matching this codebase's existing
+      // posture for "payment succeeded but our state doesn't reflect
+      // it" (see cancelEventAndRefundBookings' own
+      // "Refund issued but booking UPDATE failed" branch).
+      const looksAlreadyPaid = /complete|paid|succeeded/i.test(message)
+      if (looksAlreadyPaid) {
+        Sentry.captureException(err, {
+          tags: {
+            surface: 'releaseAdminBookingHold',
+            signal: 'possible_race_paid_after_revert',
+          },
+          extra: { bookingId, sessionId },
+          level: 'error',
+        })
+      } else {
+        console.warn(
+          '[releaseAdminBookingHold] Stripe session expire failed (non-blocking):',
+          sessionId,
+          message,
+        )
+      }
+    }
+  }
+
+  return {
+    success: true,
+    status: 'waitlisted',
+    waitlistPosition: (rpcResult.waitlist_position as number | null) ?? null,
+  }
+}
+```
+
+Requires new imports in `admin-hold.ts`: `getStripeClient` from `@/lib/stripe/server` (not currently imported there — every other Stripe call in this file goes through `createBookingCheckoutSession`/`ensureStripeCustomer` wrappers in `checkout.ts`; this is the first *direct* Stripe SDK call in `admin-hold.ts`).
+
+### B.5 — New Server Action: `demoteAdminHold`
+
+```ts
+export async function demoteAdminHold(bookingId: string) {
+  const { supabase } = await requireAdmin()
+
+  if (!bookingId) return { error: 'Booking ID is required' }
+
+  // Pre-fetch for revalidatePath targets and the success message only —
+  // the RPC re-validates everything that matters for correctness under
+  // lock (§B.3). This fetch is UX, not a security boundary.
+  const { data: booking, error: bookingError } = await supabase
+    .from('bookings')
+    .select('id, event_id, user_id')
+    .eq('id', bookingId)
+    .is('deleted_at', null)
+    .single()
+
+  if (bookingError || !booking) return { error: 'Booking not found' }
+
+  const result = await releaseAdminBookingHold(supabase, bookingId)
+  if (!result.success) return { error: result.error }
+
+  const [{ data: event }, { data: profile }] = await Promise.all([
+    supabase.from('events').select('slug').eq('id', booking.event_id).single(),
+    supabase.from('profiles').select('full_name').eq('id', booking.user_id).single(),
+  ])
+
+  revalidatePath('/admin/events')
+  revalidatePath(`/admin/events/${booking.event_id}/bookings`)
+  if (event?.slug) revalidatePath(`/events/${event.slug}`)
+  revalidatePath('/bookings')
+
+  return {
+    success: true,
+    memberName: profile?.full_name ?? 'Member',
+    status: 'waitlisted' as const,
+    waitlistPosition: result.waitlistPosition ?? null,
+  }
+}
+```
+
+### B.6 — Explicit decision: the future cron does NOT call this RPC (and this RPC does not call it)
+
+The brief asked me to decide whether the future `revert_expired_admin_holds()` cron (base spec §6.1, still unbuilt, still not being built now) should eventually be rewritten to loop over `admin_revert_hold_to_waitlist()` per matched row, or keep its own bulk `UPDATE`.
+
+**Decision: keep them as siblings, sharing the same UPDATE shape in spirit (copy-consistent), with no actual call-through relationship.** Reasoning:
+
+- The two functions' WHERE-predicates are genuinely different, not just "the same operation, different trigger." The cron's predicate is time-gated and narrow: `admin_hold_expires_at < now()` — only *expired* holds. Gap B's predicate is deliberately ungated: an admin can release a hold that hasn't reached its deadline yet, or one with no deadline at all (which, per §A.3/§8.1, is *every* hold right now, since the systemic slice hasn't shipped). Gap B is not "run the cron logic early" — it's a manual override with a strictly broader eligibility set.
+- The bulk single-`UPDATE`-for-N-rows form (§6.1) already has its atomicity/race-safety reasoning fully worked through and reviewed in the base spec. Refactoring it into a per-row RPC loop for a migration that doesn't exist yet would mean re-deriving that reasoning for no immediate benefit, and risks the "don't touch the deferred cron migration" constraint on this task by proxy (even though the constraint technically only forbids touching the file, changing the *design* out from under a future implementer without them present to review it seems equally against the spirit of "don't build it now").
+- It would not even be *incorrect* to later loop the cron over this RPC (running `recompute_waitlist_positions` once per row instead of once per distinct event within a tick is wasteful, not wrong — it's convergent/idempotent), so this isn't a hard technical blocker either way — it's a genuine judgment call, made in favour of leaving §6.1 completely untouched today and flagging the choice explicitly for whoever builds the cron next (§Addendum-Open-Questions, item 4), rather than deciding it unilaterally now for code that doesn't exist.
+
+---
+
+## Addendum §C — UI wiring
+
+### C.1 — `BookingsTable.tsx`: tracing exactly what needs to change
+
+Current `BookingRow` (local interface, lines 17–32) does not declare `is_admin_hold`/`admin_hold_expires_at`. The **data** for both fields is already present on every row passed in today — `getEventBookings` (`admin/actions.ts` line 1633, shipped in the base PR) already selects `is_admin_hold, admin_hold_expires_at`, `AdminEventBooking` (the function's return type) already carries both, and the page's `normalisedBookings = bookings.map((b) => ({ ...b, profile: ... }))` spread already forwards them. Only the **type** blocks the component from reading them — a pure additive fix:
+
+```ts
+interface BookingRow {
+  id: string
+  status: string
+  waitlist_position: number | null
+  booked_at: string
+  created_at: string
+  stripe_payment_id?: string | null
+  stripe_refund_id?: string | null
+  refunded_amount_pence?: number | null
+  cancelled_at?: string | null
+  // NEW — admin waitlist-promotion / payment-remediation hold mechanism.
+  // Data already flows through from getEventBookings; only the type was
+  // missing it. Non-optional booleans (matches the DB column: NOT NULL
+  // DEFAULT false).
+  is_admin_hold: boolean
+  admin_hold_expires_at: string | null
+  profile: { id: string; full_name: string; email: string; avatar_url: string | null; phone_number: string | null } | null
+}
+```
+
+`BookingsTableProps` needs one new prop, `isPaidEvent: boolean` — pre-computed at the page level, following the exact same precedent already set by `isPastEvent` (also pre-computed booleans handed down rather than raw fields the component derives itself):
+
+```ts
+interface BookingsTableProps {
+  bookings: BookingRow[]
+  eventId: string
+  isPastEvent?: boolean
+  /** NEW — event.price > 0. Gates the "Send payment link" button, which
+   *  only makes sense on a paid event (a free 'confirmed' booking has
+   *  nothing to remediate — see Addendum §A.2). */
+  isPaidEvent?: boolean
+}
+```
+
+New per-row visibility booleans, alongside the existing `showPromote`/`showNoShow`/`showUndoNoShow` (both desktop and mobile branches read the same three-way-exclusive logic, since `status` values are mutually exclusive — a row can never match more than one of these five conditions at once):
+
+```ts
+const showSendPaymentLink =
+  isPaidEvent && booking.status === 'confirmed' && !booking.stripe_payment_id
+// Defence in depth: is_admin_hold=true already guarantees
+// status==='pending_payment' at the DB level (chk_bookings_admin_hold_requires_pending_payment),
+// but checking both costs nothing and protects against a stale/inconsistent read.
+const showDemote = booking.is_admin_hold === true && booking.status === 'pending_payment'
+```
+
+Rendered alongside the existing three buttons in both layouts — desktop `<td className="py-3 text-right">` action cell, and the mobile card's `hasAction` block (which needs widening: `const hasAction = showPromote || showNoShow || showUndoNoShow || showSendPaymentLink || showDemote`):
+
+```tsx
+{showSendPaymentLink && <SendPaymentLinkButton bookingId={booking.id} />}
+{showDemote && <DemoteHoldButton bookingId={booking.id} />}
+```
+
+No `isPastEvent` gate on either new button, deliberately, for consistency with the existing (not idealized) behaviour of `PromoteButton` — it also doesn't gate on `isPastEvent` today, relying entirely on the RPC's own date check as the correctness backstop. Adding an inconsistent UI-layer gate only to the two new buttons would create an unexplained asymmetry for a future reader.
+
+### C.2 — New components
+
+`src/components/admin/SendPaymentLinkButton.tsx` and `src/components/admin/DemoteHoldButton.tsx`, both following `PromoteButton.tsx`'s existing pattern exactly (`useTransition`, `alert(result.error)` for failure — not an inline error span, matching `PromoteButton` specifically since that's the sibling the brief pointed at — inline success message, same gold/danger visual language already used elsewhere in this table). `DemoteHoldButton` adds one thing `PromoteButton` doesn't have: a native `confirm()` guard before calling the action, since demoting is more consequential (kills a live payment link, moves someone off a confirmed-track back onto the waitlist) than promoting — this is my own judgment call, not explicitly requested, flagged in case the developer prefers dropping it for pattern-consistency with the confirm-less `PromoteButton`/`NoShowButton`.
+
+Both call their respective new Server Actions (§A.6, §B.5) and read `result.memberName` (deliberately not `result.promotedName` — nobody was promoted in either flow, and reusing that field name here would be a wrong-but-passing-TypeScript smell).
+
+### C.3 — Page wiring: `src/app/(admin)/admin/events/[id]/bookings/page.tsx`
+
+One line added to the existing `<BookingsTable>` call:
+
+```tsx
+<BookingsTable
+  bookings={normalisedBookings}
+  eventId={id}
+  isPastEvent={new Date(event.date_time) < new Date()}
+  isPaidEvent={event.price > 0}
+/>
+```
+
+**No change needed to any data-fetching.** `getAdminEventById(id)` already does `select('*')` on `events`, so `event.price` is already present on the object this page already has in scope — this is purely new prop-passing, zero new queries. This directly confirms the brief's own question 5: the page's `select`/mapping does not need extending; only the JSX does.
+
+---
+
+## Addendum §D — Migration plan
+
+One new file: `supabase/migrations/20260713000004_admin_hold_confirmed_booking_and_release_rpcs.sql`, containing both new functions from §A.2 and §B.3.
+
+**Numbering note:** deliberately `...000004`, skipping past `...000003` — that filename is reserved in the base spec (§6.6) for the still-deferred `revert_expired_admin_holds` cron migration, which this task explicitly must not create or touch. Migration files don't need to be created in a strict unbroken sequence relative to files that don't exist yet; `000004` has no dependency on `000003` (Gap A/B's RPCs are fully independent of the cron), so this ordering is safe and leaves `000003` cleanly available for whoever eventually builds that PR.
+
+Header comment for the new migration should state plainly: **zero new columns, zero new enum values, zero RLS policy changes.** Both gaps are solved entirely using the `is_admin_hold`/`admin_hold_expires_at` columns and their two CHECK constraints, already shipped in `20260713000001`. This migration only adds two new functions.
+
+**Post-merge:** same as every other migration in this project — CI applies to local Supabase only. After merge, run manually: `supabase db push --include-all --linked`. Verify:
+
+```sql
+SELECT proname FROM pg_proc
+WHERE proname IN ('admin_hold_confirmed_booking_for_payment', 'admin_revert_hold_to_waitlist');
+```
+
+**Rollback:** `DROP FUNCTION IF EXISTS public.admin_hold_confirmed_booking_for_payment(uuid, integer, timestamptz);` and `DROP FUNCTION IF EXISTS public.admin_revert_hold_to_waitlist(uuid);`. Not destructive either direction — no data loss, only future behaviour changes. (Any bookings already transitioned via these functions before a rollback would be stuck as `pending_payment`/`is_admin_hold=true` with no RPC left to move them — same class of residual state the base spec already accepts for its own rollback story.)
+
+---
+
+## Addendum §E — Files changed / created (summary)
+
+**New files:**
+- `supabase/migrations/20260713000004_admin_hold_confirmed_booking_and_release_rpcs.sql`
+- `src/lib/email/templates/confirmed-unpaid-payment-link.ts`
+- `src/components/admin/SendPaymentLinkButton.tsx`
+- `src/components/admin/DemoteHoldButton.tsx`
+
+**Modified files:**
+- `src/lib/bookings/admin-hold.ts` — internal refactor (`runAdminHoldFlow` + `ADMIN_HOLD_ORIGINS`) behind the existing `createAdminBookingHold` export; two new exports (`createAdminPaymentRemediationHold`, `releaseAdminBookingHold`); new `getStripeClient` import.
+- `src/app/(admin)/admin/actions.ts` — two new Server Actions (`sendPaymentLinkForConfirmedBooking`, `demoteAdminHold`); new imports (`createAdminPaymentRemediationHold`, `releaseAdminBookingHold`).
+- `src/components/admin/BookingsTable.tsx` — `BookingRow` interface gains two fields; `BookingsTableProps` gains `isPaidEvent`; new button-visibility logic + rendering in both desktop and mobile layouts.
+- `src/app/(admin)/admin/events/[id]/bookings/page.tsx` — one new prop on the existing `<BookingsTable>` call.
+
+**Not modified (confirmed, not just assumed):**
+- `src/types/index.ts` — `AdminEventBooking` already carries `is_admin_hold`/`admin_hold_expires_at` (base PR). No type changes needed for either gap.
+- Any RLS policy — both new RPCs are `SECURITY DEFINER` with in-body admin-role checks, identical posture to their siblings.
+- `admin_promote_waitlist_to_hold`'s own SQL body — untouched; only called via the refactored shared TS wrapper, same as before.
+- The deferred cron migration (`...000003`) — does not exist, not created, not touched.
+- `src/lib/email/templates/waitlist-promotion.ts` — untouched; the new email template is a fully separate file (§A.5), and the shared TS type it's compared against (`AdminHoldEmailContext`) is declared locally in `admin-hold.ts`, not imported from this file.
+
+**Test surface (for the tester agent, not written here):** `src/lib/bookings/__tests__/admin-hold.test.ts` needs both a regression pass (the `runAdminHoldFlow` refactor must not change `createAdminBookingHold`'s observable behavior) and new cases for `createAdminPaymentRemediationHold` + `releaseAdminBookingHold`. `src/app/(admin)/admin/__tests__/actions-promote-waitlist-paid.test.ts` or a new sibling file needs cases for `sendPaymentLinkForConfirmedBooking` + `demoteAdminHold`, including the security-relevant ones (non-admin rejected, already-paid rejected, wrong-status rejected, capacity deliberately NOT enforced for Gap A). `src/components/admin/__tests__/BookingsTable.test.tsx` needs cases for the two new button-visibility conditions. New test files likely needed for `SendPaymentLinkButton.tsx` and `DemoteHoldButton.tsx` themselves.
+
+---
+
+## Addendum — Open questions / flags for the developer
+
+1. **Copy sign-off (Gap A email).** Same reserved review step as the base spec's own open question #1 — exact wording and the amount shown to Amy/Yasemin is not resolved here (§A.5).
+2. **Stripe "already paid" error detection in `releaseAdminBookingHold` is an unverified heuristic.** The `/complete|paid|succeeded/i` message-matching in §B.4 is my best guess at Stripe Node SDK's error wording for "cannot expire a Session with a successful payment" — this codebase has no existing precedent for typed Stripe-error inspection to check it against. Needs empirical verification against the live SDK (or Stripe's docs for the specific error `type`/`code` on `checkout.sessions.expire`) before shipping; get this wrong and the Sentry escalation either never fires (silent race) or fires on unrelated transient errors (noise).
+3. **`DemoteHoldButton`'s `confirm()` guard** is my own addition, not explicitly requested (§C.2) — confirm whether to keep it or drop it for pattern-consistency with the confirm-less `PromoteButton`/`NoShowButton`.
+4. **Whether the future (still unbuilt) `revert_expired_admin_holds` cron should eventually call `admin_revert_hold_to_waitlist` per-row instead of keeping its own bulk `UPDATE`.** Explicit judgment call made in §B.6 (keep them as siblings, don't refactor the cron design now) — flagged for whoever actually builds that migration to reconsider with fresh eyes, since it's a real (if low-stakes) fork in the road I'm deciding without that PR in front of me.
+5. **Pre-existing `revalidatePath` gap in `promoteFromWaitlist`** (and by extension `cancelEvent`/`cancelEventAndRefundBookings`) — none of them revalidate the nested `/admin/events/${id}/bookings` page they actually affect, only sibling/list paths. Both new Server Actions in this addendum correctly include it (§A.6, §B.5), but the pre-existing gap in already-shipped code is flagged, not fixed, here — out of scope for these two gaps specifically.
+6. **`cancelBooking` (member self-cancel) re-confirmed out of scope for both gaps.** It hard-rejects anything not `status='confirmed'`... which means once Gap A's remediation flips a booking to `pending_payment`, a member can no longer self-cancel it via that path (same as any other `pending_payment` row today — they'd need to abandon checkout instead, which already correctly handles `is_admin_hold` clearing per the base spec's fix #2). No change needed, but noting the interaction explicitly since it wasn't obvious without tracing it.

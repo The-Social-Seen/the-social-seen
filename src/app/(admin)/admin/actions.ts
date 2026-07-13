@@ -14,7 +14,11 @@ import {
 } from '@/lib/email/templates/event-cancelled'
 import { isRedacted } from '@/lib/notifications/redaction'
 import { getStripeClient } from '@/lib/stripe/server'
-import { createAdminBookingHold } from '@/lib/bookings/admin-hold'
+import {
+  createAdminBookingHold,
+  createAdminPaymentRemediationHold,
+  releaseAdminBookingHold,
+} from '@/lib/bookings/admin-hold'
 import * as Sentry from '@sentry/nextjs'
 import { z } from 'zod'
 import { PRIMARY_ELIGIBLE_TAG_SLUGS } from '@/lib/constants/tags'
@@ -1799,6 +1803,150 @@ export async function promoteFromWaitlist(bookingId: string) {
   return {
     success: true,
     promotedName: profile?.full_name ?? 'Member',
+  }
+}
+
+/**
+ * Gap A remediation (SYSTEM-DESIGN-admin-waitlist-promotion-payment.md,
+ * "Addendum (2026-07-13, same day)" §A.6): sends a real Stripe payment
+ * link to a member whose booking is `status='confirmed'` on a PAID event
+ * but was never actually charged (`stripe_payment_id IS NULL`) — the
+ * exact bug `promoteFromWaitlist` above fixes going forward, except it
+ * already happened to two production bookings (Amy Sangam, Yasemin Salp)
+ * BEFORE that fix existed. `promoteFromWaitlist` / `admin_promote_
+ * waitlist_to_hold` can't touch them — that RPC hard-rejects anything not
+ * `status='waitlisted'`.
+ *
+ * Holds the booking as `pending_payment` via
+ * `createAdminPaymentRemediationHold` (→ `admin_hold_confirmed_booking_
+ * for_payment`, which deliberately skips the capacity check — Addendum
+ * §A.1 — the booking already occupies its seat today as 'confirmed', so
+ * this isn't a new admission) and emails a template that does NOT
+ * mention the waitlist (they were never on it this cycle — Addendum
+ * §A.5).
+ *
+ * Pre-validates status/stripe_payment_id/event.price in TS BEFORE ever
+ * calling the RPC — belt-and-braces, matching this family's established
+ * habit of the Server Action pre-checking what the RPC will re-validate
+ * anyway under lock (see promoteFromWaitlist's own pre-fetch-and-branch
+ * above, and admin_promote_waitlist_to_hold's independent re-validation
+ * of everything promoteFromWaitlist already checked).
+ *
+ * `holdExpiresAt` hardcoded to `null` — same deferred-cron tradeoff as
+ * promoteFromWaitlist above (the revert-cron that would act on a
+ * non-null deadline, migration 20260713000003, still doesn't exist and
+ * isn't being built now). See Addendum §A.3.
+ */
+export async function sendPaymentLinkForConfirmedBooking(bookingId: string) {
+  const { supabase } = await requireAdmin()
+
+  if (!bookingId) return { error: 'Booking ID is required' }
+
+  const { data: booking, error: bookingError } = await supabase
+    .from('bookings')
+    .select('id, event_id, user_id, status, stripe_payment_id')
+    .eq('id', bookingId)
+    .is('deleted_at', null)
+    .single()
+
+  if (bookingError || !booking) return { error: 'Booking not found' }
+  if (booking.status !== 'confirmed') {
+    return { error: 'Only confirmed bookings can be sent a payment link' }
+  }
+  if (booking.stripe_payment_id) {
+    return { error: 'This booking has already been paid' }
+  }
+
+  const { data: event } = await supabase
+    .from('events')
+    .select('id, slug, price')
+    .eq('id', booking.event_id)
+    .single()
+
+  if (!event) return { error: 'Event not found' }
+  if (event.price === 0) {
+    return { error: 'This is a free event — nothing to remediate' }
+  }
+
+  // holdExpiresAt hardcoded null — same deferred-cron tradeoff as
+  // promoteFromWaitlist. See Addendum §A.3.
+  const result = await createAdminPaymentRemediationHold(supabase, bookingId, {
+    holdExpiresAt: null,
+  })
+
+  if (!result.success) return { error: result.error }
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('full_name')
+    .eq('id', booking.user_id)
+    .single()
+
+  revalidatePath('/admin/events')
+  revalidatePath(`/admin/events/${event.id}/bookings`)
+  revalidatePath(`/events/${event.slug}`)
+  revalidatePath('/bookings')
+
+  return {
+    success: true,
+    memberName: profile?.full_name ?? 'Member',
+    status: 'pending_payment' as const,
+    holdExpiresAt: result.holdExpiresAt ?? null,
+  }
+}
+
+/**
+ * Gap B (SYSTEM-DESIGN-admin-waitlist-promotion-payment.md addendum
+ * §B.5): manually release an active `pending_payment` admin hold back to
+ * `waitlisted` if the member doesn't pay. Stand-in for the still-
+ * deferred, still-not-being-built 4h auto-revert cron
+ * (`revert_expired_admin_holds`, migration 20260713000003).
+ *
+ * Origin-agnostic — works identically whether the hold came from
+ * `promoteFromWaitlist` (waitlist promotion) or
+ * `sendPaymentLinkForConfirmedBooking` above (payment remediation); see
+ * `releaseAdminBookingHold` / `admin_revert_hold_to_waitlist` for why.
+ * Always reverts to `waitlisted`, never `confirmed` — reverting a
+ * remediated hold to an unpaid `confirmed` would silently recreate the
+ * exact incident this whole feature exists to fix (Addendum §B.1).
+ *
+ * Pre-fetches booking (event_id, user_id) for the revalidatePath targets
+ * and the success message only — the RPC re-validates everything that
+ * matters for correctness under lock (Addendum §B.3). This fetch is UX,
+ * not a security boundary.
+ */
+export async function demoteAdminHold(bookingId: string) {
+  const { supabase } = await requireAdmin()
+
+  if (!bookingId) return { error: 'Booking ID is required' }
+
+  const { data: booking, error: bookingError } = await supabase
+    .from('bookings')
+    .select('id, event_id, user_id')
+    .eq('id', bookingId)
+    .is('deleted_at', null)
+    .single()
+
+  if (bookingError || !booking) return { error: 'Booking not found' }
+
+  const result = await releaseAdminBookingHold(supabase, bookingId)
+  if (!result.success) return { error: result.error }
+
+  const [{ data: event }, { data: profile }] = await Promise.all([
+    supabase.from('events').select('slug').eq('id', booking.event_id).single(),
+    supabase.from('profiles').select('full_name').eq('id', booking.user_id).single(),
+  ])
+
+  revalidatePath('/admin/events')
+  revalidatePath(`/admin/events/${booking.event_id}/bookings`)
+  if (event?.slug) revalidatePath(`/events/${event.slug}`)
+  revalidatePath('/bookings')
+
+  return {
+    success: true,
+    memberName: profile?.full_name ?? 'Member',
+    status: 'waitlisted' as const,
+    waitlistPosition: result.waitlistPosition ?? null,
   }
 }
 
