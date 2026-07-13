@@ -31,6 +31,8 @@ import {
   toggleEventPublished,
   softDeleteEvent,
   promoteFromWaitlist,
+  sendPaymentLinkForConfirmedBooking,
+  demoteAdminHold,
   toggleReviewVisibility,
   sendNotification,
   getDashboardStats,
@@ -145,6 +147,8 @@ describe('Admin auth guards', () => {
     { name: 'createEvent', fn: () => createEvent(makeEventFormData()) },
     { name: 'updateEvent', fn: () => updateEvent('evt-1', makeEventFormData()) },
     { name: 'promoteFromWaitlist', fn: () => promoteFromWaitlist('bk-1') },
+    { name: 'sendPaymentLinkForConfirmedBooking', fn: () => sendPaymentLinkForConfirmedBooking('bk-1') },
+    { name: 'demoteAdminHold', fn: () => demoteAdminHold('bk-1') },
     { name: 'toggleReviewVisibility', fn: () => toggleReviewVisibility('rev-1') },
     { name: 'sendNotification', fn: () => {
       const fd = new FormData()

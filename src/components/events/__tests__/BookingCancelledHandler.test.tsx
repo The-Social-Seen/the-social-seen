@@ -102,6 +102,30 @@ describe('BookingCancelledHandler', () => {
     )
   })
 
+  it("INVARIANT: ?from=admin_remediation -> forwards {from: 'admin_remediation'} verbatim, NOT collapsed to 'book' or 'admin_hold'", async () => {
+    // Regression guard for the actual mid-implementation bug (see
+    // abandon-pending-checkout.test.ts): if this ever collapsed to
+    // 'admin_hold', the server action would wrongly restore this member
+    // to 'waitlisted' instead of 'confirmed' -- telling a member who has
+    // held a real seat all cycle that they need to wait for one.
+    setUrl('?cancelled=1&from=admin_remediation')
+    render(<BookingCancelledHandler eventId="evt-1" />)
+
+    await waitFor(() => expect(mockAbandon).toHaveBeenCalledTimes(1))
+    expect(mockAbandon).toHaveBeenCalledWith('evt-1', { from: 'admin_remediation' })
+  })
+
+  it("shows the 'spot is still confirmed' toast copy for from=admin_remediation specifically (distinct from the waitlist-preserved copy)", async () => {
+    setUrl('?cancelled=1&from=admin_remediation')
+    render(<BookingCancelledHandler eventId="evt-1" />)
+
+    await waitFor(() => {
+      const text = screen.getByRole('status').textContent ?? ''
+      expect(text).toMatch(/spot is still confirmed/i)
+      expect(text).not.toMatch(/still on the waitlist/i)
+    })
+  })
+
   it('shows the generic "payment cancelled" toast copy for the default book flow', async () => {
     setUrl('?cancelled=1')
     render(<BookingCancelledHandler eventId="evt-1" />)

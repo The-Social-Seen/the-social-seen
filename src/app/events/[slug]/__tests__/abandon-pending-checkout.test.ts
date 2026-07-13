@@ -4,8 +4,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * Coverage for `abandonPendingCheckout` (src/app/events/[slug]/actions.ts).
  * This function previously had ZERO test coverage in the repo — this file
  * covers both its pre-existing 'book'/'claim' behaviour (regression
- * safety net) and the new 'admin_hold' option added by
- * SYSTEM-DESIGN-admin-waitlist-promotion-payment.md §5 site #2.
+ * safety net), the 'admin_hold' option added by
+ * SYSTEM-DESIGN-admin-waitlist-promotion-payment.md §5 site #2, and the
+ * 'admin_remediation' option added by that same doc's same-day Addendum
+ * (§Addendum-D / fix #2 in the PR description) — THE actual bug that was
+ * found and fixed mid-implementation: a generic `from=admin_hold` would
+ * have wrongly sent a payment-remediation abandon to `waitlisted` instead
+ * of back to `confirmed`, silently recreating the exact
+ * confirmed-without-payment incident this whole feature exists to fix.
  */
 
 const mockGetUser = vi.fn()
@@ -153,6 +159,59 @@ describe('abandonPendingCheckout — rollback status per `from` value', () => {
       expect.objectContaining({ status: 'cancelled' }),
     )
   })
+
+  it("INVARIANT: from: 'admin_remediation' -> rolls back to 'confirmed' (NOT 'waitlisted', NOT 'cancelled') AND clears both hold columns", async () => {
+    // THE bug that got fixed mid-implementation (task brief: "a generic
+    // from=admin_hold would have wrongly sent a payment-remediation
+    // abandon to waitlisted instead of back to confirmed"). This member's
+    // booking was CONFIRMED (unpaid) this whole cycle via an admin
+    // payment-remediation hold — they were never on the waitlist. If they
+    // click "<- Back" out of Stripe, rolling back to 'waitlisted' here
+    // would silently recreate a DIFFERENT bad state (a real member with a
+    // real seat, incorrectly told they need to wait for one), and rolling
+    // back to 'cancelled' would take away a seat they are legitimately
+    // entitled to. 'confirmed' (unpaid, exactly where they started) is
+    // the only honest rollback.
+    authenticateUser('user-1')
+    const chain = mockUpdateChain({ data: null, error: null })
+
+    const result = await abandonPendingCheckout('evt-1', { from: 'admin_remediation' })
+
+    expect(result.success).toBe(true)
+    expect(chain.update).toHaveBeenCalledWith({
+      status: 'confirmed',
+      is_admin_hold: false,
+      admin_hold_expires_at: null,
+    })
+  })
+
+  it("CROSS-CHECK: all four 'from' values map to genuinely distinct rollback statuses where the spec says so (book/cancelled, claim/waitlisted, admin_hold/waitlisted, admin_remediation/confirmed)", async () => {
+    // Guards against the specific regression this test file exists to
+    // catch: a copy-paste that leaves 'admin_hold' and 'admin_remediation'
+    // sharing the same rollback status (they must NOT — see the INVARIANT
+    // test above), while 'claim' and 'admin_hold' correctly DO share
+    // 'waitlisted' (that part is intentional, per spec §5 site #2).
+    authenticateUser('user-1')
+
+    async function rollbackStatusFor(from?: 'book' | 'claim' | 'admin_hold' | 'admin_remediation') {
+      const chain = mockUpdateChain({ data: null, error: null })
+      await abandonPendingCheckout('evt-1', from ? { from } : undefined)
+      const payload = (chain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
+        status: string
+      }
+      return payload.status
+    }
+
+    expect(await rollbackStatusFor('book')).toBe('cancelled')
+    expect(await rollbackStatusFor('claim')).toBe('waitlisted')
+    expect(await rollbackStatusFor('admin_hold')).toBe('waitlisted')
+    expect(await rollbackStatusFor('admin_remediation')).toBe('confirmed')
+
+    // The one pair that must NEVER match — this is the exact bug shape.
+    const claimStatus = await rollbackStatusFor('claim')
+    const remediationStatus = await rollbackStatusFor('admin_remediation')
+    expect(remediationStatus).not.toBe(claimStatus)
+  })
 })
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -180,6 +239,20 @@ describe('abandonPendingCheckout — is_admin_hold / admin_hold_expires_at are A
     const chain = mockUpdateChain({ data: null, error: null })
 
     await abandonPendingCheckout('evt-1', { from: 'claim' })
+
+    const payload = (chain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<
+      string,
+      unknown
+    >
+    expect(payload.is_admin_hold).toBe(false)
+    expect(payload.admin_hold_expires_at).toBeNull()
+  })
+
+  it("clears both columns on the 'admin_remediation' path too (required — the row would otherwise violate chk_bookings_admin_hold_requires_pending_payment the instant status leaves pending_payment)", async () => {
+    authenticateUser('user-1')
+    const chain = mockUpdateChain({ data: null, error: null })
+
+    await abandonPendingCheckout('evt-1', { from: 'admin_remediation' })
 
     const payload = (chain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<
       string,
