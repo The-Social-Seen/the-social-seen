@@ -347,6 +347,15 @@ export interface AdminEventBooking {
   refunded_amount_pence: number | null
   cancelled_at:          string | null
   cancellation_reason:   string | null
+  // Admin waitlist-promotion payment-hold mechanism (migration
+  // 20260713000001). True while this row is a pending_payment seat hold
+  // created by promoteFromWaitlist / admin_promote_waitlist_to_hold, as
+  // opposed to a normal self-service checkout. See
+  // SYSTEM-DESIGN-admin-waitlist-promotion-payment.md §2.5 — surfacing
+  // this in the admin bookings UI is a separate frontend/UX task, not
+  // done here.
+  is_admin_hold:         boolean
+  admin_hold_expires_at: string | null
   profile: Pick<
     Profile,
     'id' | 'full_name' | 'email' | 'avatar_url' | 'phone_number'

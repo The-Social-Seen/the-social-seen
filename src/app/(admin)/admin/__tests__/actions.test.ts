@@ -31,6 +31,8 @@ import {
   toggleEventPublished,
   softDeleteEvent,
   promoteFromWaitlist,
+  sendPaymentLinkForConfirmedBooking,
+  demoteAdminHold,
   toggleReviewVisibility,
   sendNotification,
   getDashboardStats,
@@ -145,6 +147,8 @@ describe('Admin auth guards', () => {
     { name: 'createEvent', fn: () => createEvent(makeEventFormData()) },
     { name: 'updateEvent', fn: () => updateEvent('evt-1', makeEventFormData()) },
     { name: 'promoteFromWaitlist', fn: () => promoteFromWaitlist('bk-1') },
+    { name: 'sendPaymentLinkForConfirmedBooking', fn: () => sendPaymentLinkForConfirmedBooking('bk-1') },
+    { name: 'demoteAdminHold', fn: () => demoteAdminHold('bk-1') },
     { name: 'toggleReviewVisibility', fn: () => toggleReviewVisibility('rev-1') },
     { name: 'sendNotification', fn: () => {
       const fd = new FormData()
@@ -588,8 +592,13 @@ describe('promoteFromWaitlist', () => {
     mockAdminWithSequence([
       // fetch booking
       { data: { id: 'bk-1', event_id: 'evt-1', user_id: 'u-1', status: 'waitlisted' } },
-      // fetch event
-      { data: { id: 'evt-1', slug: 'test-event', capacity: 20 } },
+      // fetch event — price: 0 routes this into the FREE branch. Without
+      // this field the branch defaults to the new paid path (price
+      // undefined !== 0) and hits the real createAdminBookingHold /
+      // createAdminClient(), which is what this test does NOT want to
+      // exercise (see actions-promote-waitlist-paid.test.ts for paid-path
+      // coverage).
+      { data: { id: 'evt-1', slug: 'test-event', capacity: 20, price: 0 } },
       // count confirmed
       { count: 15 },
       // update booking
@@ -618,7 +627,11 @@ describe('promoteFromWaitlist', () => {
   it('rejects promote when event is at full capacity', async () => {
     mockAdminWithSequence([
       { data: { id: 'bk-1', event_id: 'evt-1', user_id: 'u-1', status: 'waitlisted' } },
-      { data: { id: 'evt-1', slug: 'test-event', capacity: 20 } },
+      // price: 0 — free branch (see comment in the test above). The
+      // capacity-at-full test for the PAID branch's RPC-internal check
+      // lives in the migration static/skip tests (it's SQL-side, inside
+      // admin_promote_waitlist_to_hold, not TS-side for paid events).
+      { data: { id: 'evt-1', slug: 'test-event', capacity: 20, price: 0 } },
       { count: 20 },
     ])
 

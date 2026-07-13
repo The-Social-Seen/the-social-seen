@@ -6,6 +6,8 @@ import { Download, UserX, Undo2 } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { exportEventAttendeesCSV, setNoShow } from '@/app/(admin)/admin/actions'
 import PromoteButton from './PromoteButton'
+import SendPaymentLinkButton from './SendPaymentLinkButton'
+import DemoteHoldButton from './DemoteHoldButton'
 import MobilePhoneValue from '@/components/shared/MobilePhoneValue'
 
 // Filter tabs use a shorter "Waitlist" label below md: so all five fit
@@ -25,6 +27,12 @@ interface BookingRow {
   stripe_refund_id?: string | null
   refunded_amount_pence?: number | null
   cancelled_at?: string | null
+  // Admin waitlist-promotion / payment-remediation hold mechanism
+  // (SYSTEM-DESIGN-admin-waitlist-promotion-payment.md). Data already
+  // flows through from getEventBookings via AdminEventBooking; non-optional
+  // booleans, matching the DB column (NOT NULL DEFAULT false).
+  is_admin_hold: boolean
+  admin_hold_expires_at: string | null
   // phone_number is admin-only PII merged server-side via the
   // admin_get_user_phones() RPC (never part of the .select()); null when the
   // member set no phone or their profile was soft-deleted.
@@ -63,6 +71,13 @@ interface BookingsTableProps {
    * "Mark No-Show" toggle on confirmed attendee rows.
    */
   isPastEvent?: boolean
+  /**
+   * True when event.price > 0. Gates the "Send Payment Link" button, which
+   * only makes sense on a paid event — a free 'confirmed' booking has
+   * nothing to remediate (see admin_hold_confirmed_booking_for_payment's
+   * own free-event guard).
+   */
+  isPaidEvent?: boolean
 }
 
 // P2-8a: no_show is a new admin-visible status.
@@ -93,6 +108,7 @@ export default function BookingsTable({
   bookings,
   eventId,
   isPastEvent = false,
+  isPaidEvent = false,
 }: BookingsTableProps) {
   const [activeTab, setActiveTab] = useState<string>('all')
   const [isExporting, startExport] = useTransition()
@@ -170,6 +186,10 @@ export default function BookingsTable({
                   const profile = Array.isArray(booking.profile)
                     ? booking.profile[0]
                     : booking.profile
+                  const showSendPaymentLink =
+                    isPaidEvent && booking.status === 'confirmed' && !booking.stripe_payment_id
+                  const showDemote =
+                    booking.is_admin_hold === true && booking.status === 'pending_payment'
                   return (
                     <tr key={booking.id} className="hover:bg-bg-secondary/50 transition-colors">
                       <td className="py-3 pr-4 font-medium text-text-primary">
@@ -206,6 +226,12 @@ export default function BookingsTable({
                         {isPastEvent && booking.status === 'no_show' && (
                           <NoShowButton bookingId={booking.id} on={false} />
                         )}
+                        {showSendPaymentLink && (
+                          <SendPaymentLinkButton bookingId={booking.id} />
+                        )}
+                        {showDemote && (
+                          <DemoteHoldButton bookingId={booking.id} />
+                        )}
                       </td>
                     </tr>
                   )
@@ -223,7 +249,12 @@ export default function BookingsTable({
               const showPromote = booking.status === 'waitlisted'
               const showNoShow = isPastEvent && booking.status === 'confirmed'
               const showUndoNoShow = isPastEvent && booking.status === 'no_show'
-              const hasAction = showPromote || showNoShow || showUndoNoShow
+              const showSendPaymentLink =
+                isPaidEvent && booking.status === 'confirmed' && !booking.stripe_payment_id
+              const showDemote =
+                booking.is_admin_hold === true && booking.status === 'pending_payment'
+              const hasAction =
+                showPromote || showNoShow || showUndoNoShow || showSendPaymentLink || showDemote
               const payBadge = paymentBadge(booking)
               return (
                 <li key={booking.id}>
@@ -291,6 +322,12 @@ export default function BookingsTable({
                         )}
                         {showUndoNoShow && (
                           <NoShowButton bookingId={booking.id} on={false} fullWidth />
+                        )}
+                        {showSendPaymentLink && (
+                          <SendPaymentLinkButton bookingId={booking.id} fullWidth />
+                        )}
+                        {showDemote && (
+                          <DemoteHoldButton bookingId={booking.id} fullWidth />
                         )}
                       </div>
                     )}

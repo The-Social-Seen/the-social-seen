@@ -29,6 +29,8 @@ vi.mock('@/app/(admin)/admin/actions', () => ({
   exportEventAttendeesCSV: vi.fn(),
   setNoShow: vi.fn(),
   promoteFromWaitlist: vi.fn(),
+  sendPaymentLinkForConfirmedBooking: vi.fn(),
+  demoteAdminHold: vi.fn(),
   exportMembersCSV: vi.fn(),
   banMember: vi.fn(),
   reinstateMember: vi.fn(),
@@ -58,6 +60,10 @@ interface TestBooking {
   stripe_refund_id?: string | null
   refunded_amount_pence?: number | null
   cancelled_at?: string | null
+  // admin waitlist-promotion / payment-remediation hold mechanism —
+  // non-optional, matches the real BookingRow shape (DB: NOT NULL DEFAULT false).
+  is_admin_hold: boolean
+  admin_hold_expires_at: string | null
   profile: {
     id: string
     full_name: string
@@ -73,6 +79,8 @@ const booking = (overrides: Partial<TestBooking> = {}): TestBooking => ({
   waitlist_position: null,
   booked_at: '2026-04-10T12:00:00.000Z',
   created_at: '2026-04-10T12:00:00.000Z',
+  is_admin_hold: false,
+  admin_hold_expires_at: null,
   profile: {
     id: 'usr-1',
     full_name: 'Charlotte Davis',

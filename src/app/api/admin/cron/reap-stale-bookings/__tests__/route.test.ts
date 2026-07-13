@@ -5,9 +5,13 @@
  *   - 4 auth branches (x-vercel-cron, valid Bearer, invalid/missing,
  *     misconfigured CRON_SECRET).
  *   - Predicate-shape pin: every Supabase chain call (.eq, .is, .is,
- *     .lt, .select) is asserted in order with exact args. The cutoff
- *     timestamp is asserted as ~35 min before now (1-second skew
- *     allowed for test execution time).
+ *     .eq, .lt, .select) is asserted in order with exact args. The
+ *     cutoff timestamp is asserted as ~35 min before now (1-second skew
+ *     allowed for test execution time). The second .eq (is_admin_hold)
+ *     was added alongside migration 20260713000002's matching change to
+ *     reap_stale_pending_bookings() — this pin is what would have
+ *     caught the drift where this route fell out of sync with that SQL
+ *     function; see SYSTEM-DESIGN-admin-waitlist-promotion-payment.md.
  *   - Success response shape { reaped, ranAt } across 1-row, multi-row,
  *     and zero-row outcomes.
  *   - Sentry instrumentation: addBreadcrumb on success, captureException
@@ -170,7 +174,7 @@ describe('authentication', () => {
 // ── predicate shape and reaper behaviour ───────────────────────────────────
 
 describe('predicate shape and reaper behaviour', () => {
-  it('applies the four predicates in order and reaps the matching row', async () => {
+  it('applies the five predicates in order and reaps the matching row', async () => {
     mockSelect.mockResolvedValue({ data: [{ id: 'bk_A' }], error: null })
 
     const beforeCall = Date.now()
@@ -190,9 +194,15 @@ describe('predicate shape and reaper behaviour', () => {
     expect(typeof updatePayload.cancelled_at).toBe('string')
     expect(() => new Date(updatePayload.cancelled_at).toISOString()).not.toThrow()
 
-    // .eq('status', 'pending_payment')
-    expect(mockEq).toHaveBeenCalledTimes(1)
-    expect(mockEq).toHaveBeenCalledWith('status', 'pending_payment')
+    // .eq('status', 'pending_payment') THEN, after both .is() calls,
+    // .eq('is_admin_hold', false) — order matters because the chain is
+    // positional in the implementation. The second .eq is what excludes
+    // admin-created payment holds (SYSTEM-DESIGN-admin-waitlist-
+    // promotion-payment.md) from this 35-minute abandoned-checkout
+    // timeout — they get an admin-communicated window instead.
+    expect(mockEq).toHaveBeenCalledTimes(2)
+    expect(mockEq.mock.calls[0]).toEqual(['status', 'pending_payment'])
+    expect(mockEq.mock.calls[1]).toEqual(['is_admin_hold', false])
 
     // .is('stripe_payment_id', null) THEN .is('deleted_at', null) — order
     // matters because the chain is positional in the implementation.

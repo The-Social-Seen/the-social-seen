@@ -41,6 +41,21 @@ export interface CheckoutSessionInput {
   bookingFeePence: number
   successUrl: string
   cancelUrl: string
+  /**
+   * Override for the Checkout Session's Stripe-side `expires_at` window,
+   * in seconds from now. Optional — defaults to the existing 30-minute
+   * window when omitted, so the two pre-existing callers
+   * (createPaidCheckout, claimWaitlistSpot) are completely unaffected.
+   *
+   * The only caller that passes this explicitly is
+   * createAdminBookingHold (src/lib/bookings/admin-hold.ts) — an admin
+   * waitlist-promotion hold needs a MUCH longer window than a normal
+   * self-service checkout (up to Stripe's 24h ceiling), otherwise the
+   * Stripe-hosted link would go dead in 30 minutes regardless of any
+   * DB-side hold deadline. See
+   * SYSTEM-DESIGN-admin-waitlist-promotion-payment.md §3.3.
+   */
+  expiresInSeconds?: number
 }
 
 /**
@@ -212,10 +227,13 @@ export async function createBookingCheckoutSession(
     allow_promotion_codes: true,
     success_url: input.successUrl,
     cancel_url: input.cancelUrl,
-    // Auto-expire sessions after 30 min so abandoned pending_payment
-    // bookings don't hold seats indefinitely. The min Stripe allows is
-    // 30 min from creation.
-    expires_at: Math.floor(Date.now() / 1000) + 30 * 60,
+    // Auto-expire sessions after 30 min by default so abandoned
+    // pending_payment bookings don't hold seats indefinitely. The min
+    // Stripe allows is 30 min from creation. Callers that need a longer
+    // window (admin-created holds) pass `expiresInSeconds` explicitly —
+    // see the CheckoutSessionInput doc comment.
+    expires_at:
+      Math.floor(Date.now() / 1000) + (input.expiresInSeconds ?? 30 * 60),
   })
 
   if (!session.url) {

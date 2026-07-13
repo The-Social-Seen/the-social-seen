@@ -85,7 +85,39 @@ jobs:
 
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # Pinned, NOT "latest". This was "latest" until the
+          # 2026-07-13 incident: main had no CI runs for 5 weeks, and
+          # whatever the CLI resolved to on that gap silently started
+          # authenticating local dev's anon/service_role JWTs
+          # differently — Supabase has deprecated those in favour of a
+          # new publishable/secret key pair that a client library and
+          # the local Kong gateway must both understand to actually
+          # authenticate a request (it is not a drop-in JWT any more —
+          # see supabase.com/docs/guides/getting-started/api-keys:
+          # "It is no longer possible to use a publishable or secret
+          # key inside the Authorization header"). Whether this
+          # project's pinned @supabase/supabase-js (2.101.1) and this
+          # CLI's local Kong config fully support that new flow yet is
+          # unverified — three live-CI attempts (this environment has
+          # no Docker to test against directly) got the RIGHT key
+          # VALUES extracted via `supabase status -o json` (see "Export
+          # live Supabase keys" below) but every RLS-gated table/view
+          # still returned "permission denied", pointing at the
+          # gateway/client layer rather than which key string is used.
+          # 2.105.0 (2026-06-04) is the newest stable release before
+          # the last confirmed-green run on main (2026-06-08) — the
+          # version this workflow was actually passing against.
+          # Pinning restores that known-good behaviour instead of
+          # continuing to chase an evolving, only-partly-documented
+          # migration blind. The "Export live Supabase keys" step
+          # keeps its field-name fallback (preferring
+          # PUBLISHABLE_KEY/SECRET_KEY, falling back to
+          # ANON_KEY/SERVICE_ROLE_KEY) rather than being reverted, so
+          # bumping this pin forward later — once the new key flow is
+          # confirmed working end-to-end, ideally with a Docker-capable
+          # environment to iterate against directly — is a one-line
+          # change, not another round of rediscovering all of this.
+          version: "2.105.0"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -93,24 +125,95 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Build (for `pnpm start` webServer)
-        # UI specs run against `pnpm start` — dev-mode hydration is
-        # too slow under CI load and framer-motion's opacity:0 initial
-        # state trips Playwright's visibility check. Prod build
-        # hydrates in ~100ms and matches what real users see.
-        run: pnpm build
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
-          SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
-
       - name: Start local Supabase stack
         # Inbucket included for the UI auth spec; edge-runtime
         # included for the daily-notifications spec (CL-9). Studio /
         # realtime / imgproxy stay excluded — none of them are needed
         # by the test suite and dropping them shaves ~30s of Docker
-        # boot.
+        # boot. Moved ahead of the Build step below (2026-07-13) so
+        # the live Supabase keys exist before Next.js bakes
+        # NEXT_PUBLIC_* vars into the build — see "Export live
+        # Supabase keys" immediately after.
         run: supabase start --exclude studio,realtime,imgproxy
+
+      - name: Export live Supabase keys
+        # DO NOT hardcode these. supabase start's local API URL is
+        # stable, but the anon/service_role key FORMAT is not —
+        # Supabase has deprecated the legacy anon/service_role JWTs in
+        # favour of a new publishable/secret key pair, and
+        # `supabase/setup-cli@v1` with `version: latest` (above) means
+        # this workflow tracks whatever CLI version is current at RUN
+        # time, not whenever this file was last edited.
+        #
+        # CI on 2026-07-13 hit this twice in a row:
+        #   1st failure — the previously-hardcoded legacy-JWT constants
+        #     no longer matched what the freshly-started local stack
+        #     issued at all; every RLS-gated table/view returned
+        #     "permission denied" from the first seed call.
+        #   2nd failure (after adding live extraction below, but
+        #     preferring ANON_KEY/SERVICE_ROLE_KEY over PUBLISHABLE_KEY/
+        #     SECRET_KEY in the jq fallback) — SAME failure, because
+        #     ANON_KEY/SERVICE_ROLE_KEY are still PRESENT in `status -o
+        #     json` output but no longer valid credentials; extraction
+        #     "succeeded" (non-empty) while quietly picking the dead
+        #     field. Confirmed directly by a Supabase maintainer
+        #     (github.com/supabase/cli/issues/4211#issuecomment,
+        #     sweatybridge): "please use the publishable and secret
+        #     keys in place of deprecated anon and service role keys.
+        #     It's a drop in replacement." Fallback order below now
+        #     prefers PUBLISHABLE_KEY/SECRET_KEY, falling back to
+        #     ANON_KEY/SERVICE_ROLE_KEY only for a CLI old enough to
+        #     predate the new key pair entirely.
+        #
+        # Values are registered with add-mask before anything is
+        # echoed, so the diagnostic dump on failure (or the debug
+        # summary below) can print the JSON structure without leaking
+        # the actual key material into the log — these are ephemeral,
+        # local-only credentials with no power outside this container,
+        # but there is no reason to print them in the clear anyway.
+        run: |
+          STATUS_JSON="$(supabase status -o json)"
+          API_URL="$(echo "$STATUS_JSON" | jq -r '.API_URL // empty')"
+          ANON_KEY="$(echo "$STATUS_JSON" | jq -r '.PUBLISHABLE_KEY // .ANON_KEY // empty')"
+          SERVICE_ROLE_KEY="$(echo "$STATUS_JSON" | jq -r '.SECRET_KEY // .SERVICE_ROLE_KEY // empty')"
+
+          [ -n "$ANON_KEY" ] && echo "::add-mask::$ANON_KEY"
+          [ -n "$SERVICE_ROLE_KEY" ] && echo "::add-mask::$SERVICE_ROLE_KEY"
+
+          echo "Resolved Supabase status fields present: $(echo "$STATUS_JSON" | jq -r 'keys | join(", ")')"
+
+          if [ -z "$API_URL" ] || [ -z "$ANON_KEY" ] || [ -z "$SERVICE_ROLE_KEY" ]; then
+            echo "::error::Could not extract API_URL/ANON_KEY/SERVICE_ROLE_KEY from 'supabase status -o json'. The CLI's output field names may have changed again — inspect the raw JSON below (key values are masked) and update the jq fallback fields in this step (.github/workflows/ci.yml)."
+            echo "$STATUS_JSON"
+            exit 1
+          fi
+
+          echo "NEXT_PUBLIC_SUPABASE_URL=$API_URL" >> "$GITHUB_ENV"
+          echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY" >> "$GITHUB_ENV"
+          echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY" >> "$GITHUB_ENV"
+          # e2e/helpers/supabase.ts reads these SUPABASE_E2E_*-prefixed
+          # names, not the two above — they are a separate variable
+          # namespace for the test harness itself (vs. the app's own
+          # runtime config). Leaving these unset was the actual,
+          # direct cause of the 2026-07-13 incident: every seed helper
+          # silently fell back to that file's own hardcoded legacy-JWT
+          # constant regardless of what the app-facing vars above were
+          # set to. Both must be exported for the suite to use live
+          # keys end to end.
+          echo "SUPABASE_E2E_ANON_KEY=$ANON_KEY" >> "$GITHUB_ENV"
+          echo "SUPABASE_E2E_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY" >> "$GITHUB_ENV"
+
+      - name: Build (for `pnpm start` webServer)
+        # UI specs run against `pnpm start` — dev-mode hydration is
+        # too slow under CI load and framer-motion's opacity:0 initial
+        # state trips Playwright's visibility check. Prod build
+        # hydrates in ~100ms and matches what real users see.
+        #
+        # NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY come
+        # from $GITHUB_ENV (see "Export live Supabase keys" above) —
+        # Next.js inlines NEXT_PUBLIC_* vars at build time, which is
+        # why the Supabase stack must already be running by this step.
+        run: pnpm build
 
       - name: Serve daily-notifications edge function
         # Background process: Playwright's spec polls
@@ -126,16 +229,13 @@ jobs:
       - name: Run E2E suite
         run: pnpm e2e
         env:
-          # `supabase start` prints the local URL + keys; the E2E
-          # helpers fall back to the well-known local-dev defaults so
-          # we don't have to capture them here.
+          # Fixed local dev ports — not part of the key-format problem
+          # above, safe to hardcode. NEXT_PUBLIC_SUPABASE_URL /
+          # NEXT_PUBLIC_SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY
+          # come from $GITHUB_ENV instead (see "Export live Supabase
+          # keys" above).
           SUPABASE_E2E_URL: http://127.0.0.1:54321
           INBUCKET_URL: http://127.0.0.1:54324
-          # Public envs for the web server Playwright auto-boots.
-          # In CI the webServer runs `pnpm start` (prod build).
-          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
-          SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
 
       - name: Stop Supabase (best-effort)
         if: always()
