@@ -192,6 +192,18 @@ interface AdminHoldOriginConfig {
    *  assertion on `tags: { surface: 'createAdminBookingHold' }`) is
    *  preserved byte-for-byte after this refactor. */
   logLabel: 'createAdminBookingHold' | 'createAdminPaymentRemediationHold'
+  /** The `from` value on the Stripe cancel_url (step 8 below), so
+   *  abandonPendingCheckout (events/[slug]/actions.ts) can tell the two
+   *  origins apart if the member clicks "← Back" mid-checkout and roll
+   *  back to the correct status. Must stay in lockstep with
+   *  `rollbackStatus` above — waitlist_promotion's Stripe-side "← Back"
+   *  and its own Stripe-*failure* rollback both land on 'waitlisted';
+   *  payment_remediation's both land on 'confirmed'. Restoring a
+   *  payment_remediation hold to 'waitlisted' on "← Back" would silently
+   *  recreate the original confirmed-without-payment bug in a different
+   *  shape (this booking was never waitlisted this cycle) — this field
+   *  is what closes that gap. */
+  cancelUrlFrom: 'admin_hold' | 'admin_remediation'
 }
 
 const ADMIN_HOLD_ORIGINS: Record<AdminHoldOrigin, AdminHoldOriginConfig> = {
@@ -202,6 +214,7 @@ const ADMIN_HOLD_ORIGINS: Record<AdminHoldOrigin, AdminHoldOriginConfig> = {
     notificationType: 'waitlist',
     renderEmail: waitlistPromotionTemplate,
     logLabel: 'createAdminBookingHold',
+    cancelUrlFrom: 'admin_hold', // unchanged value from before this fix
   },
   payment_remediation: {
     rpcName: 'admin_hold_confirmed_booking_for_payment',
@@ -215,6 +228,7 @@ const ADMIN_HOLD_ORIGINS: Record<AdminHoldOrigin, AdminHoldOriginConfig> = {
     notificationType: 'reminder',
     renderEmail: confirmedUnpaidPaymentLinkTemplate,
     logLabel: 'createAdminPaymentRemediationHold',
+    cancelUrlFrom: 'admin_remediation',
   },
 }
 
@@ -352,21 +366,19 @@ async function runAdminHoldFlow(
       fullName: profile.full_name,
     })
 
-    // 8. Checkout Session. cancel_url carries &from=admin_hold so
-    // abandonPendingCheckout (events/[slug]/actions.ts) restores the
-    // booking to `waitlisted` — not `cancelled` — if the member clicks
-    // "← Back" out of Stripe. Identical for BOTH origins (Addendum §A.4
-    // "Steps 6-8 IDENTICAL") — see this function's own module comment;
-    // this is a known, named gap for the payment_remediation origin
-    // specifically, flagged in the handover, not resolved here (fixing
-    // it would mean touching abandonPendingCheckout, which is out of
-    // scope for this pass and not listed in the addendum's own changed-
-    // files summary). expiresInSeconds is derived from the DB-side
+    // 8. Checkout Session. cancel_url carries &from=<config.cancelUrlFrom>
+    // so abandonPendingCheckout (events/[slug]/actions.ts) can tell the
+    // two origins apart and restore the booking to the CORRECT prior
+    // status if the member clicks "← Back" out of Stripe —
+    // waitlist_promotion restores to `waitlisted`, payment_remediation
+    // restores to `confirmed` (never `waitlisted`; these bookings were
+    // never on the waitlist this cycle — see cancelUrlFrom's own doc
+    // comment above). expiresInSeconds is derived from the DB-side
     // deadline so the Stripe-side cutoff always lands 5 minutes before
     // the revert-cron would ever consider reverting the row (§3.3, §6.4).
     const siteOrigin = await resolveSiteOrigin()
     const successUrl = `${siteOrigin}/events/${event.slug}/booking-success?session_id={CHECKOUT_SESSION_ID}`
-    const cancelUrl = `${siteOrigin}/events/${event.slug}?cancelled=1&from=admin_hold`
+    const cancelUrl = `${siteOrigin}/events/${event.slug}?cancelled=1&from=${config.cancelUrlFrom}`
     const expiresInSeconds = computeStripeExpirySeconds(options.holdExpiresAt)
 
     const { sessionId, url } = await createBookingCheckoutSession({

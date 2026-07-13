@@ -25,24 +25,32 @@ export default function BookingCancelledHandler({ eventId }: Props) {
   const sp = useSearchParams()
   const [showToast, setShowToast] = useState(false)
 
-  const [fromClaim, setFromClaim] = useState(false)
+  const [fromValue, setFromValue] = useState<
+    'book' | 'claim' | 'admin_hold' | 'admin_remediation'
+  >('book')
 
   useEffect(() => {
     if (sp.get('cancelled') !== '1') return
 
-    // If the user reached Stripe via a waitlist-claim or admin-promotion
-    // hold (Stripe redirects back with ?cancelled=1&from=claim|admin_hold
-    // on abandon), we want to restore them to `waitlisted` rather than
-    // `cancelled` so they keep their queue position.
+    // Stripe redirects back with ?cancelled=1&from=<value> on abandon.
+    // 'claim'/'admin_hold' (waitlist claim or admin waitlist-promotion
+    // hold) restore to `waitlisted` server-side, so they keep their queue
+    // position. 'admin_remediation' (admin payment-remediation hold —
+    // SYSTEM-DESIGN-admin-waitlist-promotion-payment.md Addendum §A)
+    // restores to `confirmed` instead — that member had a confirmed seat
+    // this whole cycle and was never on the waitlist.
     const fromParam = sp.get('from')
-    const from: 'book' | 'claim' | 'admin_hold' =
-      fromParam === 'claim' || fromParam === 'admin_hold' ? fromParam : 'book'
-    const isFromClaim = from === 'claim' || from === 'admin_hold'
+    const from: 'book' | 'claim' | 'admin_hold' | 'admin_remediation' =
+      fromParam === 'claim' ||
+      fromParam === 'admin_hold' ||
+      fromParam === 'admin_remediation'
+        ? fromParam
+        : 'book'
     // The lint rule flags setState inside useEffect to discourage render
     // loops, but this is a one-shot mount-time read of a URL param — the
     // setter runs at most once per page load and has no dependency cycle.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setFromClaim(isFromClaim)
+    setFromValue(from)
 
     let cancelled = false
     void (async () => {
@@ -81,9 +89,11 @@ export default function BookingCancelledHandler({ eventId }: Props) {
       role="status"
       className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full border border-blush/60 bg-bg-card px-5 py-3 text-sm text-text-primary shadow-lg"
     >
-      {fromClaim
+      {fromValue === 'claim' || fromValue === 'admin_hold'
         ? 'No charge made — you\u2019re still on the waitlist.'
-        : 'Payment cancelled — no charge made. You can book again whenever you\u2019re ready.'}
+        : fromValue === 'admin_remediation'
+          ? 'No charge made — your spot is still confirmed. We\u2019ll follow up about payment.'
+          : 'Payment cancelled — no charge made. You can book again whenever you\u2019re ready.'}
     </div>
   )
 }
