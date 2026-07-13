@@ -29,14 +29,24 @@ vi.mock('@/app/(admin)/admin/actions', () => ({
 import EventsTable from '../EventsTable'
 import type { EventWithStats } from '@/types'
 
+// Relative to Date.now(), not a hardcoded future date — a fixed date
+// eventually becomes "the past" as real time passes it, which silently
+// flips this event's status badge from "Published" to "Past" and broke
+// this suite once already. See EventsTable.tsx's own date_time < now()
+// check; matches the Date.now()-relative pattern already used in
+// src/app/events/[slug]/__tests__/actions.test.ts and
+// cancel-booking-races.test.ts for the same reason.
+const FUTURE_EVENT_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+const FUTURE_EVENT_END = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000 + 3 * 60 * 60 * 1000).toISOString()
+
 const baseEvent = (overrides: Partial<EventWithStats> = {}): EventWithStats => ({
   id: 'evt-1',
   slug: 'wine-and-wisdom',
   title: 'Wine & Wisdom at Borough Market',
   description: 'Long description here',
   short_description: 'A curated wine night',
-  date_time: '2026-06-15T19:00:00.000Z',
-  end_time: '2026-06-15T22:00:00.000Z',
+  date_time: FUTURE_EVENT_DATE,
+  end_time: FUTURE_EVENT_END,
   venue_name: 'Borough Wines',
   venue_address: '1 Bank End, London',
   venue_revealed: true,
