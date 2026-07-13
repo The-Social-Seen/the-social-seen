@@ -38,11 +38,23 @@
  * is deliberately NOT alarmed — that branch is dominated by probe
  * traffic and would just be noise.
  *
- * SAFETY — the inline `UPDATE` below uses the same four predicates as
+ * SAFETY — the inline `UPDATE` below uses the same five predicates as
  * `public.reap_stale_pending_bookings()`:
  *   - status = 'pending_payment'
  *   - stripe_payment_id IS NULL  (webhook is source of truth for paid)
  *   - deleted_at IS NULL          (skip soft-deleted rows)
+ *   - is_admin_hold = false       (admin-created holds get an
+ *     admin-communicated payment window, not the standard 35-minute
+ *     abandoned-checkout timeout — see
+ *     SYSTEM-DESIGN-admin-waitlist-promotion-payment.md §2/§8.1. Without
+ *     this predicate, this route's UPDATE matches an outstanding admin
+ *     hold row too, and Postgres aborts the ENTIRE statement — reaping
+ *     zero rows, including unrelated legitimate ones — the instant it
+ *     tries to write is_admin_hold's implied unchanged `true` alongside
+ *     status='cancelled', which violates
+ *     chk_bookings_admin_hold_requires_pending_payment. This predicate
+ *     was added to the SQL function by migration `20260713000002` but
+ *     originally missed here — restored so the two paths match again.)
  *   - created_at < now() - 35 minutes
  * If you change ONE, change BOTH — two paths to the same effect must
  * stay in sync. The route test at `__tests__/route.test.ts` pins the
@@ -108,6 +120,7 @@ export async function GET(req: NextRequest): Promise<Response> {
       .eq('status', 'pending_payment')
       .is('stripe_payment_id', null)
       .is('deleted_at', null)
+      .eq('is_admin_hold', false)
       .lt('created_at', cutoff)
       .select('id')
 

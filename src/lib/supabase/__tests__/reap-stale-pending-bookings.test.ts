@@ -20,11 +20,15 @@
 // Layer 2 — Vercel-route ↔ SQL-function predicate-shape cross-check.
 // The reaper now has two implementations of the same WHERE clause: the
 // inline Supabase chain in route.ts (`.eq('status', 'pending_payment')
-// .is('stripe_payment_id', null).is('deleted_at', null).lt('created_at',
-// cutoff)`) and the SQL function's `WHERE … AND … AND … AND` block. If
-// one drifts, we have two paths to the same effect that no longer agree.
-// Layer 2 runs static-text checks against both files to keep them
-// aligned.
+// .is('stripe_payment_id', null).is('deleted_at', null)
+// .eq('is_admin_hold', false).lt('created_at', cutoff)`) and the SQL
+// function's `WHERE … AND … AND … AND … AND` block. If one drifts, we
+// have two paths to the same effect that no longer agree. Layer 2 runs
+// static-text checks against both files to keep them aligned —
+// crucially against the function's CURRENT body (the latest CREATE OR
+// REPLACE, migration 20260713000002), not the original migration that
+// first created it, or a later predicate added there would drift
+// unnoticed exactly as the is_admin_hold predicate briefly did.
 //
 // Layer 3 — Skipped DB-integration cases. Per the established repo
 // convention (search the dir for `TODO(W4-docker)`): each critical
@@ -55,6 +59,23 @@ import { resolve } from 'node:path'
 const MIGRATIONS_DIR = resolve(__dirname, '../../../../supabase/migrations')
 const MIGRATION_FILENAME = '20260515095343_reaper_pgcron_schedule.sql'
 const MIGRATION_PATH = resolve(MIGRATIONS_DIR, MIGRATION_FILENAME)
+// Layer 2 specifically must compare the route against the CURRENT/LIVE
+// body of reap_stale_pending_bookings() — not the original migration
+// above, which is immutable history and no longer what's actually
+// running. Migration 20260713000002 (SYSTEM-DESIGN-admin-waitlist-
+// promotion-payment.md) re-declared the function via CREATE OR REPLACE
+// to add the `is_admin_hold = false` predicate. Comparing against the
+// original file here would let the route and the SQL function drift
+// apart while this exact cross-check kept passing — which is precisely
+// what happened before this file was updated: the route was missing
+// the fifth predicate and this test suite didn't notice, because it
+// was checking route.ts against stale SQL text.
+const CURRENT_REAPER_FN_MIGRATION_FILENAME =
+  '20260713000002_admin_promote_waitlist_to_hold_rpc.sql'
+const CURRENT_REAPER_FN_MIGRATION_PATH = resolve(
+  MIGRATIONS_DIR,
+  CURRENT_REAPER_FN_MIGRATION_FILENAME,
+)
 const ROUTE_PATH = resolve(
   __dirname,
   '../../../../src/app/api/admin/cron/reap-stale-bookings/route.ts',
@@ -363,8 +384,14 @@ describe('reaper — Vercel route + SQL function predicate alignment', () => {
   // the architect's Section 8.6 warns about. These checks force a
   // failure here when that happens, rather than as a UX regression
   // surfaced months later.
+  //
+  // Deliberately loads CURRENT_REAPER_FN_MIGRATION_PATH (the latest
+  // CREATE OR REPLACE of the function), not MIGRATION_PATH (the
+  // original migration) — see that constant's own comment above for
+  // why comparing against stale SQL text defeats the entire point of
+  // this cross-check.
 
-  const migrationSql = loadFile(MIGRATION_PATH)
+  const migrationSql = loadFile(CURRENT_REAPER_FN_MIGRATION_PATH)
   const routeSrc = loadFile(ROUTE_PATH)
 
   it("route still filters .eq('status', 'pending_payment') — matches SQL fn predicate 1", () => {
@@ -382,7 +409,22 @@ describe('reaper — Vercel route + SQL function predicate alignment', () => {
     expect(migrationSql).toMatch(/AND deleted_at\s+IS NULL/)
   })
 
-  it("route still filters .lt('created_at', cutoff) — matches SQL fn predicate 4", () => {
+  it("route still filters .eq('is_admin_hold', false) — matches SQL fn predicate 4", () => {
+    // Added by migration 20260713000002 alongside
+    // admin_promote_waitlist_to_hold — admin-created payment holds get
+    // an admin-communicated window, not this route's standard
+    // 35-minute abandoned-checkout timeout. Missing this predicate
+    // doesn't just silently under-reap: because is_admin_hold=true rows
+    // are also chk_bookings_admin_hold_requires_pending_payment-
+    // protected, a route missing this filter that happens to match an
+    // outstanding hold gets a 23514 from Postgres and reaps ZERO rows
+    // for the whole batch, including unrelated ones that should have
+    // been reaped. See SYSTEM-DESIGN-admin-waitlist-promotion-payment.md.
+    expect(routeSrc).toMatch(/\.eq\(\s*['"]is_admin_hold['"]\s*,\s*false\s*\)/)
+    expect(migrationSql).toMatch(/AND is_admin_hold\s+=\s+false/)
+  })
+
+  it("route still filters .lt('created_at', cutoff) — matches SQL fn predicate 5", () => {
     expect(routeSrc).toMatch(/\.lt\(\s*['"]created_at['"]\s*,\s*cutoff\s*\)/)
     expect(migrationSql).toMatch(/created_at\s*<\s*now\(\)\s*-\s*interval\s*'35 minutes'/)
   })
