@@ -57,6 +57,7 @@ export default async function AdminEventBookingsPage({ params }: PageProps) {
           bookings={normalisedBookings}
           eventId={id}
           isPastEvent={new Date(event.date_time) < new Date()}
+          isPaidEvent={event.price > 0}
         />
       </div>
 
