@@ -63,6 +63,7 @@ const baseEvent = (overrides: Partial<EventWithStats> = {}): EventWithStats => (
   updated_at: '2026-04-01T00:00:00.000Z',
   deleted_at: null,
   confirmed_count: 12,
+  occupied_count: 12,
   total_attending: 12,
   revenue_collected: 0,
   avg_rating: 0,

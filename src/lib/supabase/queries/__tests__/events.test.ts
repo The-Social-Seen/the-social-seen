@@ -118,6 +118,7 @@ const mockEventWithStats = {
   updated_at: '2026-04-01T00:00:00Z',
   deleted_at: null,
   confirmed_count: 12,
+  occupied_count: 12,
   revenue_collected: 0,
   avg_rating: 4.5,
   review_count: 8,
@@ -544,6 +545,101 @@ describe('getEventBySlug', () => {
     expect(result).not.toBeNull()
     expect(result!.confirmed_count).toBe(7)
     expect(result!.total_attending).toBe(7) // fell back to confirmed
+  })
+
+  // ── occupied_count fetch (spots-left-display-fix, 2026-07-13 incident) ──
+  // event_with_stats.spots_left used to be derived from confirmed_count
+  // alone, which undercounted seats held by an in-flight Stripe checkout
+  // or an admin payment-remediation hold (status = 'pending_payment').
+  // The real booking gates (book_event_paid, claim_waitlist_spot,
+  // admin_promote_waitlist_to_hold, admin_hold_confirmed_booking_for_
+  // payment) all treat confirmed + pending_payment as occupied — so the
+  // public "spots available" signal could tell a member there was room
+  // when the RPC would actually waitlist them. Migration 20260713000005
+  // added occupied_count to the view; these cases pin the same
+  // select-string + fallback contract already established for
+  // total_attending above, plus a behavioural pin proving spots_left
+  // actually derives from occupied_count now (not confirmed_count).
+
+  it('requests occupied_count in the stats select (regression: spots-left-display-fix)', async () => {
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve(mockEventRow)
+    fromBuilders['events'] = eventsBuilder
+
+    const statsBuilder = createQueryBuilder()
+    statsBuilder.mockResolve({ confirmed_count: 5, occupied_count: 6, total_attending: 25 })
+    fromBuilders['event_with_stats'] = statsBuilder
+
+    const reviewsBuilder = createQueryBuilder()
+    reviewsBuilder.mockResolve([])
+    fromBuilders['event_reviews'] = reviewsBuilder
+
+    await getEventBySlug('wine-and-wisdom')
+
+    // Pin the exact select-string contract, same pattern as the
+    // total_attending pin above. A future refactor that drops
+    // occupied_count from the select would silently reintroduce the
+    // 2026-07-13 "spots left overstates availability" incident — this
+    // assertion fails loudly first.
+    const selectArg = statsBuilder.select.mock.calls[0]?.[0] as string
+    expect(typeof selectArg).toBe('string')
+    expect(selectArg).toContain('occupied_count')
+    expect(selectArg).toContain('confirmed_count')
+  })
+
+  it('derives spots_left from occupied_count, not confirmed_count (2026-07-13 incident regression)', async () => {
+    // Divergent fixture: confirmed=5 (paid/confirmed only) vs occupied=8
+    // (+3 pending_payment rows — an in-flight Stripe checkout or an admin
+    // payment-remediation hold). Pre-fix, spots_left was
+    // capacity - confirmed = 25, which is exactly the bug: a member sees
+    // "spots available" and lands on the waitlist when they actually try
+    // to book. Post-fix it must be capacity - occupied = 22.
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve(mockEventRow) // capacity: 30
+    fromBuilders['events'] = eventsBuilder
+
+    const statsBuilder = createQueryBuilder()
+    statsBuilder.mockResolve({ confirmed_count: 5, occupied_count: 8, total_attending: 5 })
+    fromBuilders['event_with_stats'] = statsBuilder
+
+    const reviewsBuilder = createQueryBuilder()
+    reviewsBuilder.mockResolve([])
+    fromBuilders['event_reviews'] = reviewsBuilder
+
+    const result = await getEventBySlug('wine-and-wisdom')
+
+    expect(result).not.toBeNull()
+    expect(result!.confirmed_count).toBe(5)
+    expect(result!.occupied_count).toBe(8)
+    expect(result!.spots_left).toBe(22) // 30 - 8, NOT 30 - 5 (= 25, the bug)
+  })
+
+  it('falls back to confirmed_count when occupied_count is missing from the view (defensive)', async () => {
+    // Defence-in-depth, same pattern as the total_attending fallback
+    // above: if a deploy ever runs ahead of migration 20260713000005 so
+    // event_with_stats lacks occupied_count, spots_left must fall back to
+    // the pre-fix confirmed-only calculation rather than compute
+    // capacity - undefined (NaN) or throw.
+    const eventsBuilder = createQueryBuilder()
+    eventsBuilder.mockResolve(mockEventRow) // capacity: 30
+    fromBuilders['events'] = eventsBuilder
+
+    const statsBuilder = createQueryBuilder()
+    // Note: no `occupied_count` key in the response — simulates the
+    // pre-migration column shape OR a malformed select.
+    statsBuilder.mockResolve({ confirmed_count: 7 })
+    fromBuilders['event_with_stats'] = statsBuilder
+
+    const reviewsBuilder = createQueryBuilder()
+    reviewsBuilder.mockResolve([])
+    fromBuilders['event_reviews'] = reviewsBuilder
+
+    const result = await getEventBySlug('wine-and-wisdom')
+
+    expect(result).not.toBeNull()
+    expect(result!.confirmed_count).toBe(7)
+    expect(result!.occupied_count).toBe(7) // fell back to confirmed
+    expect(result!.spots_left).toBe(23) // 30 - 7
   })
 })
 

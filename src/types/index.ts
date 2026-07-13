@@ -252,6 +252,15 @@ export interface PrimaryTag {
 export interface EventWithStats extends Event {
   confirmed_count:   number
   /**
+   * confirmed + pending_payment. The "is there room" number — spots_left
+   * is capacity - occupied_count. NOT the same as confirmed_count (which
+   * stays paid/confirmed-only for the admin Booked/Revenue columns) and
+   * NOT the same as total_attending (confirmed + external_attendees, a
+   * "who's actually coming" social-proof number). Added by migration
+   * 20260713000005 (spots-left-display-fix).
+   */
+  occupied_count:    number
+  /**
    * Public-facing "X going" total: confirmed_count + external_attendees.
    * Public surfaces (event card, event detail, booking sidebar) read this;
    * admin surfaces stay on confirmed_count for a platform-only view.

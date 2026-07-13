@@ -276,10 +276,10 @@ export async function getEventBySlug(slug: string): Promise<EventDetail | null> 
 
   // 2. Fetch booking count + review stats in parallel (Amendment 3.5).
   //
-  // confirmed_count and total_attending are read from the `event_with_stats`
-  // view, NOT via a direct `count: 'exact'` on the bookings table. The
-  // bookings RLS policy (user_id = auth.uid() OR is_admin) means a direct
-  // count returns:
+  // confirmed_count, occupied_count, and total_attending are read from the
+  // `event_with_stats` view, NOT via a direct `count: 'exact'` on the
+  // bookings table. The bookings RLS policy (user_id = auth.uid() OR
+  // is_admin) means a direct count returns:
   //   - 0 for anon visitors
   //   - 0 or 1 for the booking-holder themselves
   //   - the real number only for admins
@@ -291,10 +291,18 @@ export async function getEventBySlug(slug: string): Promise<EventDetail | null> 
   // aggregate (= confirmed_count + events.external_attendees) and inherits
   // the same RLS-bypass-via-definer guarantee.
   // See fix/event-detail-attendee-count-rls-leak.
+  //
+  // occupied_count (= confirmed + pending_payment) is what spots_left is
+  // now based on — it matches the gate the real booking RPCs
+  // (book_event_paid, claim_waitlist_spot, admin_promote_waitlist_to_hold,
+  // admin_hold_confirmed_booking_for_payment) already use when deciding
+  // confirmed vs waitlisted, so this page's "spots available" signal can't
+  // drift from what a booking attempt will actually do. See
+  // SYSTEM-DESIGN-spots-left-display-fix.md (migration 20260713000005).
   const [statsResult, reviewResult] = await Promise.all([
     supabase
       .from('event_with_stats')
-      .select('confirmed_count, total_attending')
+      .select('confirmed_count, occupied_count, total_attending')
       .eq('id', event.id)
       .maybeSingle(),
     supabase
@@ -312,6 +320,10 @@ export async function getEventBySlug(slug: string): Promise<EventDetail | null> 
   }
 
   const confirmed = statsResult.data?.confirmed_count ?? 0
+  // Defensive fallback to `confirmed`, same established pattern as
+  // totalAttending directly below — protects against partial-deploy skew
+  // if this code ever runs ahead of the migration.
+  const occupied = statsResult.data?.occupied_count ?? confirmed
   // Defensive fallback to `confirmed`: if the view doesn't yet have
   // total_attending populated (migration not applied somewhere), the
   // public "X people going" line shows the platform count rather than
@@ -325,8 +337,9 @@ export async function getEventBySlug(slug: string): Promise<EventDetail | null> 
       ? Math.round((reviews.reduce((sum, r) => sum + r.rating, 0) / reviewCount) * 100) / 100
       : 0
 
-  // 4. Compute spots_left
-  const spotsLeft = event.capacity == null ? null : Math.max(event.capacity - confirmed, 0)
+  // 4. Compute spots_left — based on occupied (confirmed + pending_payment),
+  // not confirmed alone. See the stats-fetch comment above.
+  const spotsLeft = event.capacity == null ? null : Math.max(event.capacity - occupied, 0)
 
   // 5. Sort nested arrays (Supabase doesn't guarantee nested order)
   const hosts = (event.event_hosts ?? [])
@@ -358,6 +371,7 @@ export async function getEventBySlug(slug: string): Promise<EventDetail | null> 
   return {
     ...eventFields,
     confirmed_count: confirmed,
+    occupied_count: occupied,
     total_attending: totalAttending,
     // revenue_collected exists on EventWithStats for admin consumers (read
     // from event_with_stats view). Public detail page doesn't display it,

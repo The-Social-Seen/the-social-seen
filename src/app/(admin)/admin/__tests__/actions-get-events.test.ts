@@ -87,6 +87,7 @@ function adminEventRow(overrides: Record<string, unknown> = {}) {
     is_cancelled: false,
     deleted_at: null,
     confirmed_count: 4,
+    occupied_count: 4,
     revenue_collected: 0,
     avg_rating: 0,
     review_count: 0,
