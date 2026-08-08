@@ -33,6 +33,8 @@ import {
   promoteFromWaitlist,
   sendPaymentLinkForConfirmedBooking,
   demoteAdminHold,
+  reinstateCancelledBooking,
+  releaseReinstatedHold,
   toggleReviewVisibility,
   sendNotification,
   getDashboardStats,
@@ -149,6 +151,16 @@ describe('Admin auth guards', () => {
     { name: 'promoteFromWaitlist', fn: () => promoteFromWaitlist('bk-1') },
     { name: 'sendPaymentLinkForConfirmedBooking', fn: () => sendPaymentLinkForConfirmedBooking('bk-1') },
     { name: 'demoteAdminHold', fn: () => demoteAdminHold('bk-1') },
+    // "Gap C" — SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md. The
+    // sensitive-surface requirement this pair MUST satisfy: a regular
+    // member must not be able to reinstate an arbitrary cancelled booking
+    // (which would hand them a fresh Stripe Checkout link + email for
+    // someone else's spot) or release someone else's active hold.
+    // requireAdmin() throws BEFORE either action ever reaches
+    // @/lib/bookings/admin-hold, so no admin-hold mock is needed here —
+    // same reasoning as every other entry in this array.
+    { name: 'reinstateCancelledBooking', fn: () => reinstateCancelledBooking('bk-1') },
+    { name: 'releaseReinstatedHold', fn: () => releaseReinstatedHold('bk-1') },
     { name: 'toggleReviewVisibility', fn: () => toggleReviewVisibility('rev-1') },
     { name: 'sendNotification', fn: () => {
       const fd = new FormData()

@@ -1,7 +1,8 @@
 /**
- * Admin waitlist-promotion / payment-remediation hold mechanism.
+ * Admin waitlist-promotion / payment-remediation / cancelled-reinstatement
+ * hold mechanism.
  *
- * Three public entry points, all built on the same internal
+ * Four public entry points, all but the last built on the same internal
  * `runAdminHoldFlow()`:
  *
  *   - `createAdminBookingHold()` — promote a WAITLISTED booking on a PAID
@@ -12,18 +13,28 @@
  *     booking on a paid event that was never actually charged
  *     (`sendPaymentLinkForConfirmedBooking`, same file). Gap A in the
  *     same doc's "Addendum (2026-07-13, same day)" §A.
+ *   - `createAdminReinstatementHold()` — reinstate an eligible reaped
+ *     `cancelled` booking on a paid event that has room again
+ *     (`reinstateCancelledBooking`, same file). "Gap C" —
+ *     SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md.
  *   - `releaseAdminBookingHold()` — manually revert an active
- *     `pending_payment` hold (of EITHER origin above) back to
- *     `waitlisted` (`demoteAdminHold`, same file). Gap B in the
+ *     `pending_payment` hold (of EITHER of the first two origins above)
+ *     back to `waitlisted` (`demoteAdminHold`, same file). Gap B in the
  *     addendum, §B.
+ *   - `releaseReinstatedBookingHold()` — the Gap C sibling of the above:
+ *     manually revert an active reinstatement hold back to `cancelled`
+ *     (its own honest "give up" destination — never `waitlisted`, this
+ *     booking was never on the waitlist this cycle). NOT built on
+ *     `releaseAdminBookingHold` — see that function's own doc comment for
+ *     why the destinations genuinely differ.
  *
- * Both hold-creation flows never confirm a paid seat for free — they
+ * All three hold-creation flows never confirm a paid seat for free — they
  * transition the booking to `pending_payment` via an admin-gated RPC,
  * create a Stripe Checkout Session, and email the member a real payment
- * link. The RPC, the rollback destination on failure, and the email
- * template differ by origin; see `ADMIN_HOLD_ORIGINS` below — that
- * lookup table (not two near-duplicate functions) is what makes mixing
- * up the two origins' rollback destinations structurally impossible
+ * link. The RPC, the rollback destination on failure, the price source,
+ * and the email template differ by origin; see `ADMIN_HOLD_ORIGINS`
+ * below — that lookup table (not near-duplicate functions) is what makes
+ * mixing up the origins' rollback destinations structurally impossible
  * rather than merely "commented against" (Addendum §A.4).
  *
  * Server-only: talks to Stripe, the service-role Supabase client, and
@@ -44,6 +55,7 @@ import { formatDateFull, formatDateModal, formatTime } from '@/lib/utils/dates'
 import { sendEmail } from '@/lib/email/send'
 import { waitlistPromotionTemplate } from '@/lib/email/templates/waitlist-promotion'
 import { confirmedUnpaidPaymentLinkTemplate } from '@/lib/email/templates/confirmed-unpaid-payment-link'
+import { reinstatedBookingPaymentLinkTemplate } from '@/lib/email/templates/reinstated-booking-payment-link'
 import type { RenderedTemplate } from '@/lib/email/templates/welcome'
 
 // ── Stripe Checkout Session expiry (spec §3.3) ──────────────────────────────
@@ -153,7 +165,7 @@ async function resolveSiteOrigin(): Promise<string> {
 // functions — means a future edit to one origin's rollback destination
 // can't accidentally leak into the other by copy-paste.
 
-type AdminHoldOrigin = 'waitlist_promotion' | 'payment_remediation'
+type AdminHoldOrigin = 'waitlist_promotion' | 'payment_remediation' | 'cancelled_reinstatement'
 
 /** Fields every hold-notification email needs, regardless of origin.
  *  Deliberately NOT imported from waitlist-promotion.ts (whose
@@ -177,39 +189,53 @@ interface AdminHoldEmailContext {
 
 interface AdminHoldOriginConfig {
   rpcName: 'admin_promote_waitlist_to_hold' | 'admin_hold_confirmed_booking_for_payment'
+          | 'admin_reinstate_cancelled_booking_for_payment'
   /** Where to roll back to if Stripe/profile lookup fails AFTER the RPC
    *  already committed the transition. THE field this whole refactor
    *  exists to make foolproof. */
-  rollbackStatus: 'waitlisted' | 'confirmed'
+  rollbackStatus: 'waitlisted' | 'confirmed' | 'cancelled'
+  /** 'event' (the two original origins) charges event.price (current).
+   *  'booking' (cancelled_reinstatement only) charges the row's own
+   *  price_at_booking (preserved from the original booking) — see
+   *  SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md §3.4 for why
+   *  this origin deviates: reusing event.price would silently re-price
+   *  an already-agreed booking to a since-changed current price without
+   *  telling the member. */
+  priceSource: 'event' | 'booking'
   templateName: string
   notificationType: 'waitlist' | 'reminder'
   renderEmail: (input: AdminHoldEmailContext) => RenderedTemplate
-  /** Distinguishes the two origins in console.* log prefixes and the
+  /** Distinguishes the origins in console.* log prefixes and the
    *  Sentry `tags.surface` value on the Stripe-failure rollback path.
    *  Not part of the illustrative interface in the spec, but required
    *  to satisfy the hard constraint that createAdminBookingHold's
    *  existing observable behaviour (admin-hold.test.ts's INVARIANT
    *  assertion on `tags: { surface: 'createAdminBookingHold' }`) is
    *  preserved byte-for-byte after this refactor. */
-  logLabel: 'createAdminBookingHold' | 'createAdminPaymentRemediationHold'
+  logLabel: 'createAdminBookingHold' | 'createAdminPaymentRemediationHold' | 'createAdminReinstatementHold'
   /** The `from` value on the Stripe cancel_url (step 8 below), so
-   *  abandonPendingCheckout (events/[slug]/actions.ts) can tell the two
+   *  abandonPendingCheckout (events/[slug]/actions.ts) can tell the
    *  origins apart if the member clicks "← Back" mid-checkout and roll
    *  back to the correct status. Must stay in lockstep with
    *  `rollbackStatus` above — waitlist_promotion's Stripe-side "← Back"
    *  and its own Stripe-*failure* rollback both land on 'waitlisted';
-   *  payment_remediation's both land on 'confirmed'. Restoring a
+   *  payment_remediation's both land on 'confirmed'; cancelled_
+   *  reinstatement's both land on 'cancelled'. Restoring a
    *  payment_remediation hold to 'waitlisted' on "← Back" would silently
    *  recreate the original confirmed-without-payment bug in a different
    *  shape (this booking was never waitlisted this cycle) — this field
-   *  is what closes that gap. */
-  cancelUrlFrom: 'admin_hold' | 'admin_remediation'
+   *  is what closes that gap. Same reasoning protects cancelled_
+   *  reinstatement: it was never waitlisted OR confirmed this cycle
+   *  either — its own honest "← Back" destination is 'cancelled', the
+   *  exact state it was in before the admin reinstated it. */
+  cancelUrlFrom: 'admin_hold' | 'admin_remediation' | 'admin_reinstate'
 }
 
 const ADMIN_HOLD_ORIGINS: Record<AdminHoldOrigin, AdminHoldOriginConfig> = {
   waitlist_promotion: {
     rpcName: 'admin_promote_waitlist_to_hold',
     rollbackStatus: 'waitlisted', // unchanged from today's behaviour
+    priceSource: 'event', // unchanged from today's behaviour
     templateName: 'waitlist_promotion',
     notificationType: 'waitlist',
     renderEmail: waitlistPromotionTemplate,
@@ -224,11 +250,29 @@ const ADMIN_HOLD_ORIGINS: Record<AdminHoldOrigin, AdminHoldOriginConfig> = {
     // (unpaid) — functionally a no-op that leaves them exactly where
     // they started, still needing remediation, not worse off.
     rollbackStatus: 'confirmed',
+    priceSource: 'event', // unchanged from today's behaviour
     templateName: 'confirmed_unpaid_payment_link',
     notificationType: 'reminder',
     renderEmail: confirmedUnpaidPaymentLinkTemplate,
     logLabel: 'createAdminPaymentRemediationHold',
     cancelUrlFrom: 'admin_remediation',
+  },
+  cancelled_reinstatement: {
+    rpcName: 'admin_reinstate_cancelled_booking_for_payment',
+    // 'cancelled' — this booking's honest "give up" destination, both on
+    // Stripe/profile-lookup failure AFTER the RPC commits (this branch)
+    // and on the member clicking "← Back" out of Stripe
+    // (abandonPendingCheckout's 'admin_reinstate' branch). Never
+    // 'waitlisted' (never on the waitlist this cycle) or 'confirmed'
+    // (never held a confirmed seat this cycle) — see
+    // SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md §3.2.
+    rollbackStatus: 'cancelled',
+    priceSource: 'booking',
+    templateName: 'reinstated_booking_payment_link',
+    notificationType: 'reminder',
+    renderEmail: reinstatedBookingPaymentLinkTemplate,
+    logLabel: 'createAdminReinstatementHold',
+    cancelUrlFrom: 'admin_reinstate',
   },
 }
 
@@ -284,10 +328,12 @@ async function runAdminHoldFlow(
   const config = ADMIN_HOLD_ORIGINS[origin]
   const admin = createAdminClient()
 
-  // 1. Fetch the booking.
+  // 1. Fetch the booking. price_at_booking is additive — only referenced
+  // when config.priceSource === 'booking' (cancelled_reinstatement);
+  // harmless for the other two origins, which never read it.
   const { data: booking, error: bookingError } = await admin
     .from('bookings')
-    .select('id, event_id, user_id')
+    .select('id, event_id, user_id, price_at_booking')
     .eq('id', bookingId)
     .is('deleted_at', null)
     .single()
@@ -320,9 +366,16 @@ async function runAdminHoldFlow(
     }
   }
 
-  // 3. Booking fee — single source of truth, same formula every paid
-  // booking path uses.
-  const bookingFeePence = calculateBookingFeePence(event.price)
+  // 3. Resolve the price to charge, then compute the booking fee from it
+  // — single source of truth, same formula every paid booking path uses.
+  // Origin-aware (design doc §3.4): the two original origins charge the
+  // event's CURRENT price (unchanged behaviour); cancelled_reinstatement
+  // charges the booking's own PRESERVED price_at_booking instead, so a
+  // reinstated member still pays what they originally agreed to even if
+  // event.price has since changed.
+  const priceInPence =
+    config.priceSource === 'booking' ? booking.price_at_booking : event.price
+  const bookingFeePence = calculateBookingFeePence(priceInPence)
 
   // 4. Transition via the origin-specific RPC.
   const { data: rpcData, error: rpcError } = await supabaseUserScoped.rpc(
@@ -336,6 +389,29 @@ async function runAdminHoldFlow(
 
   if (rpcError) {
     console.error(`[${config.logLabel}] RPC error:`, rpcError.message)
+
+    // Race note (SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md §4.1
+    // closing note, UX-REVIEW-admin-reinstate-cancelled-booking.md §2.4):
+    // cancelled_reinstatement's own pre-check (§1.4 — no other active
+    // booking for this member+event) can still lose a genuine race
+    // between that check and the RPC's final UPDATE, surfacing as a raw
+    // `23505` partial-unique-index violation rather than one of the
+    // RPC's own jsonb error branches. Scoped to this ONE origin — the
+    // other two origins' RPCs UPDATE an already-active row in place and
+    // structurally cannot hit this same index violation (see design doc
+    // §1.4's reasoning: only a `cancelled` source row, excluded from the
+    // partial index, can collide with a freshly-inserted competing row).
+    if (
+      origin === 'cancelled_reinstatement' &&
+      (rpcError as { code?: string }).code === '23505'
+    ) {
+      return {
+        success: false,
+        error:
+          'This member already has another active booking for this event — refresh and check before retrying.',
+      }
+    }
+
     return { success: false, error: 'Something went wrong. Please try again.' }
   }
 
@@ -368,14 +444,16 @@ async function runAdminHoldFlow(
 
     // 8. Checkout Session. cancel_url carries &from=<config.cancelUrlFrom>
     // so abandonPendingCheckout (events/[slug]/actions.ts) can tell the
-    // two origins apart and restore the booking to the CORRECT prior
-    // status if the member clicks "← Back" out of Stripe —
-    // waitlist_promotion restores to `waitlisted`, payment_remediation
-    // restores to `confirmed` (never `waitlisted`; these bookings were
-    // never on the waitlist this cycle — see cancelUrlFrom's own doc
-    // comment above). expiresInSeconds is derived from the DB-side
-    // deadline so the Stripe-side cutoff always lands 5 minutes before
-    // the revert-cron would ever consider reverting the row (§3.3, §6.4).
+    // origins apart and restore the booking to the CORRECT prior status
+    // if the member clicks "← Back" out of Stripe — waitlist_promotion
+    // restores to `waitlisted`, payment_remediation restores to
+    // `confirmed`, cancelled_reinstatement restores to `cancelled` (see
+    // cancelUrlFrom's own doc comment above). expiresInSeconds is derived
+    // from the DB-side deadline so the Stripe-side cutoff always lands 5
+    // minutes before the revert-cron would ever consider reverting the
+    // row (§3.3, §6.4). priceInPence is the origin-aware value resolved
+    // in step 3 above — event.price for the two original origins,
+    // booking.price_at_booking for cancelled_reinstatement (§3.4).
     const siteOrigin = await resolveSiteOrigin()
     const successUrl = `${siteOrigin}/events/${event.slug}/booking-success?session_id={CHECKOUT_SESSION_ID}`
     const cancelUrl = `${siteOrigin}/events/${event.slug}?cancelled=1&from=${config.cancelUrlFrom}`
@@ -388,7 +466,7 @@ async function runAdminHoldFlow(
       eventId: booking.event_id,
       eventTitle: event.title,
       eventSlug: event.slug,
-      priceInPence: event.price,
+      priceInPence,
       bookingFeePence,
       successUrl,
       cancelUrl,
@@ -420,7 +498,12 @@ async function runAdminHoldFlow(
         eventSlug: event.slug,
         eventDate: formatDateFull(event.date_time),
         eventTime: formatTime(event.date_time),
-        priceInPence: event.price,
+        // Same origin-aware priceInPence resolved in step 3 — the email
+        // must show the same figure the member is actually charged
+        // (design doc §4.6: "the booking's own preserved price_at_booking
+        // + fresh booking_fee_pence"). No-op change for the two original
+        // origins, where priceInPence === event.price.
+        priceInPence,
         bookingFeePence,
         checkoutUrl: url,
         holdExpiresAt: holdExpiresAtIso ? formatDateModal(holdExpiresAtIso) : null,
@@ -535,6 +618,36 @@ export async function createAdminPaymentRemediationHold(
   options: { holdExpiresAt: Date | null },
 ): Promise<CreateAdminBookingHoldResult> {
   return runAdminHoldFlow('payment_remediation', supabaseUserScoped, bookingId, options)
+}
+
+// ── createAdminReinstatementHold (cancelled-reinstatement origin, Gap C) ────
+
+/**
+ * Reinstate an eligible reaped `cancelled` booking on a PAID event that
+ * has room again — "Gap C",
+ * SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md. Holds the booking
+ * as `pending_payment` (via `admin_reinstate_cancelled_booking_for_
+ * payment`, which re-validates a safety-critical eligibility predicate
+ * under lock — reaped-not-refunded-not-event-cancelled-owning-profile-
+ * not-deleted, §1.5 — and DOES capacity-check, unlike Gap A: the seat was
+ * genuinely released back to the pool by the reap, so this is a new
+ * admission) and sends the member a real Stripe Checkout link using a
+ * template that does NOT imply they are still on the waitlist OR still
+ * hold a confirmed seat — neither is true this cycle (§4.6).
+ *
+ * Charges the booking's own PRESERVED `price_at_booking`, not the
+ * event's current price — see `ADMIN_HOLD_ORIGINS.cancelled_
+ * reinstatement.priceSource` and design doc §3.4.
+ *
+ * Thin wrapper over `runAdminHoldFlow('cancelled_reinstatement', ...)` —
+ * see that function's doc comment for the full algorithm.
+ */
+export async function createAdminReinstatementHold(
+  supabaseUserScoped: SupabaseClient,
+  bookingId: string,
+  options: { holdExpiresAt: Date | null },
+): Promise<CreateAdminBookingHoldResult> {
+  return runAdminHoldFlow('cancelled_reinstatement', supabaseUserScoped, bookingId, options)
 }
 
 // ── releaseAdminBookingHold (Gap B — manual release) ─────────────────────────
@@ -692,5 +805,130 @@ export async function releaseAdminBookingHold(
     success: true,
     status: 'waitlisted',
     waitlistPosition: (rpcResult.waitlist_position as number | null) ?? null,
+  }
+}
+
+// ── releaseReinstatedBookingHold (Gap C — manual release) ────────────────────
+
+export interface ReleaseReinstatedBookingHoldResult {
+  success: boolean
+  error?: string
+  status?: 'cancelled'
+}
+
+/**
+ * Manually revert an active `pending_payment` cancelled-reinstatement
+ * hold back to `cancelled` — Gap C's own mandatory manual release path
+ * (SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md §4.2/§6). NOT
+ * built on `runAdminHoldFlow`/`ADMIN_HOLD_ORIGINS` (that lookup table is
+ * for hold CREATION, not release) and deliberately NOT reusing
+ * `releaseAdminBookingHold` either — see design doc §3.2: this origin's
+ * honest "give up" destination is `cancelled` (where it was before the
+ * admin reinstated it), never `waitlisted` (this booking was never on
+ * the waitlist this cycle — reverting it there would put the member in a
+ * queue they were never actually in, ahead of members who genuinely are
+ * waitlisted).
+ *
+ * Structurally the RPC-name/result-shape mirror of
+ * `releaseAdminBookingHold`, same DB-first/Stripe-best-effort ordering
+ * (design doc §4.4 step 7 — "mirror releaseAdminBookingHold with the RPC
+ * name and result shape swapped"):
+ *
+ * Ordering (identical reasoning to Addendum §B.2 — DB-first, Stripe-
+ * expire best-effort after):
+ *   1. Revert via `admin_release_reinstated_hold_to_cancelled` FIRST —
+ *      authoritative. The RPC's own locked
+ *      `WHERE is_admin_hold=true AND status='pending_payment' AND
+ *      cancelled_at IS NOT NULL` guard means the revert only actually
+ *      happens if the row was still genuinely an active reinstatement
+ *      hold at that instant.
+ *   2. THEN, best-effort, proactively expire the outstanding Stripe
+ *      Checkout Session so a stale link can't be paid after the DB-side
+ *      revert has already committed. Same non-blocking / "already paid"
+ *      Sentry-escalation pattern as `releaseAdminBookingHold` step 2
+ *      (tag: `surface: 'releaseReinstatedBookingHold'`).
+ *
+ * No `recompute_waitlist_positions` call — this booking was never on the
+ * waitlist this cycle, has no live waitlist entry to renumber (design
+ * doc §4.2).
+ *
+ * `supabaseUserScoped` MUST come from requireAdmin() for the same
+ * auth.uid()-in-RPC reason as every other hold-creation/release flow.
+ */
+export async function releaseReinstatedBookingHold(
+  supabaseUserScoped: SupabaseClient,
+  bookingId: string,
+): Promise<ReleaseReinstatedBookingHoldResult> {
+  // 1. DB-side revert FIRST — authoritative. See Addendum §B.2 (mirrored
+  // here) for why this must happen before the Stripe-expire call, not
+  // after or gated-by-it.
+  const { data: rpcData, error: rpcError } = await supabaseUserScoped.rpc(
+    'admin_release_reinstated_hold_to_cancelled',
+    { p_booking_id: bookingId },
+  )
+
+  if (rpcError) {
+    console.error('[releaseReinstatedBookingHold] RPC error:', rpcError.message)
+    return { success: false, error: 'Something went wrong. Please try again.' }
+  }
+
+  const rpcResult = rpcData as Record<string, unknown>
+  if (rpcResult.error) {
+    return { success: false, error: rpcResult.error as string }
+  }
+
+  // 2. Best-effort: proactively expire the outstanding Stripe Checkout
+  // Session so a stale link can't be paid after the DB-side revert has
+  // already committed. NOT a precondition for step 1 — that already
+  // succeeded. A failure here is logged but never rolled back and never
+  // surfaced as an error to the admin: the seat is already correctly
+  // freed either way. See Addendum §B.2 (mirrored here).
+  const admin = createAdminClient()
+  const { data: booking } = await admin
+    .from('bookings')
+    .select('stripe_checkout_session_id')
+    .eq('id', bookingId)
+    .single()
+
+  const sessionId = booking?.stripe_checkout_session_id
+  if (sessionId) {
+    try {
+      const stripe = getStripeClient()
+      await stripe.checkout.sessions.expire(sessionId)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+
+      // ── "Already paid" detection ────────────────────────────────────
+      // Same duck-typed heuristic as releaseAdminBookingHold above — see
+      // that function's own doc comment for the full VERIFIED/NOT
+      // VERIFIED provenance of this detection strategy. Not reproduced
+      // here to avoid duplicating the same ~25-line explanation.
+      const isResourceMissing =
+        err instanceof Error && (err as { code?: string }).code === 'resource_missing'
+      const looksAlreadyPaid =
+        !isResourceMissing && /complete|paid|succeeded/i.test(message)
+
+      if (looksAlreadyPaid) {
+        Sentry.captureException(err, {
+          tags: {
+            surface: 'releaseReinstatedBookingHold',
+            signal: 'possible_race_paid_after_revert',
+          },
+          extra: { bookingId, sessionId },
+          level: 'error',
+        })
+      } else {
+        console.warn(
+          '[releaseReinstatedBookingHold] Stripe session expire failed (non-blocking):',
+          sessionId,
+          message,
+        )
+      }
+    }
+  }
+
+  return {
+    success: true,
+    status: 'cancelled',
   }
 }
