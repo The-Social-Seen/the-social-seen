@@ -147,6 +147,55 @@ describe('abandonPendingCheckout — rollback status per `from` value', () => {
     })
   })
 
+  it("INVARIANT: from: 'admin_reinstate' → rolls back to 'cancelled' (NOT 'waitlisted', NOT 'confirmed') AND clears both hold columns", async () => {
+    // "Gap C" — SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md. This
+    // member's booking was `cancelled` (reaped) this whole cycle — never
+    // waitlisted, never confirmed. If they click "← Back" out of Stripe
+    // after an admin reinstated their booking, the only honest rollback
+    // is 'cancelled': the exact state they were in immediately before the
+    // admin's reinstatement attempt. Rolling back to 'waitlisted' would
+    // put them in a queue they were never actually in this cycle (ahead
+    // of members who genuinely are waitlisted); rolling back to
+    // 'confirmed' would hand them a seat they never held.
+    authenticateUser('user-1')
+    const chain = mockUpdateChain({ data: null, error: null })
+
+    const result = await abandonPendingCheckout('evt-1', { from: 'admin_reinstate' })
+
+    expect(result.success).toBe(true)
+    expect(chain.update).toHaveBeenCalledWith({
+      status: 'cancelled',
+      is_admin_hold: false,
+      admin_hold_expires_at: null,
+    })
+  })
+
+  it("distinguishes 'admin_reinstate' from 'book' (both resolve to 'cancelled' today, but via separate, independently-editable branches — not the same fallback path)", async () => {
+    // The implementation deliberately spells 'admin_reinstate' out as its
+    // own ternary branch rather than folding it into the final `:
+    // 'cancelled'` default (see actions.ts's own comment) so a future
+    // change to one target can't silently affect the other. This test
+    // only pins the CURRENT observable behaviour (both -> 'cancelled')
+    // since that's all a black-box test of the exported function can
+    // verify; it cannot assert which branch of the ternary fired.
+    authenticateUser('user-1')
+
+    const bookChain = mockUpdateChain({ data: null, error: null })
+    await abandonPendingCheckout('evt-1', { from: 'book' })
+    const bookPayload = (bookChain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
+      status: string
+    }
+
+    const reinstateChain = mockUpdateChain({ data: null, error: null })
+    await abandonPendingCheckout('evt-1', { from: 'admin_reinstate' })
+    const reinstatePayload = (reinstateChain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
+      status: string
+    }
+
+    expect(bookPayload.status).toBe('cancelled')
+    expect(reinstatePayload.status).toBe('cancelled')
+  })
+
   it('an unrecognised `from` string falls back to the default cancelled behaviour (defensive)', async () => {
     authenticateUser('user-1')
     const chain = mockUpdateChain({ data: null, error: null })
@@ -185,15 +234,19 @@ describe('abandonPendingCheckout — rollback status per `from` value', () => {
     })
   })
 
-  it("CROSS-CHECK: all four 'from' values map to genuinely distinct rollback statuses where the spec says so (book/cancelled, claim/waitlisted, admin_hold/waitlisted, admin_remediation/confirmed)", async () => {
+  it("CROSS-CHECK: all five 'from' values map to genuinely distinct rollback statuses where the spec says so (book/cancelled, claim/waitlisted, admin_hold/waitlisted, admin_remediation/confirmed, admin_reinstate/cancelled)", async () => {
     // Guards against the specific regression this test file exists to
     // catch: a copy-paste that leaves 'admin_hold' and 'admin_remediation'
     // sharing the same rollback status (they must NOT — see the INVARIANT
     // test above), while 'claim' and 'admin_hold' correctly DO share
-    // 'waitlisted' (that part is intentional, per spec §5 site #2).
+    // 'waitlisted' (that part is intentional, per spec §5 site #2), and
+    // 'admin_reinstate' correctly DOES share 'cancelled' with 'book' (also
+    // intentional — design doc §4.5's own note).
     authenticateUser('user-1')
 
-    async function rollbackStatusFor(from?: 'book' | 'claim' | 'admin_hold' | 'admin_remediation') {
+    async function rollbackStatusFor(
+      from?: 'book' | 'claim' | 'admin_hold' | 'admin_remediation' | 'admin_reinstate',
+    ) {
       const chain = mockUpdateChain({ data: null, error: null })
       await abandonPendingCheckout('evt-1', from ? { from } : undefined)
       const payload = (chain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
@@ -206,11 +259,18 @@ describe('abandonPendingCheckout — rollback status per `from` value', () => {
     expect(await rollbackStatusFor('claim')).toBe('waitlisted')
     expect(await rollbackStatusFor('admin_hold')).toBe('waitlisted')
     expect(await rollbackStatusFor('admin_remediation')).toBe('confirmed')
+    expect(await rollbackStatusFor('admin_reinstate')).toBe('cancelled')
 
     // The one pair that must NEVER match — this is the exact bug shape.
     const claimStatus = await rollbackStatusFor('claim')
     const remediationStatus = await rollbackStatusFor('admin_remediation')
     expect(remediationStatus).not.toBe(claimStatus)
+
+    // admin_reinstate must also never collide with either "still active"
+    // destination (waitlisted/confirmed) — only with 'book''s cancelled.
+    const reinstateStatus = await rollbackStatusFor('admin_reinstate')
+    expect(reinstateStatus).not.toBe('waitlisted')
+    expect(reinstateStatus).not.toBe('confirmed')
   })
 })
 
@@ -253,6 +313,20 @@ describe('abandonPendingCheckout — is_admin_hold / admin_hold_expires_at are A
     const chain = mockUpdateChain({ data: null, error: null })
 
     await abandonPendingCheckout('evt-1', { from: 'admin_remediation' })
+
+    const payload = (chain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<
+      string,
+      unknown
+    >
+    expect(payload.is_admin_hold).toBe(false)
+    expect(payload.admin_hold_expires_at).toBeNull()
+  })
+
+  it("clears both columns on the 'admin_reinstate' path too (same CHECK-constraint reasoning — the row's is_admin_hold=true is only valid while status=pending_payment)", async () => {
+    authenticateUser('user-1')
+    const chain = mockUpdateChain({ data: null, error: null })
+
+    await abandonPendingCheckout('evt-1', { from: 'admin_reinstate' })
 
     const payload = (chain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<
       string,

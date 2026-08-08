@@ -66,7 +66,9 @@ vi.mock('@/lib/stripe/server', () => ({
 import {
   createAdminBookingHold,
   createAdminPaymentRemediationHold,
+  createAdminReinstatementHold,
   releaseAdminBookingHold,
+  releaseReinstatedBookingHold,
   computeStripeExpirySeconds,
   computeHoldExpiresAt,
 } from '../admin-hold'
@@ -169,6 +171,18 @@ const VALID_EVENT = {
 const FREE_EVENT = { data: { ...VALID_EVENT.data, price: 0 }, error: null }
 const VALID_PROFILE = {
   data: { full_name: 'Amy Sangam', email: 'amy@example.com' },
+  error: null,
+}
+
+// cancelled_reinstatement-specific fixture: price_at_booking (3000, £30,
+// fee 70) is DELIBERATELY different from VALID_EVENT.price (2000, £20,
+// fee 60) — this is what lets the priceSource:'booking' test below prove
+// the RPC/Stripe call used the booking's OWN preserved price, not the
+// event's current one (design doc §3.4). The two original origins never
+// read this field (priceSource:'event'), so reusing VALID_BOOKING (which
+// omits it) for their tests is intentional, not an oversight.
+const VALID_BOOKING_FOR_REINSTATEMENT = {
+  data: { id: 'bk-1', event_id: 'evt-1', user_id: 'user-1', price_at_booking: 3000 },
   error: null,
 }
 
@@ -1277,6 +1291,602 @@ describe('releaseAdminBookingHold', () => {
 
       expect(result.success).toBe(true)
       expect(mockSentryCapture).not.toHaveBeenCalled()
+      warnSpy.mockRestore()
+    })
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// createAdminReinstatementHold ("Gap C" — cancelled_reinstatement origin)
+//
+// SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md. Thin wrapper over the
+// SAME runAdminHoldFlow as the two origins above, parameterised by
+// ADMIN_HOLD_ORIGINS.cancelled_reinstatement. These tests focus on the
+// THREE+ things that differ by origin: rpcName, rollbackStatus, email
+// template/logLabel, AND — unique to THIS origin — priceSource:'booking'
+// (charges the row's own preserved price_at_booking, not event.price) and
+// the scoped 23505 friendly-error catch.
+//
+// NOTE ON SAFETY-CRITICAL COVERAGE: the RPC's OWN eligibility predicate
+// (deleted-profile guard, suspended/banned guard, capacity re-check, other-
+// active-booking pre-check, cancellation_reason/stripe_payment_id/refunded
+// guards) is NOT re-tested here — this file mocks the RPC response
+// entirely, so it can only prove the TS wrapper correctly PASSES THROUGH
+// whatever jsonb the RPC returns. That predicate logic itself was verified
+// with REAL query execution against a disposable local Postgres 18
+// instance during this same tester pass (Homebrew postgresql@18,
+// Docker-free — `supabase start` unavailable in this sandbox, same
+// constraint as the migration-admin-hold-confirmed-booking-and-release.test.ts
+// precedent). See the new
+// migration-admin-reinstate-cancelled-booking.test.ts file for the static
+// assertions + the `it.skip` DB-integration cases documenting the exact
+// verified outcomes, including THE safety-critical deleted-profile case.
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('createAdminReinstatementHold', () => {
+  it('INVARIANT: defensively rejects a FREE event without ever calling the RPC (shared guard, same as the other two origins)', async () => {
+    adminHandle = makeAdminMock({ booking: VALID_BOOKING_FOR_REINSTATEMENT, event: FREE_EVENT })
+    const userScoped = makeUserScopedClient({ data: null, error: null })
+
+    const result = await createAdminReinstatementHold(userScoped as never, 'bk-1', {
+      holdExpiresAt: null,
+    })
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Free events should be confirmed directly, not held',
+    })
+    expect(userScoped.rpc).not.toHaveBeenCalled()
+  })
+
+  it('calls the admin_reinstate_cancelled_booking_for_payment RPC (NOT either sibling RPC)', async () => {
+    adminHandle = makeAdminMock({
+      booking: VALID_BOOKING_FOR_REINSTATEMENT,
+      event: VALID_EVENT,
+      profile: VALID_PROFILE,
+    })
+    const userScoped = makeUserScopedClient({
+      data: { booking_id: 'bk-1', user_id: 'user-1', status: 'pending_payment' },
+      error: null,
+    })
+
+    await createAdminReinstatementHold(userScoped as never, 'bk-1', { holdExpiresAt: null })
+
+    expect(userScoped.rpc).toHaveBeenCalledWith(
+      'admin_reinstate_cancelled_booking_for_payment',
+      expect.objectContaining({ p_booking_id: 'bk-1', p_hold_expires_at: null }),
+    )
+    expect(userScoped.rpc).not.toHaveBeenCalledWith(
+      'admin_promote_waitlist_to_hold',
+      expect.anything(),
+    )
+    expect(userScoped.rpc).not.toHaveBeenCalledWith(
+      'admin_hold_confirmed_booking_for_payment',
+      expect.anything(),
+    )
+  })
+
+  describe('INVARIANT: priceSource is "booking" — mints the session/fee from booking.price_at_booking, NOT event.price', () => {
+    it('the RPC call carries a booking_fee_pence computed from price_at_booking (3000 -> 70), not event.price (2000 -> 60)', async () => {
+      adminHandle = makeAdminMock({
+        booking: VALID_BOOKING_FOR_REINSTATEMENT, // price_at_booking: 3000
+        event: VALID_EVENT, // price: 2000 — DELIBERATELY different
+        profile: VALID_PROFILE,
+      })
+      const userScoped = makeUserScopedClient({
+        data: { booking_id: 'bk-1', user_id: 'user-1', status: 'pending_payment' },
+        error: null,
+      })
+
+      await createAdminReinstatementHold(userScoped as never, 'bk-1', { holdExpiresAt: null })
+
+      expect(userScoped.rpc).toHaveBeenCalledWith(
+        'admin_reinstate_cancelled_booking_for_payment',
+        expect.objectContaining({ p_booking_fee_pence: 70 }), // from 3000, NOT 60 (from 2000)
+      )
+    })
+
+    it('the Stripe Checkout Session is minted with priceInPence=3000 (booking.price_at_booking), NOT 2000 (event.price)', async () => {
+      adminHandle = makeAdminMock({
+        booking: VALID_BOOKING_FOR_REINSTATEMENT,
+        event: VALID_EVENT,
+        profile: VALID_PROFILE,
+      })
+      const userScoped = makeUserScopedClient({
+        data: { booking_id: 'bk-1', user_id: 'user-1', status: 'pending_payment' },
+        error: null,
+      })
+
+      await createAdminReinstatementHold(userScoped as never, 'bk-1', { holdExpiresAt: null })
+
+      const sessionArgs = mockCreateBookingCheckoutSession.mock.calls[0][0]
+      expect(sessionArgs.priceInPence).toBe(3000)
+      expect(sessionArgs.priceInPence).not.toBe(VALID_EVENT.data.price)
+      expect(sessionArgs.bookingFeePence).toBe(70)
+    })
+
+    it('the payment-link email is rendered with priceInPence=3000 (same figure the member is actually charged)', async () => {
+      adminHandle = makeAdminMock({
+        booking: VALID_BOOKING_FOR_REINSTATEMENT,
+        event: VALID_EVENT,
+        profile: VALID_PROFILE,
+      })
+      const userScoped = makeUserScopedClient({
+        data: { booking_id: 'bk-1', user_id: 'user-1', status: 'pending_payment' },
+        error: null,
+      })
+
+      await createAdminReinstatementHold(userScoped as never, 'bk-1', { holdExpiresAt: null })
+
+      // reinstatedBookingPaymentLinkTemplate is not mocked, so this exercises
+      // the real template — assert on rendered output containing the
+      // booking-sourced price (£30.xx), not the event's current £20.
+      const emailArgs = mockSendEmail.mock.calls[0][0]
+      expect(emailArgs.html).toMatch(/£3\d\.\d{2}/) // £30 ticket + fee, not £20-something
+    })
+  })
+
+  it('passes through the RPC\'s own jsonb error VERBATIM (e.g. the deleted-profile / suspended-member / capacity rejections), without touching Stripe', async () => {
+    adminHandle = makeAdminMock({ booking: VALID_BOOKING_FOR_REINSTATEMENT, event: VALID_EVENT })
+    const userScoped = makeUserScopedClient({
+      data: { error: "This member's account has been deleted — cannot reinstate" },
+      error: null,
+    })
+
+    const result = await createAdminReinstatementHold(userScoped as never, 'bk-1', {
+      holdExpiresAt: null,
+    })
+
+    expect(result).toEqual({
+      success: false,
+      error: "This member's account has been deleted — cannot reinstate",
+    })
+    expect(mockEnsureStripeCustomer).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    "This member's account has been deleted — cannot reinstate",
+    "This member's account is suspended or banned — cannot reinstate",
+    'Event is at full capacity — cannot reinstate',
+    'This member already has an active booking for this event',
+    'This booking was cancelled as part of an event cancellation — cannot reinstate',
+    'This booking has a payment record — cannot reinstate',
+    'This booking was refunded — cannot reinstate',
+  ])('passes through the specific RPC rejection message %s unmodified', async (message) => {
+    adminHandle = makeAdminMock({ booking: VALID_BOOKING_FOR_REINSTATEMENT, event: VALID_EVENT })
+    const userScoped = makeUserScopedClient({ data: { error: message }, error: null })
+
+    const result = await createAdminReinstatementHold(userScoped as never, 'bk-1', {
+      holdExpiresAt: null,
+    })
+
+    expect(result).toEqual({ success: false, error: message })
+  })
+
+  describe('INVARIANT: the scoped 23505 (unique-constraint) friendly-error catch is scoped to cancelled_reinstatement ONLY', () => {
+    it('a 23505 transport error from admin_reinstate_cancelled_booking_for_payment is translated to a friendly retry message', async () => {
+      adminHandle = makeAdminMock({ booking: VALID_BOOKING_FOR_REINSTATEMENT, event: VALID_EVENT })
+      const userScoped = makeUserScopedClient({
+        data: null,
+        error: {
+          message: 'duplicate key value violates unique constraint "idx_bookings_active"',
+          code: '23505',
+        },
+      })
+
+      const result = await createAdminReinstatementHold(userScoped as never, 'bk-1', {
+        holdExpiresAt: null,
+      })
+
+      expect(result).toEqual({
+        success: false,
+        error:
+          'This member already has another active booking for this event — refresh and check before retrying.',
+      })
+    })
+
+    it('REGRESSION: a 23505 transport error from createAdminBookingHold (waitlist_promotion) is NOT translated — falls through to the generic message', async () => {
+      adminHandle = makeAdminMock({ booking: VALID_BOOKING, event: VALID_EVENT })
+      const userScoped = makeUserScopedClient({
+        data: null,
+        error: { message: 'duplicate key value violates unique constraint', code: '23505' },
+      })
+
+      const result = await createAdminBookingHold(userScoped as never, 'bk-1', {
+        holdExpiresAt: null,
+      })
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Something went wrong. Please try again.',
+      })
+    })
+
+    it('REGRESSION: a 23505 transport error from createAdminPaymentRemediationHold (payment_remediation) is NOT translated either', async () => {
+      adminHandle = makeAdminMock({ booking: VALID_BOOKING, event: VALID_EVENT })
+      const userScoped = makeUserScopedClient({
+        data: null,
+        error: { message: 'duplicate key value violates unique constraint', code: '23505' },
+      })
+
+      const result = await createAdminPaymentRemediationHold(userScoped as never, 'bk-1', {
+        holdExpiresAt: null,
+      })
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Something went wrong. Please try again.',
+      })
+    })
+
+    it('a NON-23505 transport error from cancelled_reinstatement falls through to the generic message (only the specific code is special-cased)', async () => {
+      adminHandle = makeAdminMock({ booking: VALID_BOOKING_FOR_REINSTATEMENT, event: VALID_EVENT })
+      const userScoped = makeUserScopedClient({
+        data: null,
+        error: { message: 'connection reset', code: '08006' },
+      })
+
+      const result = await createAdminReinstatementHold(userScoped as never, 'bk-1', {
+        holdExpiresAt: null,
+      })
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Something went wrong. Please try again.',
+      })
+    })
+  })
+
+  describe('success path', () => {
+    async function runReinstatementSuccessCase(holdExpiresAt: Date | null = null) {
+      adminHandle = makeAdminMock({
+        booking: VALID_BOOKING_FOR_REINSTATEMENT,
+        event: VALID_EVENT,
+        profile: VALID_PROFILE,
+      })
+      const userScoped = makeUserScopedClient({
+        data: { booking_id: 'bk-1', user_id: 'user-1', status: 'pending_payment' },
+        error: null,
+      })
+      const result = await createAdminReinstatementHold(userScoped as never, 'bk-1', {
+        holdExpiresAt,
+      })
+      return { result }
+    }
+
+    it('returns {success:true, status:"pending_payment", checkoutUrl} — same shape as the other two origins', async () => {
+      const { result } = await runReinstatementSuccessCase()
+      expect(result).toEqual({
+        success: true,
+        status: 'pending_payment',
+        checkoutUrl: 'https://checkout.stripe.test/cs_mock',
+        holdExpiresAt: null,
+      })
+    })
+
+    it('INVARIANT: cancel_url carries &from=admin_reinstate (NOT admin_hold or admin_remediation) so abandonPendingCheckout restores to cancelled', async () => {
+      await runReinstatementSuccessCase()
+      const sessionArgs = mockCreateBookingCheckoutSession.mock.calls[0][0]
+      expect(sessionArgs.cancelUrl).toContain('cancelled=1&from=admin_reinstate')
+      expect(sessionArgs.cancelUrl).not.toContain('from=admin_hold')
+      expect(sessionArgs.cancelUrl).not.toContain('from=admin_remediation')
+    })
+
+    it('sends the reinstated-booking-payment-link email (templateName + notificationType), not either sibling template', async () => {
+      await runReinstatementSuccessCase()
+      expect(mockSendEmail).toHaveBeenCalledTimes(1)
+      expect(mockSendEmail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'amy@example.com',
+          templateName: 'reinstated_booking_payment_link',
+          notificationType: 'reminder',
+        }),
+      )
+    })
+
+    it('INVARIANT: the email never claims the member is "confirmed" or still "on the waitlist" — neither is true this cycle', async () => {
+      await runReinstatementSuccessCase()
+      const emailArgs = mockSendEmail.mock.calls[0][0]
+      expect(emailArgs.subject.toLowerCase()).not.toContain('waitlist')
+      expect(emailArgs.subject.toLowerCase()).not.toMatch(/you'?re confirmed/)
+    })
+  })
+
+  describe('Stripe-failure rollback — rolls back to CANCELLED (never waitlisted/confirmed)', () => {
+    it('INVARIANT: when ensureStripeCustomer throws, rolls back to CANCELLED AND clears BOTH hold columns in the SAME update', async () => {
+      adminHandle = makeAdminMock({
+        booking: VALID_BOOKING_FOR_REINSTATEMENT,
+        event: VALID_EVENT,
+        profile: VALID_PROFILE,
+      })
+      mockEnsureStripeCustomer.mockRejectedValue(new Error('Stripe customer create failed'))
+      const userScoped = makeUserScopedClient({
+        data: { booking_id: 'bk-1', user_id: 'user-1', status: 'pending_payment' },
+        error: null,
+      })
+
+      const result = await createAdminReinstatementHold(userScoped as never, 'bk-1', {
+        holdExpiresAt: null,
+      })
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Could not start checkout. Please try again.',
+      })
+      expect(adminHandle.rollbackUpdateSpy).toHaveBeenCalledWith({
+        status: 'cancelled',
+        is_admin_hold: false,
+        admin_hold_expires_at: null,
+      })
+      expect(adminHandle.rollbackUpdateSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'waitlisted' }),
+      )
+      expect(adminHandle.rollbackUpdateSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'confirmed' }),
+      )
+    })
+
+    it('reports the failure to Sentry with surface=createAdminReinstatementHold', async () => {
+      adminHandle = makeAdminMock({
+        booking: VALID_BOOKING_FOR_REINSTATEMENT,
+        event: VALID_EVENT,
+        profile: VALID_PROFILE,
+      })
+      mockEnsureStripeCustomer.mockRejectedValue(new Error('Stripe outage'))
+      const userScoped = makeUserScopedClient({
+        data: { booking_id: 'bk-1', user_id: 'user-1', status: 'pending_payment' },
+        error: null,
+      })
+
+      await createAdminReinstatementHold(userScoped as never, 'bk-1', { holdExpiresAt: null })
+
+      expect(mockSentryCapture).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({ tags: { surface: 'createAdminReinstatementHold' } }),
+      )
+    })
+
+    it('CROSS-CHECK: all three origins roll back to genuinely DIFFERENT statuses for the identical Stripe failure', async () => {
+      mockEnsureStripeCustomer.mockRejectedValue(new Error('boom'))
+
+      adminHandle = makeAdminMock({ booking: VALID_BOOKING, event: VALID_EVENT, profile: VALID_PROFILE })
+      await createAdminBookingHold(
+        makeUserScopedClient({
+          data: { booking_id: 'bk-1', user_id: 'user-1', status: 'pending_payment' },
+          error: null,
+        }) as never,
+        'bk-1',
+        { holdExpiresAt: null },
+      )
+      const waitlistStatus = (adminHandle.rollbackUpdateSpy.mock.calls[0][0] as Record<string, unknown>).status
+
+      adminHandle = makeAdminMock({ booking: VALID_BOOKING, event: VALID_EVENT, profile: VALID_PROFILE })
+      await createAdminPaymentRemediationHold(
+        makeUserScopedClient({
+          data: { booking_id: 'bk-1', user_id: 'user-1', status: 'pending_payment' },
+          error: null,
+        }) as never,
+        'bk-1',
+        { holdExpiresAt: null },
+      )
+      const remediationStatus = (adminHandle.rollbackUpdateSpy.mock.calls[0][0] as Record<string, unknown>).status
+
+      adminHandle = makeAdminMock({
+        booking: VALID_BOOKING_FOR_REINSTATEMENT,
+        event: VALID_EVENT,
+        profile: VALID_PROFILE,
+      })
+      await createAdminReinstatementHold(
+        makeUserScopedClient({
+          data: { booking_id: 'bk-1', user_id: 'user-1', status: 'pending_payment' },
+          error: null,
+        }) as never,
+        'bk-1',
+        { holdExpiresAt: null },
+      )
+      const reinstatementStatus = (adminHandle.rollbackUpdateSpy.mock.calls[0][0] as Record<string, unknown>).status
+
+      expect(waitlistStatus).toBe('waitlisted')
+      expect(remediationStatus).toBe('confirmed')
+      expect(reinstatementStatus).toBe('cancelled')
+      expect(new Set([waitlistStatus, remediationStatus, reinstatementStatus]).size).toBe(3)
+    })
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// releaseReinstatedBookingHold (Gap C's own manual release path — mirrors
+// releaseAdminBookingHold's DB-first/Stripe-best-effort ordering, but
+// reverts to 'cancelled' via a DIFFERENT RPC and has no waitlistPosition)
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('releaseReinstatedBookingHold', () => {
+  function makeReleaseReinstatedAdminMock(
+    opts: { sessionId?: string | null; fetchError?: unknown } = {},
+  ) {
+    const bookingChain = mockChain(
+      opts.fetchError
+        ? { data: null, error: opts.fetchError }
+        : { data: { stripe_checkout_session_id: opts.sessionId ?? null }, error: null },
+    )
+    const from = vi.fn((table: string) => {
+      if (table === 'bookings') return { select: vi.fn(() => bookingChain) }
+      throw new Error(`makeReleaseReinstatedAdminMock: unexpected table "${table}"`)
+    })
+    return {
+      client: { from },
+      from,
+      bookingFetchChain: bookingChain,
+      eventFetchChain: mockChain({ data: null, error: null }),
+      profileFetchChain: mockChain({ data: null, error: null }),
+      sessionIdUpdateChain: mockChain({ data: null, error: null }),
+      rollbackUpdateSpy: vi.fn(),
+    }
+  }
+
+  beforeEach(() => {
+    stripeHandle = { client: { checkout: { sessions: { expire: vi.fn().mockResolvedValue({}) } } } }
+  })
+
+  it('calls admin_release_reinstated_hold_to_cancelled (NOT admin_revert_hold_to_waitlist) with the given bookingId', async () => {
+    adminHandle = makeReleaseReinstatedAdminMock({ sessionId: null })
+    const userScoped = makeUserScopedClient({ data: { status: 'cancelled' }, error: null })
+
+    await releaseReinstatedBookingHold(userScoped as never, 'bk-42')
+
+    expect(userScoped.rpc).toHaveBeenCalledWith('admin_release_reinstated_hold_to_cancelled', {
+      p_booking_id: 'bk-42',
+    })
+  })
+
+  it('returns a generic error when the RPC call itself transport-errors, without touching Stripe', async () => {
+    adminHandle = makeReleaseReinstatedAdminMock({ sessionId: 'cs_mock' })
+    const userScoped = makeUserScopedClient({
+      data: null,
+      error: { message: 'permission denied for function admin_release_reinstated_hold_to_cancelled' },
+    })
+
+    const result = await releaseReinstatedBookingHold(userScoped as never, 'bk-1')
+
+    expect(result).toEqual({ success: false, error: 'Something went wrong. Please try again.' })
+    expect(stripeHandle.client.checkout.sessions.expire).not.toHaveBeenCalled()
+  })
+
+  it('passes through the RPC\'s own jsonb error VERBATIM (e.g. "not an active reinstatement hold"), without touching Stripe', async () => {
+    adminHandle = makeReleaseReinstatedAdminMock({ sessionId: 'cs_mock' })
+    const userScoped = makeUserScopedClient({
+      data: {
+        error:
+          'This booking is not an active reinstatement hold — it may have already been paid, cancelled, or released.',
+      },
+      error: null,
+    })
+
+    const result = await releaseReinstatedBookingHold(userScoped as never, 'bk-1')
+
+    expect(result).toEqual({
+      success: false,
+      error:
+        'This booking is not an active reinstatement hold — it may have already been paid, cancelled, or released.',
+    })
+    expect(stripeHandle.client.checkout.sessions.expire).not.toHaveBeenCalled()
+  })
+
+  it('on success, returns {success:true, status:"cancelled"} — NO waitlistPosition field (this origin has no waitlist entry to renumber)', async () => {
+    adminHandle = makeReleaseReinstatedAdminMock({ sessionId: null })
+    const userScoped = makeUserScopedClient({ data: { status: 'cancelled' }, error: null })
+
+    const result = await releaseReinstatedBookingHold(userScoped as never, 'bk-1')
+
+    expect(result).toEqual({ success: true, status: 'cancelled' })
+    expect(result).not.toHaveProperty('waitlistPosition')
+  })
+
+  it('no stripe_checkout_session_id on the row -> skips the Stripe call entirely, still returns success', async () => {
+    adminHandle = makeReleaseReinstatedAdminMock({ sessionId: null })
+    const userScoped = makeUserScopedClient({ data: { status: 'cancelled' }, error: null })
+
+    const result = await releaseReinstatedBookingHold(userScoped as never, 'bk-1')
+
+    expect(result.success).toBe(true)
+    expect(stripeHandle.client.checkout.sessions.expire).not.toHaveBeenCalled()
+  })
+
+  it('a sessionId IS present -> calls stripe.checkout.sessions.expire(sessionId)', async () => {
+    adminHandle = makeReleaseReinstatedAdminMock({ sessionId: 'cs_live_reinstate' })
+    const userScoped = makeUserScopedClient({ data: { status: 'cancelled' }, error: null })
+
+    await releaseReinstatedBookingHold(userScoped as never, 'bk-1')
+
+    expect(stripeHandle.client.checkout.sessions.expire).toHaveBeenCalledWith('cs_live_reinstate')
+  })
+
+  describe('DB-first ordering (mirrors releaseAdminBookingHold Addendum §B.2): DB revert is authoritative, Stripe-expire is best-effort AFTER', () => {
+    it('INVARIANT: the DB revert result is returned as success even when stripe.checkout.sessions.expire THROWS', async () => {
+      adminHandle = makeReleaseReinstatedAdminMock({ sessionId: 'cs_live_reinstate' })
+      stripeHandle.client.checkout.sessions.expire = vi
+        .fn()
+        .mockRejectedValue(new Error('Some unrelated Stripe outage'))
+      const userScoped = makeUserScopedClient({ data: { status: 'cancelled' }, error: null })
+
+      const result = await releaseReinstatedBookingHold(userScoped as never, 'bk-1')
+
+      expect(result).toEqual({ success: true, status: 'cancelled' })
+    })
+
+    it('does NOT call Stripe before the RPC result is known (RPC error short-circuits before any session lookup)', async () => {
+      adminHandle = makeReleaseReinstatedAdminMock({ sessionId: 'cs_live_reinstate' })
+      const userScoped = makeUserScopedClient({
+        data: {
+          error:
+            'This booking is not an active reinstatement hold — it may have already been paid, cancelled, or released.',
+        },
+        error: null,
+      })
+
+      await releaseReinstatedBookingHold(userScoped as never, 'bk-1')
+
+      expect(adminHandle.from).not.toHaveBeenCalled()
+      expect(stripeHandle.client.checkout.sessions.expire).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('"already paid" heuristic — same duck-typed pattern as releaseAdminBookingHold, distinct Sentry surface tag', () => {
+    it('a message matching /complete|paid|succeeded/i (no resource_missing code) escalates to Sentry with surface=releaseReinstatedBookingHold', async () => {
+      adminHandle = makeReleaseReinstatedAdminMock({ sessionId: 'cs_live_reinstate' })
+      stripeHandle.client.checkout.sessions.expire = vi
+        .fn()
+        .mockRejectedValue(new Error('You cannot expire this session because it is already complete.'))
+      const userScoped = makeUserScopedClient({ data: { status: 'cancelled' }, error: null })
+
+      await releaseReinstatedBookingHold(userScoped as never, 'bk-1')
+
+      expect(mockSentryCapture).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({
+          tags: {
+            surface: 'releaseReinstatedBookingHold',
+            signal: 'possible_race_paid_after_revert',
+          },
+          extra: { bookingId: 'bk-1', sessionId: 'cs_live_reinstate' },
+          level: 'error',
+        }),
+      )
+    })
+
+    it('a resource_missing code is EXCLUDED from escalation even when the message text matches', async () => {
+      adminHandle = makeReleaseReinstatedAdminMock({ sessionId: 'cs_stale' })
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const err = Object.assign(new Error('No such checkout.session (already succeeded and purged)'), {
+        code: 'resource_missing',
+      })
+      stripeHandle.client.checkout.sessions.expire = vi.fn().mockRejectedValue(err)
+      const userScoped = makeUserScopedClient({ data: { status: 'cancelled' }, error: null })
+
+      const result = await releaseReinstatedBookingHold(userScoped as never, 'bk-1')
+
+      expect(mockSentryCapture).not.toHaveBeenCalled()
+      expect(result.success).toBe(true)
+      expect(warnSpy).toHaveBeenCalled()
+      warnSpy.mockRestore()
+    })
+
+    it('a non-matching message is logged but not escalated', async () => {
+      adminHandle = makeReleaseReinstatedAdminMock({ sessionId: 'cs_live_reinstate' })
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      stripeHandle.client.checkout.sessions.expire = vi.fn().mockRejectedValue(new Error('ECONNRESET'))
+      const userScoped = makeUserScopedClient({ data: { status: 'cancelled' }, error: null })
+
+      const result = await releaseReinstatedBookingHold(userScoped as never, 'bk-1')
+
+      expect(mockSentryCapture).not.toHaveBeenCalled()
+      expect(result.success).toBe(true)
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[releaseReinstatedBookingHold] Stripe session expire failed (non-blocking):',
+        'cs_live_reinstate',
+        'ECONNRESET',
+      )
       warnSpy.mockRestore()
     })
   })

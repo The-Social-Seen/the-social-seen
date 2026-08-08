@@ -14,6 +14,8 @@ vi.mock('@/app/(admin)/admin/actions', () => ({
   promoteFromWaitlist: vi.fn(),
   sendPaymentLinkForConfirmedBooking: vi.fn(),
   demoteAdminHold: vi.fn(),
+  reinstateCancelledBooking: vi.fn(),
+  releaseReinstatedHold: vi.fn(),
 }))
 
 import BookingsTable from '../BookingsTable'
@@ -28,8 +30,13 @@ interface TestBooking {
   stripe_refund_id?: string | null
   refunded_amount_pence?: number | null
   cancelled_at?: string | null
-  // admin waitlist-promotion / payment-remediation hold mechanism —
-  // non-optional, matches the real BookingRow shape (DB: NOT NULL DEFAULT false).
+  // Admin reinstate-cancelled-booking mechanism (SYSTEM-DESIGN-admin-
+  // reinstate-cancelled-booking.md §4.8) — mirrors the real BookingRow
+  // shape's new field.
+  cancellation_reason?: string | null
+  // admin waitlist-promotion / payment-remediation / cancelled-
+  // reinstatement hold mechanism — non-optional, matches the real
+  // BookingRow shape (DB: NOT NULL DEFAULT false).
   is_admin_hold: boolean
   admin_hold_expires_at: string | null
   profile: {
@@ -349,5 +356,327 @@ describe('BookingsTable — known interaction: past+paid+confirmed+unpaid render
     const desktopRow = container.querySelector('div.hidden.md\\:block table tbody tr') as HTMLElement
     expect(desktopRow.textContent).toContain('No-show')
     expect(desktopRow.textContent).toContain('Send Payment Link')
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// showReinstate / showReleaseReinstatement / narrowed showDemote — three-way
+// mutual exclusivity (SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md
+// §4.8, flagged as needing dedicated coverage by the architect's own "Test
+// surface" note). The three booleans must never render together for the
+// SAME row shape: a reinstated-origin hold shows Release-Reinstatement but
+// NOT Demote; a waitlist-promotion/payment-remediation-origin hold shows
+// Demote but NOT Release-Reinstatement; a genuinely-reaped cancelled row
+// shows Reinstate; an event-cancelled row does NOT show Reinstate.
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('BookingsTable — showReinstate visibility (isPaidEvent && cancelled && !cancellation_reason && cancelled_at && !stripe_payment_id && refunded=0)', () => {
+  it('renders "Reinstate" for a genuinely-reaped cancelled row on a PAID event (desktop + mobile)', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[
+          booking({
+            status: 'cancelled',
+            cancelled_at: '2026-08-08T10:00:00.000Z',
+            cancellation_reason: null,
+            stripe_payment_id: null,
+            refunded_amount_pence: 0,
+          }),
+        ]}
+        eventId="evt-1"
+        isPaidEvent
+      />,
+    )
+    const desktopTable = container.querySelector('div.hidden.md\\:block table') as HTMLElement
+    const mobileCard = container.querySelector('ul.md\\:hidden article') as HTMLElement
+    expect(desktopTable.textContent).toContain('Reinstate')
+    expect(mobileCard.textContent).toContain('Reinstate')
+  })
+
+  it('does NOT render "Reinstate" on a FREE event (isPaidEvent=false) even for an otherwise-eligible cancelled row', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[
+          booking({
+            status: 'cancelled',
+            cancelled_at: '2026-08-08T10:00:00.000Z',
+            cancellation_reason: null,
+            stripe_payment_id: null,
+            refunded_amount_pence: 0,
+          }),
+        ]}
+        eventId="evt-1"
+      />,
+    )
+    expect(container.textContent).not.toContain('Reinstate')
+  })
+
+  it('INVARIANT: does NOT render "Reinstate" for an event-cancelled row (cancellation_reason IS NOT NULL — the event-cancellation origin, NOT a reap)', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[
+          booking({
+            status: 'cancelled',
+            cancelled_at: '2026-08-08T10:00:00.000Z',
+            cancellation_reason: 'Event was cancelled by admin',
+            stripe_payment_id: null,
+            refunded_amount_pence: 0,
+          }),
+        ]}
+        eventId="evt-1"
+        isPaidEvent
+      />,
+    )
+    expect(container.textContent).not.toContain('Reinstate')
+  })
+
+  it('does NOT render "Reinstate" when cancelled_at is NULL (the createPaidCheckout/abandonPendingCheckout rollback shape — not a reap)', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[
+          booking({
+            status: 'cancelled',
+            cancelled_at: null,
+            cancellation_reason: null,
+            stripe_payment_id: null,
+            refunded_amount_pence: 0,
+          }),
+        ]}
+        eventId="evt-1"
+        isPaidEvent
+      />,
+    )
+    expect(container.textContent).not.toContain('Reinstate')
+  })
+
+  it('does NOT render "Reinstate" when the row already has a stripe_payment_id (a paid-then-refunded-adjacent shape, never reinstatable)', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[
+          booking({
+            status: 'cancelled',
+            cancelled_at: '2026-08-08T10:00:00.000Z',
+            cancellation_reason: null,
+            stripe_payment_id: 'pi_old_payment',
+            refunded_amount_pence: 0,
+          }),
+        ]}
+        eventId="evt-1"
+        isPaidEvent
+      />,
+    )
+    expect(container.textContent).not.toContain('Reinstate')
+  })
+
+  it('does NOT render "Reinstate" when the row was refunded (refunded_amount_pence > 0)', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[
+          booking({
+            status: 'cancelled',
+            cancelled_at: '2026-08-08T10:00:00.000Z',
+            cancellation_reason: null,
+            stripe_payment_id: null,
+            refunded_amount_pence: 5000,
+          }),
+        ]}
+        eventId="evt-1"
+        isPaidEvent
+      />,
+    )
+    expect(container.textContent).not.toContain('Reinstate')
+  })
+
+  it('does NOT render "Reinstate" for a non-cancelled row (e.g. confirmed) even with a stray cancelled_at', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[
+          booking({
+            status: 'confirmed',
+            cancelled_at: '2026-08-08T10:00:00.000Z',
+            cancellation_reason: null,
+          }),
+        ]}
+        eventId="evt-1"
+        isPaidEvent
+      />,
+    )
+    expect(container.textContent).not.toContain('Reinstate')
+  })
+})
+
+describe('BookingsTable — CancelledInfo ("Cancelled N ago" + reason)', () => {
+  it('shows "Cancelled ... ago" for a cancelled row with cancelled_at, with no "Reason:" line when cancellation_reason is null', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[
+          booking({
+            status: 'cancelled',
+            cancelled_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+            cancellation_reason: null,
+          }),
+        ]}
+        eventId="evt-1"
+      />,
+    )
+    expect(container.textContent).toMatch(/Cancelled .* ago/)
+    expect(container.textContent).not.toContain('Reason:')
+  })
+
+  it('shows the "Reason:" line when cancellation_reason is present (event-cancellation origin)', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[
+          booking({
+            status: 'cancelled',
+            cancelled_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+            cancellation_reason: 'Event was cancelled by admin',
+          }),
+        ]}
+        eventId="evt-1"
+      />,
+    )
+    expect(container.textContent).toContain('Reason: Event was cancelled by admin')
+  })
+
+  it('renders nothing for a cancelled row with no cancelled_at (rollback shape, not a reap/cancellation)', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[booking({ status: 'cancelled', cancelled_at: null })]}
+        eventId="evt-1"
+      />,
+    )
+    expect(container.textContent).not.toMatch(/Cancelled .* ago/)
+  })
+
+  it('renders nothing for a non-cancelled row even if cancelled_at happens to be set', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[booking({ status: 'confirmed', cancelled_at: '2026-08-08T10:00:00.000Z' })]}
+        eventId="evt-1"
+      />,
+    )
+    expect(container.textContent).not.toMatch(/Cancelled .* ago/)
+  })
+})
+
+describe('BookingsTable — THREE-WAY MUTUAL EXCLUSIVITY: showDemote / showReinstate / showReleaseReinstatement', () => {
+  it('INVARIANT: a reinstated-origin hold (is_admin_hold + pending_payment + cancelled_at SET) shows "Cancel Reinstatement" but NOT "Move to Waitlist"', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[
+          booking({
+            status: 'pending_payment',
+            is_admin_hold: true,
+            cancelled_at: '2026-08-08T10:00:00.000Z', // origin marker (design doc §3.2/§3.3)
+          }),
+        ]}
+        eventId="evt-1"
+      />,
+    )
+    expect(container.textContent).toContain('Cancel Reinstatement')
+    expect(container.textContent).not.toContain('Move to Waitlist')
+  })
+
+  it('INVARIANT: a waitlist-promotion/payment-remediation-origin hold (is_admin_hold + pending_payment + cancelled_at NULL) shows "Move to Waitlist" but NOT "Cancel Reinstatement"', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[
+          booking({
+            status: 'pending_payment',
+            is_admin_hold: true,
+            cancelled_at: null, // no origin marker — NOT a reinstatement
+          }),
+        ]}
+        eventId="evt-1"
+      />,
+    )
+    expect(container.textContent).toContain('Move to Waitlist')
+    expect(container.textContent).not.toContain('Cancel Reinstatement')
+  })
+
+  it('a genuinely-reaped cancelled row shows "Reinstate" but NEITHER "Move to Waitlist" NOR "Cancel Reinstatement"', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[
+          booking({
+            status: 'cancelled',
+            cancelled_at: '2026-08-08T10:00:00.000Z',
+            cancellation_reason: null,
+            stripe_payment_id: null,
+            refunded_amount_pence: 0,
+            is_admin_hold: false,
+          }),
+        ]}
+        eventId="evt-1"
+        isPaidEvent
+      />,
+    )
+    expect(container.textContent).toContain('Reinstate')
+    expect(container.textContent).not.toContain('Move to Waitlist')
+    expect(container.textContent).not.toContain('Cancel Reinstatement')
+  })
+
+  it('an event-cancelled row (cancellation_reason set) shows NONE of the three action buttons', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[
+          booking({
+            status: 'cancelled',
+            cancelled_at: '2026-08-08T10:00:00.000Z',
+            cancellation_reason: 'Event was cancelled by admin',
+            stripe_payment_id: null,
+            refunded_amount_pence: 0,
+            is_admin_hold: false,
+          }),
+        ]}
+        eventId="evt-1"
+        isPaidEvent
+      />,
+    )
+    expect(container.textContent).not.toContain('Reinstate')
+    expect(container.textContent).not.toContain('Move to Waitlist')
+    expect(container.textContent).not.toContain('Cancel Reinstatement')
+  })
+
+  it('CROSS-CHECK: across all four row shapes in this suite, at most ONE of the three buttons ever renders for a single row', () => {
+    const shapes: Array<Partial<TestBooking>> = [
+      { status: 'pending_payment', is_admin_hold: true, cancelled_at: '2026-08-08T10:00:00.000Z' },
+      { status: 'pending_payment', is_admin_hold: true, cancelled_at: null },
+      {
+        status: 'cancelled',
+        cancelled_at: '2026-08-08T10:00:00.000Z',
+        cancellation_reason: null,
+        stripe_payment_id: null,
+        refunded_amount_pence: 0,
+        is_admin_hold: false,
+      },
+      {
+        status: 'cancelled',
+        cancelled_at: '2026-08-08T10:00:00.000Z',
+        cancellation_reason: 'Event was cancelled by admin',
+        stripe_payment_id: null,
+        refunded_amount_pence: 0,
+        is_admin_hold: false,
+      },
+    ]
+
+    for (const shape of shapes) {
+      const { container } = render(
+        <BookingsTable bookings={[booking(shape)]} eventId="evt-1" isPaidEvent />,
+      )
+      // NOTE: 'Reinstate' is a literal SUBSTRING of 'Cancel Reinstatement'
+      // ("Reinstate" + "ment") — a naive `.includes('Reinstate')` would
+      // double-count a row that only renders the "Cancel Reinstatement"
+      // button. Match on actual <button> element text instead, which is
+      // exactly one of the three literal labels with no overlap risk.
+      const buttonLabels = [...container.querySelectorAll('button')]
+        .map((b) => b.textContent?.trim())
+        .filter((t): t is string =>
+          t === 'Move to Waitlist' || t === 'Cancel Reinstatement' || t === 'Reinstate',
+        )
+      expect(buttonLabels.length).toBeLessThanOrEqual(2) // desktop + mobile copy of the SAME button
+      expect(new Set(buttonLabels).size).toBeLessThanOrEqual(1) // but never TWO DIFFERENT labels
+    }
   })
 })

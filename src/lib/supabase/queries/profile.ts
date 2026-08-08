@@ -140,11 +140,25 @@ export async function getMyPhone(): Promise<string | null> {
 
 /**
  * Fetch all bookings for a user with nested event data.
- * Returns confirmed, waitlisted, and past — frontend splits by date/status.
+ * Returns confirmed, waitlisted, pending_payment, and past — frontend
+ * splits by date/status.
  *
  * Nested event row includes `primary_tag: { slug, label }` from the
  * event_tags + tags join (F1a). The legacy `category` column was dropped
  * by F1b-schema and is no longer selected.
+ *
+ * `booking_fee_pence` + `is_admin_hold` added by
+ * SYSTEM-DESIGN-pending-payment-visibility.md §6: the frontend needs
+ * both to render a `pending_payment` booking card — `booking_fee_pence`
+ * (alongside the already-selected `price_at_booking`) for the
+ * ticket+fee price breakdown, and `is_admin_hold` to decide which of two
+ * card states to render (resumable self-service vs. admin-managed —
+ * getting this branch wrong would surface a resume button the
+ * `resumePendingCheckout` Server Action would just reject anyway).
+ * `stripe_checkout_session_id` and `pending_payment_reminder_sent_at`
+ * are deliberately NOT selected — resume always mints a fresh session
+ * (never reuses a stored one) and the reminder timestamp is backend-only
+ * bookkeeping, not rendered anywhere member-facing.
  */
 export async function getMyBookings(
   userId: string,
@@ -155,7 +169,7 @@ export async function getMyBookings(
     .from('bookings')
     .select(
       `
-      id, user_id, event_id, status, waitlist_position, price_at_booking, booked_at, created_at, updated_at, deleted_at,
+      id, user_id, event_id, status, waitlist_position, price_at_booking, booking_fee_pence, is_admin_hold, booked_at, created_at, updated_at, deleted_at,
       event:events(
         id, slug, title, short_description, date_time, end_time, venue_name, venue_address, image_url, dress_code,
         event_tags!inner(is_primary, tags!inner(slug, label))

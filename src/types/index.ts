@@ -145,6 +145,34 @@ export interface Booking {
    * Added by migration 20260517000001 (refund-fee-deduction).
    */
   stripe_fee_pence:  number
+  /**
+   * True while this row is a pending_payment seat hold created by an
+   * admin (waitlist promotion or payment remediation), as opposed to a
+   * normal self-service checkout. Already existed as a DB column
+   * (20260713000001) and on the admin-only `AdminEventBooking` type;
+   * added here too by SYSTEM-DESIGN-pending-payment-visibility.md §2.1
+   * so member-facing surfaces (getMyBookings/BookingWithEvent) can
+   * branch on it — a self-service "Complete Payment" resume button must
+   * never render for an admin-managed hold (see
+   * resumePendingBookingCheckout's own rejection of these rows).
+   *
+   * Declared OPTIONAL (not every `Booking` construction site in this
+   * codebase — e.g. existing test fixtures for BookingCard/BookingsList/
+   * splitBookings — selects or sets this column), matching the
+   * architect spec's "optional-safe additive field" framing literally.
+   * `getMyBookings` DOES select it (see profile.ts); callers that don't
+   * select it should treat `undefined` the same as `false`.
+   */
+  is_admin_hold?:   boolean
+  /**
+   * Set once the abandoned-checkout reminder email has been sent (or
+   * attempted) for this pending_payment booking. NULL/undefined = not
+   * yet sent. Backend-only bookkeeping (pending-payment-reminder cron,
+   * 20260808000002) — NOT selected by getMyBookings and not rendered
+   * anywhere member-facing (see SYSTEM-DESIGN-pending-payment-visibility.md
+   * §2.1, §6). Optional for the same reason as `is_admin_hold` above.
+   */
+  pending_payment_reminder_sent_at?: string | null
   booked_at:        string
   created_at:       string
   updated_at:       string

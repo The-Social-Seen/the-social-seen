@@ -8,6 +8,8 @@ import { exportEventAttendeesCSV, setNoShow } from '@/app/(admin)/admin/actions'
 import PromoteButton from './PromoteButton'
 import SendPaymentLinkButton from './SendPaymentLinkButton'
 import DemoteHoldButton from './DemoteHoldButton'
+import ReinstateBookingButton from './ReinstateBookingButton'
+import ReleaseReinstatedHoldButton from './ReleaseReinstatedHoldButton'
 import MobilePhoneValue from '@/components/shared/MobilePhoneValue'
 
 // Filter tabs use a shorter "Waitlist" label below md: so all five fit
@@ -27,10 +29,20 @@ interface BookingRow {
   stripe_refund_id?: string | null
   refunded_amount_pence?: number | null
   cancelled_at?: string | null
-  // Admin waitlist-promotion / payment-remediation hold mechanism
-  // (SYSTEM-DESIGN-admin-waitlist-promotion-payment.md). Data already
-  // flows through from getEventBookings via AdminEventBooking; non-optional
-  // booleans, matching the DB column (NOT NULL DEFAULT false).
+  // Admin reinstate-cancelled-booking mechanism
+  // (SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md §4.8). Data
+  // already flows through from getEventBookings via AdminEventBooking —
+  // this is a pure additive type fix, not a new query column. NULL for a
+  // genuinely-reaped row (the target of the Reinstate button); non-NULL
+  // for a row cancelled via the admin event-cancellation flow (NOT
+  // reinstatable — see showReinstate below).
+  cancellation_reason?: string | null
+  // Admin waitlist-promotion / payment-remediation / cancelled-
+  // reinstatement hold mechanism (SYSTEM-DESIGN-admin-waitlist-
+  // promotion-payment.md, SYSTEM-DESIGN-admin-reinstate-cancelled-
+  // booking.md). Data already flows through from getEventBookings via
+  // AdminEventBooking; non-optional booleans, matching the DB column
+  // (NOT NULL DEFAULT false).
   is_admin_hold: boolean
   admin_hold_expires_at: string | null
   // phone_number is admin-only PII merged server-side via the
@@ -102,6 +114,32 @@ function statusBadge(status: string) {
     default:
       return <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-bg-secondary text-text-tertiary">{status}</span>
   }
+}
+
+/**
+ * "Cancelled N ago" (+ optional "Reason: ..." line) shown under the
+ * status badge for any `cancelled` row with a `cancelled_at` — an admin
+ * looking at a cancelled row shouldn't have to guess why, whether or not
+ * it's eligible for reinstatement (UX-REVIEW-admin-reinstate-cancelled-
+ * booking.md §2.1 — copy final). Reuses the codebase's existing
+ * `formatDistanceToNow(date, { addSuffix: true })` convention, already
+ * used identically elsewhere in this file for `created_at`.
+ */
+function CancelledInfo({ booking }: { booking: BookingRow }) {
+  if (booking.status !== 'cancelled' || !booking.cancelled_at) return null
+  return (
+    <p className="text-xs text-text-tertiary mt-0.5">
+      Cancelled {formatDistanceToNow(new Date(booking.cancelled_at), { addSuffix: true })}
+      {booking.cancellation_reason && (
+        <>
+          <br />
+          <span className="truncate" title={booking.cancellation_reason}>
+            Reason: {booking.cancellation_reason}
+          </span>
+        </>
+      )}
+    </p>
+  )
 }
 
 export default function BookingsTable({
@@ -188,8 +226,32 @@ export default function BookingsTable({
                     : booking.profile
                   const showSendPaymentLink =
                     isPaidEvent && booking.status === 'confirmed' && !booking.stripe_payment_id
+                  // NARROWED (SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md
+                  // §4.8 — required, not optional): a cancelled-reinstatement
+                  // hold (Gap C) is ALSO is_admin_hold===true &&
+                  // status==='pending_payment', but its release button is
+                  // ReleaseReinstatedHoldButton, not this one — excluded here
+                  // via the same cancelled_at-as-origin-marker signal the RPCs
+                  // themselves use (design doc §3.2/§3.3). Without this
+                  // narrowing, the old "Release hold" button would show (and
+                  // be correctly rejected by the RPC's hardened guard if
+                  // clicked — not unsafe, just dead-clicking/confusing) on a
+                  // reinstated-origin row.
                   const showDemote =
-                    booking.is_admin_hold === true && booking.status === 'pending_payment'
+                    booking.is_admin_hold === true &&
+                    booking.status === 'pending_payment' &&
+                    !booking.cancelled_at
+                  const showReinstate =
+                    isPaidEvent &&
+                    booking.status === 'cancelled' &&
+                    !booking.cancellation_reason &&
+                    !!booking.cancelled_at &&
+                    !booking.stripe_payment_id &&
+                    (booking.refunded_amount_pence ?? 0) === 0
+                  const showReleaseReinstatement =
+                    booking.is_admin_hold === true &&
+                    booking.status === 'pending_payment' &&
+                    !!booking.cancelled_at
                   return (
                     <tr key={booking.id} className="hover:bg-bg-secondary/50 transition-colors">
                       <td className="py-3 pr-4 font-medium text-text-primary">
@@ -204,7 +266,10 @@ export default function BookingsTable({
                           name={profile?.full_name ?? 'this attendee'}
                         />
                       </td>
-                      <td className="py-3 pr-4">{statusBadge(booking.status)}</td>
+                      <td className="py-3 pr-4">
+                        {statusBadge(booking.status)}
+                        <CancelledInfo booking={booking} />
+                      </td>
                       <td className="py-3 pr-4">
                         {paymentBadge(booking) ?? (
                           <span className="text-xs text-text-tertiary">&mdash;</span>
@@ -232,6 +297,12 @@ export default function BookingsTable({
                         {showDemote && (
                           <DemoteHoldButton bookingId={booking.id} />
                         )}
+                        {showReinstate && (
+                          <ReinstateBookingButton bookingId={booking.id} />
+                        )}
+                        {showReleaseReinstatement && (
+                          <ReleaseReinstatedHoldButton bookingId={booking.id} />
+                        )}
                       </td>
                     </tr>
                   )
@@ -251,10 +322,32 @@ export default function BookingsTable({
               const showUndoNoShow = isPastEvent && booking.status === 'no_show'
               const showSendPaymentLink =
                 isPaidEvent && booking.status === 'confirmed' && !booking.stripe_payment_id
+              // NARROWED — see the desktop-table copy of this boolean above
+              // for the full explanation (SYSTEM-DESIGN-admin-reinstate-
+              // cancelled-booking.md §4.8, required not optional).
               const showDemote =
-                booking.is_admin_hold === true && booking.status === 'pending_payment'
+                booking.is_admin_hold === true &&
+                booking.status === 'pending_payment' &&
+                !booking.cancelled_at
+              const showReinstate =
+                isPaidEvent &&
+                booking.status === 'cancelled' &&
+                !booking.cancellation_reason &&
+                !!booking.cancelled_at &&
+                !booking.stripe_payment_id &&
+                (booking.refunded_amount_pence ?? 0) === 0
+              const showReleaseReinstatement =
+                booking.is_admin_hold === true &&
+                booking.status === 'pending_payment' &&
+                !!booking.cancelled_at
               const hasAction =
-                showPromote || showNoShow || showUndoNoShow || showSendPaymentLink || showDemote
+                showPromote ||
+                showNoShow ||
+                showUndoNoShow ||
+                showSendPaymentLink ||
+                showDemote ||
+                showReinstate ||
+                showReleaseReinstatement
               const payBadge = paymentBadge(booking)
               return (
                 <li key={booking.id}>
@@ -274,7 +367,10 @@ export default function BookingsTable({
                           </p>
                         )}
                       </div>
-                      <div className="shrink-0">{statusBadge(booking.status)}</div>
+                      <div className="shrink-0 text-right">
+                        {statusBadge(booking.status)}
+                        <CancelledInfo booking={booking} />
+                      </div>
                     </div>
 
                     {/* Body */}
@@ -328,6 +424,12 @@ export default function BookingsTable({
                         )}
                         {showDemote && (
                           <DemoteHoldButton bookingId={booking.id} fullWidth />
+                        )}
+                        {showReinstate && (
+                          <ReinstateBookingButton bookingId={booking.id} fullWidth />
+                        )}
+                        {showReleaseReinstatement && (
+                          <ReleaseReinstatedHoldButton bookingId={booking.id} fullWidth />
                         )}
                       </div>
                     )}

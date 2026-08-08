@@ -2,12 +2,24 @@
 
 import { revalidatePath } from 'next/cache'
 import { createServerClient } from '@/lib/supabase/server'
+import { resumePendingBookingCheckout } from '@/lib/bookings/resume-checkout'
 
 // ── Result type ──────────────────────────────────────────────────────────────
 
 interface ActionResult {
   success: boolean
   error?: string
+  /**
+   * Stripe-hosted Checkout URL. Populated by `resumePendingCheckout` on
+   * success — the client MUST navigate to this URL to complete payment.
+   * Same optional field already used by the `ActionResult` shape in
+   * src/app/events/[slug]/actions.ts (createPaidCheckout /
+   * claimWaitlistSpot) — this codebase's established pattern is a
+   * small, per-file `ActionResult` type rather than one shared import
+   * (see e.g. that file's own copy), so this is a deliberate,
+   * structurally-identical duplicate, not a divergence.
+   */
+  checkoutUrl?: string
 }
 
 // ── submitReview ─────────────────────────────────────────────────────────────
@@ -136,4 +148,47 @@ export async function submitReview(input: {
   revalidatePath('/profile')
 
   return { success: true }
+}
+
+// ── resumePendingCheckout ──────────────────────────────────────────────────
+
+/**
+ * Resume payment on a self-service `pending_payment` booking whose
+ * original Stripe Checkout was abandoned. Mints a brand-new Checkout
+ * Session (never reuses a stale one — see
+ * SYSTEM-DESIGN-pending-payment-visibility.md §1) and returns the URL
+ * the client must navigate to.
+ *
+ * Thin auth wrapper over `resumePendingBookingCheckout`
+ * (src/lib/bookings/resume-checkout.ts) — see that function's doc
+ * comment for the full 11-step algorithm (spec §5.1/§5.2). Also called
+ * from `GET /bookings/resume/[bookingId]` (the reminder email's CTA
+ * link) — both entry points share this one implementation.
+ */
+export async function resumePendingCheckout(bookingId: string): Promise<ActionResult> {
+  if (!bookingId) {
+    return { success: false, error: 'Booking ID is required' }
+  }
+
+  const supabase = await createServerClient()
+
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser()
+  if (authError || !user) {
+    return { success: false, error: 'Authentication required' }
+  }
+
+  const result = await resumePendingBookingCheckout(supabase, user.id, bookingId)
+
+  if (result.success) {
+    revalidatePath('/bookings')
+  }
+
+  return {
+    success: result.success,
+    error: result.error,
+    checkoutUrl: result.checkoutUrl,
+  }
 }

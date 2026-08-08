@@ -56,7 +56,7 @@ export default async function ProfilePage() {
 
   const profileWithPhone = { ...profile, phone_number: phone }
 
-  const { upcoming, past, waitlisted } = splitBookings(bookings)
+  const { upcoming, past, waitlisted, pendingPayment } = splitBookings(bookings)
   const reviewableEventIds = new Set(reviewableEvents.map((e) => e.id))
 
   return (
@@ -68,6 +68,7 @@ export default async function ProfilePage() {
           upcoming={upcoming}
           past={past}
           waitlisted={waitlisted}
+          pendingPayment={pendingPayment}
           reviewableEventIds={reviewableEventIds}
           emailPreferences={emailPreferences}
           smsPreferences={smsPreferences}

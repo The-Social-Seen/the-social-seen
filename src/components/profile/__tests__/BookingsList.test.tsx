@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react'
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import type { BookingWithEvent } from '@/types'
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
@@ -18,14 +18,25 @@ vi.mock('next/link', () => ({
   ),
 }))
 
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ refresh: vi.fn() }),
+}))
+
 vi.mock('@/components/reviews/ReviewForm', () => ({
   default: () => <div data-testid="review-form" />,
+}))
+
+const mockResumePendingCheckout = vi.fn()
+vi.mock('@/app/(member)/bookings/actions', () => ({
+  resumePendingCheckout: (...args: unknown[]) => mockResumePendingCheckout(...args),
 }))
 
 vi.mock('@/lib/utils/dates', () => ({
   formatDateCard: () => 'Sat 10 May',
   formatTime: () => '7:00 PM',
   isWithin48Hours: () => false,
+  getPendingPaymentDeadline: () => new Date('2026-05-10T15:45:00Z'),
+  isPendingPaymentDeadlinePassed: () => false,
 }))
 
 vi.mock('@/lib/utils/images', () => ({
@@ -40,6 +51,7 @@ vi.mock('lucide-react', () => {
     CalendarSearch: icon,
     CalendarPlus: icon,
     Check: icon,
+    Clock: icon,
     Copy: icon,
     Share2: icon,
     Users: icon,
@@ -160,8 +172,12 @@ function makeBooking(overrides: Partial<BookingWithEvent> & { id?: string } = {}
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('BookingsList', () => {
+  beforeEach(() => {
+    mockResumePendingCheckout.mockReset()
+  })
+
   it('renders three tab triggers', () => {
-    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
+    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} pendingPayment={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
 
     const tabs = screen.getAllByRole('tab')
     expect(tabs).toHaveLength(3)
@@ -173,15 +189,25 @@ describe('BookingsList', () => {
   it('shows correct counts on tabs', () => {
     const upcoming = [makeBooking({ id: 'b1' }), makeBooking({ id: 'b2' })]
 
-    render(<BookingsList upcoming={upcoming} past={[]} waitlisted={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
+    render(<BookingsList upcoming={upcoming} past={[]} waitlisted={[]} pendingPayment={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
 
     expect(screen.getByText('2')).toBeTruthy()
     const zeros = screen.getAllByText('0')
     expect(zeros).toHaveLength(2)
   })
 
+  it('includes pending_payment bookings in the Upcoming tab count', () => {
+    const upcoming = [makeBooking({ id: 'b1' })]
+    const pendingPayment = [makeBooking({ id: 'p1', status: 'pending_payment' })]
+
+    render(<BookingsList upcoming={upcoming} past={[]} waitlisted={[]} pendingPayment={pendingPayment} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
+
+    // Upcoming count = 1 confirmed + 1 pending_payment = 2
+    expect(screen.getByText('2')).toBeTruthy()
+  })
+
   it('shows upcoming empty state with CTA when no upcoming bookings', () => {
-    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
+    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} pendingPayment={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
 
     expect(screen.getByText(/Your next event awaits/)).toBeTruthy()
     const ctaLink = screen.getByText(/Browse what's coming up this month/)
@@ -189,7 +215,7 @@ describe('BookingsList', () => {
   })
 
   it('shows past empty state when past tab is clicked and empty', () => {
-    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
+    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} pendingPayment={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
 
     fireEvent.click(screen.getByRole('tab', { name: /Past/ }))
 
@@ -199,7 +225,7 @@ describe('BookingsList', () => {
   })
 
   it('shows waitlisted empty state when waitlisted tab is clicked and empty', () => {
-    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
+    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} pendingPayment={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
 
     fireEvent.click(screen.getByRole('tab', { name: /Waitlisted/ }))
 
@@ -211,7 +237,7 @@ describe('BookingsList', () => {
   it('renders BookingCards when upcoming bookings exist', () => {
     const upcoming = [makeBooking()]
 
-    render(<BookingsList upcoming={upcoming} past={[]} waitlisted={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
+    render(<BookingsList upcoming={upcoming} past={[]} waitlisted={[]} pendingPayment={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
 
     expect(screen.getByText('Wine & Wisdom')).toBeTruthy()
     expect(screen.getByText('Confirmed')).toBeTruthy()
@@ -238,7 +264,7 @@ describe('BookingsList', () => {
       }),
     ]
 
-    render(<BookingsList upcoming={[]} past={past} waitlisted={[]} reviewableEventIds={new Set(['evt-2'])} userName="Test User" userAvatar={null} />)
+    render(<BookingsList upcoming={[]} past={past} waitlisted={[]} pendingPayment={[]} reviewableEventIds={new Set(['evt-2'])} userName="Test User" userAvatar={null} />)
 
     fireEvent.click(screen.getByRole('tab', { name: /Past/ }))
 
@@ -255,10 +281,117 @@ describe('BookingsList', () => {
       }),
     ]
 
-    render(<BookingsList upcoming={[]} past={[]} waitlisted={waitlisted} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
+    render(<BookingsList upcoming={[]} past={[]} waitlisted={waitlisted} pendingPayment={[]} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
 
     fireEvent.click(screen.getByRole('tab', { name: /Waitlisted/ }))
 
     expect(screen.getByText('Waitlisted #2')).toBeTruthy()
+  })
+
+  // ── Pending-payment ─────────────────────────────────────────────────────
+
+  it('renders a pending_payment booking first in the Upcoming tab, ahead of confirmed bookings', () => {
+    const upcoming = [makeBooking({ id: 'confirmed-1' })]
+    const pendingPayment = [
+      makeBooking({
+        id: 'pending-1',
+        status: 'pending_payment',
+        event_id: 'evt-2',
+        event: {
+          id: 'evt-2',
+          slug: 'rooftop-party',
+          title: 'Summer Rooftop Party',
+          date_time: '2026-06-10T19:00:00Z',
+          end_time: '2026-06-10T23:00:00Z',
+          venue_name: 'The Terrace',
+          short_description: 'A short description',
+          venue_address: '1 London Rd',
+          image_url: null,
+          dress_code: null,
+          primary_tag: { slug: 'drinks-bars', label: 'Drinks & Bars' },
+        },
+      }),
+    ]
+
+    render(<BookingsList upcoming={upcoming} past={[]} waitlisted={[]} pendingPayment={pendingPayment} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
+
+    const cardTitles = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)
+    expect(cardTitles).toEqual(['Summer Rooftop Party', 'Wine & Wisdom'])
+    expect(screen.getByText('Payment Pending')).toBeTruthy()
+  })
+
+  it('shows the pending-payment banner (single booking) ranked above the review banner', () => {
+    const pendingPayment = [
+      makeBooking({ id: 'pending-1', status: 'pending_payment', event_id: 'evt-1' }),
+    ]
+    const past = [makeBooking({ id: 'past-1', event_id: 'evt-3' })]
+
+    render(
+      <BookingsList
+        upcoming={[]}
+        past={past}
+        waitlisted={[]}
+        pendingPayment={pendingPayment}
+        reviewableEventIds={new Set(['evt-3'])}
+        userName="Test User"
+        userAvatar={null}
+      />,
+    )
+
+    expect(screen.getByText('Finish booking Wine & Wisdom')).toBeTruthy()
+    expect(screen.queryByText(/How was/)).toBeNull()
+  })
+
+  it('shows generic copy for the pending-payment banner with 2+ bookings', () => {
+    const pendingPayment = [
+      makeBooking({ id: 'pending-1', status: 'pending_payment', event_id: 'evt-1' }),
+      makeBooking({ id: 'pending-2', status: 'pending_payment', event_id: 'evt-2' }),
+    ]
+
+    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} pendingPayment={pendingPayment} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
+
+    expect(screen.getByText('You have 2 bookings awaiting payment')).toBeTruthy()
+  })
+
+  it('resumes checkout directly when the single-booking pending-payment banner is clicked', async () => {
+    mockResumePendingCheckout.mockResolvedValue({
+      success: true,
+      checkoutUrl: 'https://checkout.stripe.com/session-1',
+    })
+    Object.defineProperty(window, 'location', {
+      value: { href: '' },
+      writable: true,
+    })
+
+    const pendingPayment = [
+      makeBooking({ id: 'pending-1', status: 'pending_payment', event_id: 'evt-1' }),
+    ]
+
+    render(<BookingsList upcoming={[]} past={[]} waitlisted={[]} pendingPayment={pendingPayment} reviewableEventIds={new Set()} userName="Test User" userAvatar={null} />)
+
+    fireEvent.click(screen.getByText('Finish booking Wine & Wisdom'))
+
+    await waitFor(() => expect(mockResumePendingCheckout).toHaveBeenCalledWith('pending-1'))
+    await waitFor(() =>
+      expect(window.location.href).toBe('https://checkout.stripe.com/session-1'),
+    )
+  })
+
+  it('falls back to the review banner when there are no pending-payment bookings', () => {
+    const past = [makeBooking({ id: 'past-1', event_id: 'evt-3' })]
+
+    render(
+      <BookingsList
+        upcoming={[]}
+        past={past}
+        waitlisted={[]}
+        pendingPayment={[]}
+        reviewableEventIds={new Set(['evt-3'])}
+        userName="Test User"
+        userAvatar={null}
+      />,
+    )
+
+    expect(screen.getByText(/How was Wine & Wisdom/)).toBeTruthy()
   })
 })

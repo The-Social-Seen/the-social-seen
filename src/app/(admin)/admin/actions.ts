@@ -17,7 +17,9 @@ import { getStripeClient } from '@/lib/stripe/server'
 import {
   createAdminBookingHold,
   createAdminPaymentRemediationHold,
+  createAdminReinstatementHold,
   releaseAdminBookingHold,
+  releaseReinstatedBookingHold,
 } from '@/lib/bookings/admin-hold'
 import * as Sentry from '@sentry/nextjs'
 import { z } from 'zod'
@@ -1948,6 +1950,128 @@ export async function demoteAdminHold(bookingId: string) {
     status: 'waitlisted' as const,
     waitlistPosition: result.waitlistPosition ?? null,
   }
+}
+
+/**
+ * Gap C (SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md): reinstates
+ * an eligible reaped `cancelled` booking on a PAID event that has room
+ * again, sending the member a fresh Stripe payment link. Urgent incident
+ * response — four real bookings (Amaya Kaur, Senam Paya, Christian I,
+ * Laura Florez Perez) were auto-cancelled by
+ * `reap_stale_pending_bookings()` before their payment window could be
+ * extended, and the event now has room again freed by exactly those four
+ * cancellations.
+ *
+ * Holds the booking as `pending_payment` via `createAdminReinstatementHold`
+ * (→ `admin_reinstate_cancelled_booking_for_payment`, which re-validates
+ * the full safety-critical eligibility predicate under lock — §1.5 of
+ * the design doc, including the owning-profile-not-soft-deleted check —
+ * and DOES capacity-check, unlike Gap A) and emails a template that does
+ * NOT imply the member is still on the waitlist or still holds a
+ * confirmed seat (§4.6).
+ *
+ * Pre-validates status/event.price in TS BEFORE ever calling the RPC —
+ * belt-and-braces, matching this family's established habit (see
+ * sendPaymentLinkForConfirmedBooking above). The RPC re-validates
+ * everything that matters — including the safety-critical checks this
+ * pre-check does NOT duplicate (cancellation_reason, stripe_payment_id,
+ * refunded_amount_pence, is_admin_hold, other-active-booking,
+ * profile.deleted_at) — under lock.
+ *
+ * `holdExpiresAt` hardcoded to `null` — same deferred-cron tradeoff as
+ * promoteFromWaitlist/sendPaymentLinkForConfirmedBooking above (design
+ * doc §6): no cron exists to act on a non-null deadline for ANY origin
+ * yet. This origin's urgency is instead addressed by a mandatory,
+ * first-class manual release action (`releaseReinstatedHold` below).
+ */
+export async function reinstateCancelledBooking(bookingId: string) {
+  const { supabase } = await requireAdmin()
+  if (!bookingId) return { error: 'Booking ID is required' }
+
+  const { data: booking, error: bookingError } = await supabase
+    .from('bookings')
+    .select('id, event_id, user_id, status')
+    .eq('id', bookingId)
+    .is('deleted_at', null)
+    .single()
+  if (bookingError || !booking) return { error: 'Booking not found' }
+  if (booking.status !== 'cancelled') {
+    return { error: 'Only cancelled bookings can be reinstated' }
+  }
+
+  const { data: event } = await supabase
+    .from('events')
+    .select('id, slug, price')
+    .eq('id', booking.event_id)
+    .single()
+  if (!event) return { error: 'Event not found' }
+  if (event.price === 0) {
+    return { error: 'This is a free event — reinstate by booking directly, not via this tool' }
+  }
+
+  // holdExpiresAt hardcoded null — see design doc §6. No cron exists to
+  // act on a non-null deadline for ANY origin yet; this origin has a
+  // mandatory manual release action instead (releaseReinstatedHold below).
+  const result = await createAdminReinstatementHold(supabase, bookingId, { holdExpiresAt: null })
+  if (!result.success) return { error: result.error }
+
+  const { data: profile } = await supabase
+    .from('profiles').select('full_name').eq('id', booking.user_id).single()
+
+  revalidatePath('/admin/events')
+  revalidatePath(`/admin/events/${event.id}/bookings`)
+  revalidatePath(`/events/${event.slug}`)
+  revalidatePath('/bookings')
+
+  return {
+    success: true,
+    memberName: profile?.full_name ?? 'Member',
+    status: 'pending_payment' as const,
+    holdExpiresAt: result.holdExpiresAt ?? null,
+  }
+}
+
+/**
+ * Gap C's own release action (SYSTEM-DESIGN-admin-reinstate-cancelled-
+ * booking.md §4.2/§4.7/§6): manually release an active cancelled-
+ * reinstatement `pending_payment` hold back to `cancelled` if the member
+ * doesn't pay. Unlike `demoteAdminHold` above, this is NOT a stand-in for
+ * a not-yet-built cron — it is the PRIMARY, mandatory release path for
+ * this origin by design (§6): reinstating a reaped booking is inherently
+ * a "second chance" for a spot that was already lost once, so a
+ * first-class manual release exists from day one rather than being
+ * deferred.
+ *
+ * Reverts to `cancelled` — never `waitlisted` (this booking was never on
+ * the waitlist this cycle; see `releaseReinstatedBookingHold`'s own doc
+ * comment for the full reasoning).
+ *
+ * Pre-fetches booking (event_id, user_id) for the revalidatePath targets
+ * and the success message only — the RPC re-validates everything that
+ * matters for correctness under lock, same convention as demoteAdminHold.
+ */
+export async function releaseReinstatedHold(bookingId: string) {
+  const { supabase } = await requireAdmin()
+  if (!bookingId) return { error: 'Booking ID is required' }
+
+  const { data: booking, error: bookingError } = await supabase
+    .from('bookings').select('id, event_id, user_id').eq('id', bookingId).is('deleted_at', null).single()
+  if (bookingError || !booking) return { error: 'Booking not found' }
+
+  const result = await releaseReinstatedBookingHold(supabase, bookingId)
+  if (!result.success) return { error: result.error }
+
+  const [{ data: event }, { data: profile }] = await Promise.all([
+    supabase.from('events').select('slug').eq('id', booking.event_id).single(),
+    supabase.from('profiles').select('full_name').eq('id', booking.user_id).single(),
+  ])
+
+  revalidatePath('/admin/events')
+  revalidatePath(`/admin/events/${booking.event_id}/bookings`)
+  if (event?.slug) revalidatePath(`/events/${event.slug}`)
+  revalidatePath('/bookings')
+
+  return { success: true, memberName: profile?.full_name ?? 'Member', status: 'cancelled' as const }
 }
 
 export async function exportEventAttendeesCSV(eventId: string) {

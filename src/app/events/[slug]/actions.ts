@@ -584,7 +584,9 @@ async function resolveOrigin(): Promise<string> {
  */
 export async function abandonPendingCheckout(
   eventId: string,
-  options?: { from?: 'book' | 'claim' | 'admin_hold' | 'admin_remediation' },
+  options?: {
+    from?: 'book' | 'claim' | 'admin_hold' | 'admin_remediation' | 'admin_reinstate'
+  },
 ): Promise<ActionResult> {
   if (!eventId) {
     return { success: false, error: 'Event ID is required' }
@@ -599,7 +601,8 @@ export async function abandonPendingCheckout(
     return { success: false, error: 'Authentication required' }
   }
 
-  // Three possible prior states, three different honest rollbacks:
+  // Four possible prior states/origins, three actual rollback
+  // destinations:
   //   - 'claim' / 'admin_hold': the member arrived via a waitlist claim
   //     or an admin waitlist-promotion hold (createAdminBookingHold).
   //     Rolling back to `cancelled` would lose their waitlist position
@@ -614,14 +617,27 @@ export async function abandonPendingCheckout(
   //     feature exists to fix, just relabelled. Restore to `confirmed`
   //     instead — the honest "still holds the seat, still needs to pay"
   //     state they were in before this checkout attempt.
+  //   - 'admin_reinstate': the member arrived via an admin cancelled-
+  //     booking reinstatement hold (createAdminReinstatementHold,
+  //     SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md, "Gap C") —
+  //     they were `cancelled` (reaped) this whole cycle, never waitlisted
+  //     or confirmed. Restore to `cancelled` — the honest state they were
+  //     in before the admin's reinstatement attempt.
   //   - 'book' (default): a brand new booking abandoned mid-checkout —
   //     keep the original `cancelled` semantics.
+  // 'admin_reinstate' and the default 'book' case both resolve to
+  // 'cancelled' today — spelled out as its own branch (not folded into
+  // the final `: 'cancelled'` fallback) for readability/auditability, and
+  // because a future change to either one's target shouldn't silently
+  // affect the other.
   const rollbackStatus: BookingStatus =
     options?.from === 'admin_remediation'
       ? 'confirmed'
-      : options?.from === 'claim' || options?.from === 'admin_hold'
-        ? 'waitlisted'
-        : 'cancelled'
+      : options?.from === 'admin_reinstate'
+        ? 'cancelled'
+        : options?.from === 'claim' || options?.from === 'admin_hold'
+          ? 'waitlisted'
+          : 'cancelled'
 
   const { error } = await supabase
     .from('bookings')
