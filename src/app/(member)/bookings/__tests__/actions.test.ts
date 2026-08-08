@@ -14,11 +14,24 @@ vi.mock('@/lib/supabase/server', () => ({
   ),
 }))
 
+const mockRevalidatePath = vi.fn()
 vi.mock('next/cache', () => ({
-  revalidatePath: vi.fn(),
+  revalidatePath: (...args: unknown[]) => mockRevalidatePath(...args),
 }))
 
-import { submitReview } from '../actions'
+// `resumePendingCheckout` delegates entirely to
+// resumePendingBookingCheckout (src/lib/bookings/resume-checkout.ts,
+// covered exhaustively by its own dedicated test file). This file only
+// needs to pin the THIN-WRAPPER behaviour: the auth gate that runs
+// BEFORE the shared helper is ever called, correct delegation of args,
+// and the revalidatePath-on-success-only contract.
+const mockResumePendingBookingCheckout = vi.fn()
+vi.mock('@/lib/bookings/resume-checkout', () => ({
+  resumePendingBookingCheckout: (...args: unknown[]) =>
+    mockResumePendingBookingCheckout(...args),
+}))
+
+import { submitReview, resumePendingCheckout } from '../actions'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -280,5 +293,107 @@ describe('submitReview', () => {
     const result = await submitReview({ eventId: 'evt-1', rating: 3, reviewText: exactText })
 
     expect(result.success).toBe(true)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// resumePendingCheckout — thin auth wrapper over resumePendingBookingCheckout
+// (src/lib/bookings/resume-checkout.ts). See that module's own test file
+// for the exhaustive ownership/admin-hold/status/event/concurrency
+// coverage — this file only pins the Server Action's OWN contract: the
+// auth gate runs before the shared helper, delegation is correct, and
+// revalidatePath fires on success only.
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('resumePendingCheckout', () => {
+  it('returns "Booking ID is required" for an empty bookingId, WITHOUT even resolving auth', async () => {
+    const result = await resumePendingCheckout('')
+
+    expect(result).toEqual({ success: false, error: 'Booking ID is required' })
+    expect(mockGetUser).not.toHaveBeenCalled()
+    expect(mockResumePendingBookingCheckout).not.toHaveBeenCalled()
+  })
+
+  it('INVARIANT: unauthenticated callers are rejected BEFORE the shared helper is ever invoked', async () => {
+    unauthenticateUser()
+
+    const result = await resumePendingCheckout('bk-1')
+
+    expect(result).toEqual({ success: false, error: 'Authentication required' })
+    expect(mockResumePendingBookingCheckout).not.toHaveBeenCalled()
+    expect(mockRevalidatePath).not.toHaveBeenCalled()
+  })
+
+  it('delegates to resumePendingBookingCheckout with the server-scoped supabase client, the authenticated user id, and the given bookingId', async () => {
+    authenticateUser('user-42')
+    mockResumePendingBookingCheckout.mockResolvedValue({
+      success: true,
+      checkoutUrl: 'https://checkout.stripe.test/cs_mock',
+    })
+
+    await resumePendingCheckout('bk-99')
+
+    expect(mockResumePendingBookingCheckout).toHaveBeenCalledTimes(1)
+    const [, userIdArg, bookingIdArg] = mockResumePendingBookingCheckout.mock.calls[0] as [
+      unknown,
+      string,
+      string,
+    ]
+    expect(userIdArg).toBe('user-42')
+    expect(bookingIdArg).toBe('bk-99')
+  })
+
+  it('on success, revalidates /bookings and forwards the checkoutUrl', async () => {
+    authenticateUser('user-1')
+    mockResumePendingBookingCheckout.mockResolvedValue({
+      success: true,
+      checkoutUrl: 'https://checkout.stripe.test/cs_mock',
+    })
+
+    const result = await resumePendingCheckout('bk-1')
+
+    expect(result).toEqual({
+      success: true,
+      error: undefined,
+      checkoutUrl: 'https://checkout.stripe.test/cs_mock',
+    })
+    expect(mockRevalidatePath).toHaveBeenCalledWith('/bookings')
+  })
+
+  it('on failure, does NOT revalidate /bookings and forwards the error verbatim', async () => {
+    authenticateUser('user-1')
+    mockResumePendingBookingCheckout.mockResolvedValue({
+      success: false,
+      error: 'This booking is no longer awaiting payment.',
+    })
+
+    const result = await resumePendingCheckout('bk-1')
+
+    expect(result).toEqual({
+      success: false,
+      error: 'This booking is no longer awaiting payment.',
+      checkoutUrl: undefined,
+    })
+    expect(mockRevalidatePath).not.toHaveBeenCalled()
+  })
+
+  it('INVARIANT: cross-user attempts are rejected by the shared helper, not silently bypassed by this wrapper — the wrapper always passes the CALLING user\'s own id, never a client-supplied one', async () => {
+    // resumePendingCheckout's signature only accepts a bookingId — there
+    // is no userId parameter a caller could smuggle in to impersonate
+    // another member. This pins that the second positional arg passed
+    // to the shared helper is always the id resolved from the server's
+    // OWN session, confirming there is no code path where a client
+    // payload could influence which user's identity is used.
+    authenticateUser('user-legit')
+    mockResumePendingBookingCheckout.mockResolvedValue({
+      success: false,
+      error: 'Unauthorised',
+    })
+
+    const result = await resumePendingCheckout('bk-belongs-to-someone-else')
+
+    expect(result.success).toBe(false)
+    const [, userIdArg] = mockResumePendingBookingCheckout.mock.calls[0] as [unknown, string]
+    expect(userIdArg).toBe('user-legit')
   })
 })

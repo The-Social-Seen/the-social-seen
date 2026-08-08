@@ -140,6 +140,34 @@ export function isWithin48Hours(date: Date | string): boolean {
 }
 
 /**
+ * Client-computed deadline for a self-service `pending_payment` booking
+ * hold — approximates `reap_stale_pending_bookings()`'s actual cutoff
+ * (`created_at < now() - interval '35 minutes'`, migration 20260713000002).
+ *
+ * `getMyBookings` does NOT return a server-computed deadline timestamp
+ * (see SYSTEM-DESIGN-pending-payment-visibility.md §6 — deliberately
+ * out of scope for that query). This is a frontend-only approximation
+ * used purely for display copy ("Complete payment by {time} to keep
+ * it") on `/bookings` — it is NOT a source of truth for whether the
+ * hold is still valid server-side; the reaper's own predicate (plus its
+ * ±15 min pg_cron jitter) is authoritative. If the reaper's 35-minute
+ * window ever changes, this constant must be updated to match.
+ */
+export function getPendingPaymentDeadline(createdAt: Date | string): Date {
+  return new Date(toDate(createdAt).getTime() + 35 * 60 * 1_000)
+}
+
+/**
+ * True once the client-computed pending-payment deadline (above) has
+ * passed. Used to swap the "Complete Payment" CTA for a "this hold may
+ * have expired — refresh" fallback rather than offering to resume a
+ * checkout the reaper may have already cancelled server-side.
+ */
+export function isPendingPaymentDeadlinePassed(createdAt: Date | string): boolean {
+  return getPendingPaymentDeadline(createdAt).getTime() < Date.now()
+}
+
+/**
  * Convert a datetime-local input value (YYYY-MM-DDTHH:mm with no TZ) to a
  * UTC ISO string, treating the input as Europe/London wall-clock time.
  *

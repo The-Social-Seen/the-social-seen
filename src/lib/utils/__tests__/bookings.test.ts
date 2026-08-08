@@ -93,4 +93,27 @@ describe('splitBookings', () => {
     expect(result.past).toHaveLength(0)
     expect(result.waitlisted).toHaveLength(0)
   })
+
+  it('pending_payment + future date_time → appears in pendingPayment only', () => {
+    const booking = makeBooking({ status: 'pending_payment', date_time: '2036-01-01T19:00:00Z' })
+    const result = splitBookings([booking])
+
+    expect(result.pendingPayment).toHaveLength(1)
+    expect(result.upcoming).toHaveLength(0)
+    expect(result.past).toHaveLength(0)
+    expect(result.waitlisted).toHaveLength(0)
+  })
+
+  it('pending_payment + past date_time → absent from all four lists', () => {
+    // A pending_payment booking for an event that has already happened
+    // (e.g. the reaper never ran) shouldn't surface as an "action
+    // needed" upcoming card for an event that's already over.
+    const booking = makeBooking({ status: 'pending_payment', date_time: '2016-01-01T19:00:00Z' })
+    const result = splitBookings([booking])
+
+    expect(result.pendingPayment).toHaveLength(0)
+    expect(result.upcoming).toHaveLength(0)
+    expect(result.past).toHaveLength(0)
+    expect(result.waitlisted).toHaveLength(0)
+  })
 })

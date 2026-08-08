@@ -27,6 +27,7 @@ interface ProfilePageClientProps {
   upcoming: BookingWithEvent[]
   past: BookingWithEvent[]
   waitlisted: BookingWithEvent[]
+  pendingPayment: BookingWithEvent[]
   reviewableEventIds: Set<string>
   emailPreferences: EmailPreferences | null
   smsPreferences: SmsPreferences | null
@@ -41,6 +42,7 @@ export function ProfilePageClient({
   upcoming,
   past,
   waitlisted,
+  pendingPayment,
   reviewableEventIds,
   emailPreferences,
   smsPreferences,
@@ -107,6 +109,7 @@ export function ProfilePageClient({
           upcoming={upcoming}
           past={past}
           waitlisted={waitlisted}
+          pendingPayment={pendingPayment}
           reviewableEventIds={reviewableEventIds}
           userName={profile.full_name}
           userAvatar={profile.avatar_url}

@@ -4,6 +4,7 @@ import { getMyBookings } from '@/lib/supabase/queries/profile'
 import { getReviewableEvents } from '@/lib/supabase/queries/reviews'
 import { splitBookings } from '@/lib/utils/bookings'
 import { BookingsList } from '@/components/profile/BookingsList'
+import BookingResumeErrorHandler from '@/components/profile/BookingResumeErrorHandler'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -31,7 +32,7 @@ export default async function BookingsPage() {
       .single(),
   ])
 
-  const { upcoming, past, waitlisted } = splitBookings(bookings)
+  const { upcoming, past, waitlisted, pendingPayment } = splitBookings(bookings)
   const reviewableEventIds = new Set(reviewableEvents.map((e) => e.id))
 
   const userName = profileResult.data?.full_name ?? user.user_metadata?.full_name ?? 'Member'
@@ -39,6 +40,7 @@ export default async function BookingsPage() {
 
   return (
     <div className="mx-auto max-w-4xl px-4 pb-12 pt-20 sm:px-6 sm:pt-24 md:pb-20">
+      <BookingResumeErrorHandler />
       <h1 className="mb-6 font-serif text-2xl font-bold text-text-primary md:text-3xl">
         My Bookings
       </h1>
@@ -46,6 +48,7 @@ export default async function BookingsPage() {
         upcoming={upcoming}
         past={past}
         waitlisted={waitlisted}
+        pendingPayment={pendingPayment}
         reviewableEventIds={reviewableEventIds}
         userName={userName}
         userAvatar={userAvatar}
