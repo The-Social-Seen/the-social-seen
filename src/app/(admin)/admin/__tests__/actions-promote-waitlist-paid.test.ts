@@ -151,11 +151,17 @@ describe('promoteFromWaitlist — paid-event branch selection', () => {
   })
 
   it('does NOT call createAdminBookingHold for a free event (price === 0)', async () => {
+    // Free branch's capacity check + status transition + waitlist
+    // recompute now all live inside the admin_promote_waitlist_to_confirmed
+    // SECURITY DEFINER RPC — see docs/SYSTEM-DESIGN-bookings-write-
+    // authorization-hardening.md §3.4.
+    mockRpc.mockResolvedValue({
+      data: { booking_id: 'bk-1', user_id: 'u-1', status: 'confirmed' },
+      error: null,
+    })
     mockAdminWithSequence([
       { data: { id: 'bk-1', event_id: 'evt-1', user_id: 'u-1', status: 'waitlisted' } },
       { data: { id: 'evt-1', slug: 'run-club', capacity: 20, price: 0 } },
-      { count: 5 },
-      { error: null },
       { data: { full_name: 'Charlotte' } },
     ])
 
@@ -163,6 +169,9 @@ describe('promoteFromWaitlist — paid-event branch selection', () => {
 
     expect(mockCreateAdminBookingHold).not.toHaveBeenCalled()
     expect(result.success).toBe(true)
+    expect(mockRpc).toHaveBeenCalledWith('admin_promote_waitlist_to_confirmed', {
+      p_booking_id: 'bk-1',
+    })
   })
 })
 

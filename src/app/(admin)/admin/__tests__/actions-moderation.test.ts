@@ -4,13 +4,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockGetUser = vi.fn()
 const mockFrom = vi.fn()
+const mockRpc = vi.fn()
 
 vi.mock('@/lib/supabase/server', () => ({
   createServerClient: vi.fn(() =>
     Promise.resolve({
       auth: { getUser: mockGetUser },
       from: mockFrom,
-      rpc: vi.fn(),
+      rpc: mockRpc,
     }),
   ),
 }))
@@ -180,24 +181,24 @@ describe('setNoShow', () => {
       },
       error: null,
     })
-    // UPDATE chain — capture target status.
-    let capturedUpdate: Record<string, unknown> | null = null
-    const updateChain: Record<string, ReturnType<typeof vi.fn>> = {}
-    for (const m of ['select','update','eq','is','single']) {
-      updateChain[m] = vi.fn().mockReturnValue(updateChain)
-    }
-    updateChain.update = vi.fn((data: Record<string, unknown>) => {
-      capturedUpdate = data
-      return updateChain
+    // Final write moved into the set_booking_no_show SECURITY DEFINER
+    // RPC — see docs/SYSTEM-DESIGN-bookings-write-authorization-
+    // hardening.md §3.5. The TS pre-checks above (status/date) still run
+    // unchanged; only the atomic write is now an RPC call.
+    mockRpc.mockResolvedValue({
+      data: { booking_id: 'bk-1', status: 'no_show' },
+      error: null,
     })
-    updateChain.then = vi.fn((resolve: (v: unknown) => void) =>
-      resolve({ data: null, error: null }),
-    )
-    mockFrom.mockReturnValueOnce(updateChain)
 
     const result = await setNoShow('bk-1', true)
     expect(result).toEqual({ success: true })
-    expect((capturedUpdate as unknown as { status: string }).status).toBe('no_show')
+    // INVARIANT: the RPC re-validates admin role + source status
+    // server-side — the caller must pass only the booking id and the
+    // requested no_show flag, never a client-suppliable status/user id.
+    expect(mockRpc).toHaveBeenCalledWith('set_booking_no_show', {
+      p_booking_id: 'bk-1',
+      p_no_show: true,
+    })
   })
 
   it('refuses to mark no-show on an upcoming event', async () => {
@@ -240,22 +241,65 @@ describe('setNoShow', () => {
       },
       error: null,
     })
-    let capturedUpdate: Record<string, unknown> | null = null
-    const updateChain: Record<string, ReturnType<typeof vi.fn>> = {}
-    for (const m of ['select','update','eq','is','single']) {
-      updateChain[m] = vi.fn().mockReturnValue(updateChain)
-    }
-    updateChain.update = vi.fn((data: Record<string, unknown>) => {
-      capturedUpdate = data
-      return updateChain
+    mockRpc.mockResolvedValue({
+      data: { booking_id: 'bk-1', status: 'confirmed' },
+      error: null,
     })
-    updateChain.then = vi.fn((resolve: (v: unknown) => void) =>
-      resolve({ data: null, error: null }),
-    )
-    mockFrom.mockReturnValueOnce(updateChain)
 
     const result = await setNoShow('bk-1', false)
     expect(result).toEqual({ success: true })
-    expect((capturedUpdate as unknown as { status: string }).status).toBe('confirmed')
+    expect(mockRpc).toHaveBeenCalledWith('set_booking_no_show', {
+      p_booking_id: 'bk-1',
+      p_no_show: false,
+    })
+  })
+
+  it('surfaces a transport-level RPC error rather than silently succeeding', async () => {
+    // INVARIANT: a network-level failure calling set_booking_no_show
+    // (distinct from the RPC's own jsonb `{error: ...}` business-logic
+    // response) must still be surfaced to the admin, not swallowed.
+    authenticateAdmin('11111111-1111-4111-8111-111111111111')
+    mockChain({
+      data: {
+        id: 'bk-1',
+        status: 'confirmed',
+        event: { date_time: '2020-01-01T00:00:00Z' },
+      },
+      error: null,
+    })
+    mockRpc.mockResolvedValue({
+      data: null,
+      error: { message: 'connection reset by peer' },
+    })
+
+    const result = await setNoShow('bk-1', true)
+
+    expect(result).toEqual({ error: 'connection reset by peer' })
+    expect(result).not.toHaveProperty('success')
+  })
+
+  it('surfaces the RPC’s own re-validation error (e.g. lost the race under lock) verbatim', async () => {
+    // The RPC re-checks admin role, past-event, and source status
+    // server-side under a row lock as belt-and-braces alongside the TS
+    // pre-checks above. If a concurrent admin action changed the row
+    // between the TS pre-check and the RPC's own lock, the RPC's jsonb
+    // `error` key must be passed through unchanged.
+    authenticateAdmin('11111111-1111-4111-8111-111111111111')
+    mockChain({
+      data: {
+        id: 'bk-1',
+        status: 'confirmed',
+        event: { date_time: '2020-01-01T00:00:00Z' },
+      },
+      error: null,
+    })
+    mockRpc.mockResolvedValue({
+      data: { error: 'Only confirmed bookings can be marked no-show' },
+      error: null,
+    })
+
+    const result = await setNoShow('bk-1', true)
+
+    expect(result).toEqual({ error: 'Only confirmed bookings can be marked no-show' })
   })
 })
