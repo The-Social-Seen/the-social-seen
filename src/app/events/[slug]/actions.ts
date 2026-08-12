@@ -42,6 +42,31 @@ interface ActionResult {
    */
   refundedPence?: number
   refundEligible?: boolean
+  /**
+   * Machine-readable discriminator for the `'Already booked for this
+   * event'` error branch of `createPaidCheckout` (SYSTEM-DESIGN-paid-
+   * checkout-confusion-fix.md §2). Lets the client distinguish "you have
+   * an in-flight pending_payment checkout for this event" (recoverable —
+   * offer Resume/Start Over) from "you're already confirmed" (defensive,
+   * success framing) instead of rendering every conflict identically.
+   * Populated ONLY on the already-booked error path — never on success,
+   * never on any other error. Absent (`undefined`) is a safe fallback to
+   * today's plain generic-error rendering.
+   */
+  errorCode?:
+    | 'already_booked_pending'
+    | 'already_booked_confirmed'
+    | 'already_booked_waitlisted'
+    | 'already_booked_other'
+  /** Populated only alongside errorCode: 'already_booked_pending'. */
+  existingBookingId?: string
+  /**
+   * ISO timestamp of the conflicting pending_payment booking's
+   * `created_at`. Lets the client render a real "complete payment by
+   * {time}" deadline (via getPendingPaymentDeadline) instead of omitting
+   * the line. Populated only alongside errorCode: 'already_booked_pending'.
+   */
+  existingBookingCreatedAt?: string
 }
 
 // ── createBooking ───────────────────────────────────────────────────────────
@@ -262,7 +287,50 @@ export async function createPaidCheckout(
 
   const result = rpcData as Record<string, unknown>
   if (result.error) {
-    return { success: false, error: result.error as string }
+    const errorMessage = result.error as string
+
+    // SYSTEM-DESIGN-paid-checkout-confusion-fix.md §2: on the "already
+    // booked" guard specifically, look up the caller's OWN conflicting
+    // row (already visible under bookings_select's `user_id = auth.uid()`
+    // RLS — no new grant needed) so the client can distinguish a
+    // recoverable in-flight pending_payment checkout from an already-
+    // confirmed booking, instead of rendering every conflict identically
+    // (the exact contradiction this fix exists to close). Error-path
+    // only — never runs on the happy path.
+    if (errorMessage === 'Already booked for this event') {
+      const { data: existing } = await supabase
+        .from('bookings')
+        .select('id, status, created_at')
+        .eq('user_id', user.id)
+        .eq('event_id', eventId)
+        .neq('status', 'cancelled')
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (existing?.status === 'pending_payment') {
+        return {
+          success: false,
+          error: errorMessage,
+          errorCode: 'already_booked_pending',
+          existingBookingId: existing.id,
+          existingBookingCreatedAt: existing.created_at,
+        }
+      }
+      if (existing?.status === 'confirmed') {
+        return { success: false, error: errorMessage, errorCode: 'already_booked_confirmed' }
+      }
+      if (existing?.status === 'waitlisted') {
+        return { success: false, error: errorMessage, errorCode: 'already_booked_waitlisted' }
+      }
+      // TOCTOU fallback (row resolved/reaped between the RPC call and
+      // this SELECT, or an unexpected status) — safe regressive
+      // fallback, no errorCode. UI falls back to the existing generic
+      // ErrorAlert path unchanged.
+    }
+
+    return { success: false, error: errorMessage }
   }
 
   const bookingId = result.booking_id as string
@@ -365,11 +433,23 @@ export async function createPaidCheckout(
       extra: { bookingId, eventId, userId: user.id },
       level: 'error',
     })
-    await supabase
-      .from('bookings')
-      .update({ status: 'cancelled' as BookingStatus })
-      .eq('id', bookingId)
-      .eq('status', 'pending_payment') // optimistic guard
+    // Roll back via the same SECURITY DEFINER RPC abandonPendingCheckout
+    // uses — this booking is a fresh pending_payment row just inserted by
+    // book_event_paid (is_admin_hold=false, waitlist_position=NULL), which
+    // is exactly abandon_pending_checkout's "fresh self-service book" ->
+    // 'cancelled' branch. See docs/SYSTEM-DESIGN-bookings-write-
+    // authorization-hardening.md §3.1 — this is a direct-write hardening
+    // fix, not a behavioural change (same rollback outcome as before).
+    const { error: rollbackError } = await supabase.rpc(
+      'abandon_pending_checkout',
+      { p_user_id: user.id, p_event_id: eventId },
+    )
+    if (rollbackError) {
+      console.error(
+        '[createPaidCheckout] rollback RPC error:',
+        rollbackError.message,
+      )
+    }
 
     return {
       success: false,
@@ -534,12 +614,21 @@ export async function claimWaitlistSpot(
       '[claimWaitlistSpot] Stripe flow failed, restoring waitlist entry:',
       err instanceof Error ? err.message : err,
     )
-    // Restore to waitlisted so the user keeps their place.
-    await supabase
-      .from('bookings')
-      .update({ status: 'waitlisted' as BookingStatus })
-      .eq('id', bookingId)
-      .eq('status', 'pending_payment')
+    // Restore to waitlisted via the same abandon_pending_checkout RPC —
+    // this booking was just transitioned waitlisted -> pending_payment by
+    // claim_waitlist_spot, which leaves waitlist_position untouched, so
+    // this is exactly abandon_pending_checkout's "self-service claim" ->
+    // 'waitlisted' branch. See design doc §3.1.
+    const { error: rollbackError } = await supabase.rpc(
+      'abandon_pending_checkout',
+      { p_user_id: user.id, p_event_id: eventId },
+    )
+    if (rollbackError) {
+      console.error(
+        '[claimWaitlistSpot] rollback RPC error:',
+        rollbackError.message,
+      )
+    }
 
     return {
       success: false,
@@ -579,8 +668,54 @@ async function resolveOrigin(): Promise<string> {
  * seat is freed immediately, rather than waiting for Stripe's 30-minute
  * session expiry.
  *
- * Idempotent: the `.eq('status', 'pending_payment')` guard means a
- * repeat call (user refreshes) no-ops.
+ * Idempotent: the `abandon_pending_checkout` RPC re-selects the row on
+ * every call under a row lock (`FOR UPDATE`) and its own UPDATE carries
+ * a `status = 'pending_payment'` guard, so a repeat call (user refreshes)
+ * no-ops and returns `{ booking_id: null, status: null }`.
+ *
+ * ── SECURITY: never trust `options.from` for the rollback decision ──────
+ *
+ * This function used to pick `rollbackStatus` directly from the caller-
+ * supplied `options.from` string. `options.from` is set by
+ * BookingCancelledHandler.tsx from the `?from=` URL query parameter —
+ * pure client input, with zero server-side corroboration. That was a
+ * live P0 vulnerability: any authenticated member with an ordinary
+ * self-created `pending_payment` booking (from clicking "Continue to
+ * Payment" on ANY paid event) could navigate to
+ * `/events/<slug>?cancelled=1&from=admin_remediation` and this function
+ * would UPDATE their own row straight to `status='confirmed'` — a real
+ * confirmed ticket, `stripe_payment_id` still null, no payment ever
+ * made. `from=admin_hold`/`from=claim` similarly let anyone jump their
+ * own cancelled booking to the front of a waitlist for free.
+ *
+ * The fix (and where the logic now lives): the rollback status is
+ * derived ENTIRELY from server-side, tamper-proof columns already on
+ * the booking row — `is_admin_hold` / `cancelled_at` / `waitlist_position`
+ * — inside the `abandon_pending_checkout` SECURITY DEFINER RPC (see
+ * `supabase/migrations/20260812180000_abandon_pending_checkout_rpc.sql`
+ * and `docs/SYSTEM-DESIGN-abandon-checkout-rpc.md` §2.1 for the full
+ * derivation table, ported 1:1 from this function's original TS
+ * implementation). Moving the lookup + branch + write into one
+ * SECURITY-DEFINER, `FOR UPDATE`-locked transaction also (a) closes the
+ * SELECT-then-UPDATE race the code review flagged as a secondary,
+ * non-blocking finding, and (b) sidesteps
+ * `20260812171530_revoke_bookings_admin_hold_column_write.sql`'s
+ * column-level REVOKE on `is_admin_hold`/`admin_hold_expires_at` for
+ * `authenticated`/`anon` — a REVOKE that would otherwise reject this
+ * function's own admin-hold-clearing UPDATE were it still issued via the
+ * user-scoped client, since SECURITY DEFINER functions execute as their
+ * owner, not as the calling role.
+ *
+ * `options.from` is kept ONLY as a post-response diagnostics hint —
+ * compared against the RPC's REAL returned status and logged via
+ * `console.warn` on mismatch. It is NEVER sent to the RPC and NEVER
+ * used to choose the rollback outcome or the response the caller sees.
+ *
+ * Do NOT reintroduce a shortcut that branches on `options.from` (or any
+ * other request/query-string value) here or inside the RPC. If a future
+ * admin flow needs a new rollback destination, give the booking row its
+ * own durable, server-written marker (mirroring `is_admin_hold` /
+ * `cancelled_at` / `waitlist_position`) and branch on THAT, server-side.
  */
 export async function abandonPendingCheckout(
   eventId: string,
@@ -601,70 +736,84 @@ export async function abandonPendingCheckout(
     return { success: false, error: 'Authentication required' }
   }
 
-  // Four possible prior states/origins, three actual rollback
-  // destinations:
-  //   - 'claim' / 'admin_hold': the member arrived via a waitlist claim
-  //     or an admin waitlist-promotion hold (createAdminBookingHold).
-  //     Rolling back to `cancelled` would lose their waitlist position
-  //     AND their eligibility for future "spot available" /
-  //     re-promotion — restore to `waitlisted` instead.
-  //   - 'admin_remediation': the member arrived via an admin payment-
-  //     remediation hold (createAdminPaymentRemediationHold,
-  //     SYSTEM-DESIGN-admin-waitlist-promotion-payment.md Addendum §A) —
-  //     they had a `confirmed` seat this whole cycle and were never on
-  //     the waitlist. Restoring to `waitlisted` here would silently
-  //     recreate the exact confirmed-without-payment incident this
-  //     feature exists to fix, just relabelled. Restore to `confirmed`
-  //     instead — the honest "still holds the seat, still needs to pay"
-  //     state they were in before this checkout attempt.
-  //   - 'admin_reinstate': the member arrived via an admin cancelled-
-  //     booking reinstatement hold (createAdminReinstatementHold,
-  //     SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md, "Gap C") —
-  //     they were `cancelled` (reaped) this whole cycle, never waitlisted
-  //     or confirmed. Restore to `cancelled` — the honest state they were
-  //     in before the admin's reinstatement attempt.
-  //   - 'book' (default): a brand new booking abandoned mid-checkout —
-  //     keep the original `cancelled` semantics.
-  // 'admin_reinstate' and the default 'book' case both resolve to
-  // 'cancelled' today — spelled out as its own branch (not folded into
-  // the final `: 'cancelled'` fallback) for readability/auditability, and
-  // because a future change to either one's target shouldn't silently
-  // affect the other.
-  const rollbackStatus: BookingStatus =
-    options?.from === 'admin_remediation'
-      ? 'confirmed'
-      : options?.from === 'admin_reinstate'
-        ? 'cancelled'
-        : options?.from === 'claim' || options?.from === 'admin_hold'
-          ? 'waitlisted'
-          : 'cancelled'
+  // All lookup + branch + write logic now lives server-side inside the
+  // RPC (SECURITY DEFINER, row-locked). `p_user_id` is still passed
+  // explicitly and re-checked against `auth.uid()` inside the function —
+  // defence in depth, matching every sibling RPC in this file
+  // (book_event_paid, claim_waitlist_spot).
+  const { data: rpcData, error: rpcError } = await supabase.rpc(
+    'abandon_pending_checkout',
+    {
+      p_user_id: user.id,
+      p_event_id: eventId,
+    },
+  )
 
-  const { error } = await supabase
-    .from('bookings')
-    .update({
-      status: rollbackStatus,
-      // Unconditionally clear the admin-hold flag — a harmless no-op on
-      // the 'book'/'claim' paths (already false/null there), and
-      // required on 'admin_hold'/'admin_remediation' so the row doesn't
-      // violate chk_bookings_admin_hold_requires_pending_payment the
-      // instant status leaves pending_payment, regardless of which
-      // status it's leaving pending_payment FOR.
-      is_admin_hold: false,
-      admin_hold_expires_at: null,
-    })
-    .eq('user_id', user.id)
-    .eq('event_id', eventId)
-    .eq('status', 'pending_payment')
-    .is('deleted_at', null)
-
-  if (error) {
-    console.error('[abandonPendingCheckout]', error.message)
+  if (rpcError) {
+    console.error('[abandonPendingCheckout] RPC error:', rpcError.message)
     return { success: false, error: 'Could not release the booking' }
+  }
+
+  const result = rpcData as { error?: string; booking_id?: string | null; status?: BookingStatus | null }
+
+  if (result.error) {
+    return { success: false, error: result.error }
   }
 
   revalidatePath(`/events`)
   revalidatePath('/bookings')
-  return { success: true }
+
+  // Idempotent no-op — already resolved (paid, previously abandoned, or
+  // never existed). Preserves the pre-existing shape for this branch: no
+  // `status` key. BookingCancelledHandler falls through to its default
+  // toast copy either way.
+  if (!result.status) {
+    return { success: true }
+  }
+
+  // Diagnostics only — compared against the RPC's REAL, server-derived
+  // outcome, never fed back into any decision. Logged so a mismatch
+  // (client claims one origin, server derives another) is visible
+  // without being trusted.
+  if (options?.from && result.status !== inferredStatusForFromHint(options.from)) {
+    console.warn(
+      '[abandonPendingCheckout] client-supplied "from" hint did not match server-derived rollback',
+      {
+        from: options.from,
+        derivedRollbackStatus: result.status,
+        bookingId: result.booking_id,
+      },
+    )
+  }
+
+  // Echo the REAL outcome back to the caller — BookingCancelledHandler
+  // uses this (not the URL's `from` param) to pick toast copy, so the
+  // toast can never contradict the database state.
+  return { success: true, status: result.status }
+}
+
+/**
+ * Diagnostics helper only (see the security comment on
+ * abandonPendingCheckout above) — maps the client-supplied `from` hint to
+ * the rollback status it WOULD imply if it were trusted, purely so a
+ * mismatch can be logged. Never used to make the actual rollback
+ * decision.
+ */
+function inferredStatusForFromHint(
+  from: NonNullable<Parameters<typeof abandonPendingCheckout>[1]>['from'],
+): BookingStatus {
+  switch (from) {
+    case 'admin_remediation':
+      return 'confirmed'
+    case 'admin_reinstate':
+      return 'cancelled'
+    case 'claim':
+    case 'admin_hold':
+      return 'waitlisted'
+    case 'book':
+    default:
+      return 'cancelled'
+  }
 }
 
 // ── cancelBooking ────────────────���──────────────────────────────────────────
@@ -834,33 +983,33 @@ export async function cancelBooking(bookingId: string): Promise<ActionResult> {
     }
   }
 
-  // Status UPDATE — optimistic-locked on current status=confirmed so a
-  // concurrent duplicate cancellation no-ops. Records cancel audit +
-  // refund details together.
-  const { data: updated, error: updateError } = await supabase
-    .from('bookings')
-    .update({
-      status: 'cancelled' as BookingStatus,
-      cancelled_at: now.toISOString(),
-      refunded_amount_pence: refundedPence,
-      refunded_at: stripeRefundId ? now.toISOString() : null,
-      stripe_refund_id: stripeRefundId,
-    })
-    .eq('id', bookingId)
-    .eq('status', 'confirmed')
-    .is('deleted_at', null)
-    .select('id')
-    .single()
+  // Final atomic write — moved into the cancel_confirmed_booking SECURITY
+  // DEFINER RPC (see docs/SYSTEM-DESIGN-bookings-write-authorization-
+  // hardening.md §3.2) so a member can no longer forge `status` /
+  // `refunded_amount_pence` etc. via a direct PATCH to the REST API.
+  // Everything above (ownership check, event fetch, refund-window math,
+  // the Stripe refund call) is unchanged — only this last write moved
+  // server-side.
+  const { data: rpcData, error: rpcError } = await supabase.rpc(
+    'cancel_confirmed_booking',
+    {
+      p_user_id: user.id,
+      p_booking_id: bookingId,
+      p_refunded_amount_pence: refundedPence,
+      p_stripe_refund_id: stripeRefundId,
+    },
+  )
+  const result = rpcData as { error?: string; booking_id?: string } | null
 
-  if (updateError || !updated) {
-    // Edge case: refund went through but the DB UPDATE failed. The
+  if (rpcError || !result || result.error) {
+    // Edge case: refund went through but the DB update failed. The
     // charge is refunded but the booking still shows confirmed. Admin
     // needs to manually reconcile via the stripe_refund_id we got from
     // the API. Log loudly AND emit to Sentry with a filterable tag.
     if (stripeRefundId) {
       console.error(
         '[cancelBooking] Refund issued but DB update failed — manual reconciliation needed:',
-        { bookingId, stripeRefundId, updateError: updateError?.message },
+        { bookingId, stripeRefundId, rpcError: rpcError?.message, resultError: result?.error },
       )
       Sentry.captureException(
         new Error('Refund issued but booking UPDATE failed — manual reconciliation needed'),
@@ -869,7 +1018,8 @@ export async function cancelBooking(bookingId: string): Promise<ActionResult> {
           extra: {
             bookingId,
             stripeRefundId,
-            updateError: updateError?.message ?? null,
+            rpcError: rpcError?.message ?? null,
+            resultError: result?.error ?? null,
           },
           level: 'error',
         },
@@ -1039,25 +1189,21 @@ export async function leaveWaitlist(bookingId: string): Promise<ActionResult> {
     return { success: false, error: 'Cannot leave waitlist for a past event' }
   }
 
-  // Cancel the waitlisted booking
-  const { data: updated, error: updateError } = await supabase
-    .from('bookings')
-    .update({ status: 'cancelled' as BookingStatus, waitlist_position: null })
-    .eq('id', bookingId)
-    .eq('status', 'waitlisted')
-    .is('deleted_at', null)
-    .select('id')
-    .single()
+  // Cancel the waitlisted booking + recompute positions — both now live
+  // inside the leave_waitlist SECURITY DEFINER RPC (one atomic
+  // transaction instead of two separate round trips) so a member can no
+  // longer forge `status`/`waitlist_position` via a direct PATCH to the
+  // REST API. See docs/SYSTEM-DESIGN-bookings-write-authorization-
+  // hardening.md §3.3.
+  const { data: rpcData, error: rpcError } = await supabase.rpc(
+    'leave_waitlist',
+    { p_user_id: user.id, p_booking_id: bookingId },
+  )
+  const result = rpcData as { error?: string; booking_id?: string } | null
 
-  if (updateError || !updated) {
+  if (rpcError || !result || result.error) {
     return { success: false, error: 'Booking was already cancelled or modified' }
   }
-
-  // Recompute waitlist positions: single bulk decrement for all positions
-  // above the leaving user's former position
-  await supabase.rpc('recompute_waitlist_positions', {
-    p_event_id: booking.event_id,
-  })
 
   revalidatePath('/events')
   revalidatePath(`/events/${event.slug}`)

@@ -31,7 +31,6 @@ import {
 } from '@/lib/supabase/queries/events'
 import type {
   AdminEventBooking,
-  BookingStatus,
   EventWithStats,
   Gender,
   MemberWithStats,
@@ -1813,37 +1812,21 @@ export async function promoteFromWaitlist(bookingId: string) {
   }
 
   // ── Free event: confirm directly ─────────────────────────────────────────
-  // Capacity predicate widened to IN ('confirmed', 'pending_payment') to
-  // match the paid branch's RPC-internal check (spec §4.2). A no-op today
-  // — a free event can never carry a pending_payment row (book_event()
-  // never creates one; book_event_paid()/claim_waitlist_spot() both
-  // reject free events) — but this is one shared, correct capacity
-  // expression instead of two subtly-different ones, and it defends
-  // against a hypothetical future bug that creates a stray
-  // pending_payment row against a free event.
-  const { count: seatCount } = await supabase
-    .from('bookings')
-    .select('id', { count: 'exact', head: true })
-    .eq('event_id', booking.event_id)
-    .in('status', ['confirmed', 'pending_payment'])
-    .is('deleted_at', null)
+  // Capacity check + status transition + waitlist recompute now all live
+  // inside the admin_promote_waitlist_to_confirmed SECURITY DEFINER RPC
+  // (one row-locked transaction) instead of a TS-side check-then-update,
+  // closing the same direct-write forgery vector as the paid branch's
+  // admin_promote_waitlist_to_hold RPC. See docs/SYSTEM-DESIGN-bookings-
+  // write-authorization-hardening.md §3.4. Capacity predicate is
+  // IN ('confirmed', 'pending_payment') inside the RPC, same as before.
+  const { data: rpcData, error: rpcError } = await supabase.rpc(
+    'admin_promote_waitlist_to_confirmed',
+    { p_booking_id: bookingId },
+  )
+  if (rpcError) return { error: rpcError.message }
 
-  if (event.capacity !== null && (seatCount ?? 0) >= event.capacity) {
-    return { error: 'Event is at full capacity — cannot promote' }
-  }
-
-  // Update booking to confirmed
-  const { error: updateError } = await supabase
-    .from('bookings')
-    .update({ status: 'confirmed', waitlist_position: null })
-    .eq('id', bookingId)
-
-  if (updateError) return { error: updateError.message }
-
-  // Recompute waitlist positions
-  await supabase.rpc('recompute_waitlist_positions', {
-    p_event_id: booking.event_id,
-  })
+  const rpcResult = rpcData as { error?: string } | null
+  if (rpcResult?.error) return { error: rpcResult.error }
 
   // Get promoted user's name for the success message
   const { data: profile } = await supabase
@@ -2931,7 +2914,6 @@ export async function setNoShow(
   }
 
   const sourceStatus = on ? 'confirmed' : 'no_show'
-  const targetStatus: BookingStatus = on ? 'no_show' : 'confirmed'
 
   if (booking.status !== sourceStatus) {
     return {
@@ -2941,12 +2923,21 @@ export async function setNoShow(
     }
   }
 
-  const { error: updErr } = await supabase
-    .from('bookings')
-    .update({ status: targetStatus })
-    .eq('id', bookingId)
-    .eq('status', sourceStatus)
-  if (updErr) return { error: updErr.message }
+  // Final write moved into the set_booking_no_show SECURITY DEFINER RPC
+  // (re-validates admin role, past-event, and source status server-side
+  // under a row lock) so a member can no longer forge `status` via a
+  // direct PATCH to the REST API. The TS pre-checks above are kept
+  // unchanged for their snappier, identically-worded error messages in
+  // the common "already correct state" case. See docs/SYSTEM-DESIGN-
+  // bookings-write-authorization-hardening.md §3.5.
+  const { data: rpcData, error: rpcError } = await supabase.rpc(
+    'set_booking_no_show',
+    { p_booking_id: bookingId, p_no_show: on },
+  )
+  if (rpcError) return { error: rpcError.message }
+
+  const rpcResult = rpcData as { error?: string } | null
+  if (rpcResult?.error) return { error: rpcResult.error }
 
   revalidatePath('/admin/events')
   revalidatePath('/admin/members')
