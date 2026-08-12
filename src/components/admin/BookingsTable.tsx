@@ -11,6 +11,7 @@ import DemoteHoldButton from './DemoteHoldButton'
 import ReinstateBookingButton from './ReinstateBookingButton'
 import ReleaseReinstatedHoldButton from './ReleaseReinstatedHoldButton'
 import MobilePhoneValue from '@/components/shared/MobilePhoneValue'
+import type { Gender } from '@/types'
 
 // Filter tabs use a shorter "Waitlist" label below md: so all five fit
 // in a wrap-to-2-rows segmented control without overflowing 375px.
@@ -48,7 +49,43 @@ interface BookingRow {
   // phone_number is admin-only PII merged server-side via the
   // admin_get_user_phones() RPC (never part of the .select()); null when the
   // member set no phone or their profile was soft-deleted.
-  profile: { id: string; full_name: string; email: string; avatar_url: string | null; phone_number: string | null } | null
+  // gender is admin-only PII merged server-side via the
+  // admin_get_user_demographics() RPC (never part of the .select()); null
+  // when the member never completed the demographics banner or their
+  // profile was soft-deleted.
+  profile: { id: string; full_name: string; email: string; avatar_url: string | null; phone_number: string | null; gender?: Gender | null } | null
+}
+
+const GENDER_SHORT_CODE: Partial<Record<Gender, { code: string; label: string }>> = {
+  female: { code: 'F', label: 'Female' },
+  male: { code: 'M', label: 'Male' },
+  non_binary: { code: 'NB', label: 'Non-binary' },
+}
+
+/**
+ * Short accessible gender abbreviation rendered inline next to the phone
+ * number, in both the desktop Mobile column and the mobile card's Mobile
+ * field (docs/SYSTEM-DESIGN-admin-gender-batch-rpc.md §6) — never its own
+ * column or `<dt>` row, since the table already drops two columns below
+ * `lg:` and the mobile `<dl>` is already tight at 375px. `null`,
+ * `undefined`, and `'prefer_not_to_say'` all render nothing — absence
+ * should be silent, not add visual noise (most rows will have skipped the
+ * demographics banner). `title` + `aria-label` mirror this file's existing
+ * convention for supplementary metadata (see `paymentBadge`/`CancelledInfo`).
+ */
+function GenderTag({ gender }: { gender: Gender | null | undefined }) {
+  if (!gender) return null
+  const entry = GENDER_SHORT_CODE[gender]
+  if (!entry) return null
+  return (
+    <span
+      className="ml-1 text-xs text-text-tertiary"
+      title={entry.label}
+      aria-label={entry.label}
+    >
+      ({entry.code})
+    </span>
+  )
 }
 
 function paymentBadge(b: BookingRow) {
@@ -265,6 +302,7 @@ export default function BookingsTable({
                           phoneNumber={profile?.phone_number ?? null}
                           name={profile?.full_name ?? 'this attendee'}
                         />
+                        <GenderTag gender={profile?.gender} />
                       </td>
                       <td className="py-3 pr-4">
                         {statusBadge(booking.status)}
@@ -383,6 +421,7 @@ export default function BookingsTable({
                             name={profile?.full_name ?? 'this attendee'}
                             variant="card"
                           />
+                          <GenderTag gender={profile?.gender} />
                         </dd>
                       </div>
                       {payBadge && (

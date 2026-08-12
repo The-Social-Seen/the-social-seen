@@ -56,6 +56,22 @@ export interface Profile {
   referral_source:     string | null
   // Added by migration 20260420000001 (P2-2 registration, P2-3 verification, P2-8 member mgmt)
   phone_number:        string | null
+  // Added by migration 20260503000001 (Phase 3, Wave 1 — member data layer).
+  // Admin-only PII: excluded from the `authenticated` SELECT GRANT on
+  // `public.profiles` from the moment the column was introduced, so it is
+  // NEVER readable via a plain `.select()` — only via `get_my_demographics()`
+  // (own row) or `admin_get_demographics()` / `admin_get_user_demographics()`
+  // (admin, single-row / batch). NULL means "not yet asked or skipped".
+  // Typed OPTIONAL (`gender?`), not required, deliberately: unlike
+  // `phone_number` (which is selected — as null — by every `profiles` query
+  // that predates this field), `gender` is invisible to ordinary `.select()`
+  // calls, so the many pre-existing call sites/fixtures that build a
+  // `Profile`-shaped object across the codebase were never going to include
+  // it. Requiring it here would force unrelated, out-of-scope files (e.g.
+  // `getAdminMembers`, several component test fixtures) to add a field they
+  // have no way to populate from a normal query. Only code that has actually
+  // called the demographics RPC should set this key.
+  gender?:             Gender | null
   email_consent:       boolean
   email_verified:      boolean
   status:              UserStatus
@@ -366,9 +382,17 @@ export interface MemberWithStats extends Profile {
  * `.select()` (revoked from the `authenticated` GRANT in 20260503000002).
  * It is `null` when the member set no phone OR when the profile was
  * soft-deleted (the RPC filters `deleted_at IS NULL`, so deleted-member PII
- * does not resurface). The fee/refund/cancellation fields are typed
- * permissively against the `bookings` table (refund + cancellation metadata
- * is nullable; fee columns are NOT NULL DEFAULT 0).
+ * does not resurface).
+ *
+ * `profile.gender` is likewise admin-only PII, merged in JS via the
+ * `admin_get_user_demographics()` SECURITY DEFINER RPC (20260812000001) —
+ * never part of the `.select()` (excluded from the `authenticated` GRANT
+ * since 20260503000001). `null` when the member never set a gender OR when
+ * the profile was soft-deleted (same `deleted_at IS NULL` filter).
+ *
+ * The fee/refund/cancellation fields are typed permissively against the
+ * `bookings` table (refund + cancellation metadata is nullable; fee columns
+ * are NOT NULL DEFAULT 0).
  */
 export interface AdminEventBooking {
   id:                    string
@@ -395,7 +419,7 @@ export interface AdminEventBooking {
   admin_hold_expires_at: string | null
   profile: Pick<
     Profile,
-    'id' | 'full_name' | 'email' | 'avatar_url' | 'phone_number'
+    'id' | 'full_name' | 'email' | 'avatar_url' | 'phone_number' | 'gender'
   > | null
 }
 

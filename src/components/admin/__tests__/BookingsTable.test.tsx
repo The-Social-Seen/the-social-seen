@@ -45,6 +45,7 @@ interface TestBooking {
     email: string
     avatar_url: string | null
     phone_number: string | null
+    gender?: 'female' | 'male' | 'non_binary' | 'prefer_not_to_say' | null
   } | null
 }
 
@@ -179,6 +180,69 @@ describe('BookingsTable — mobile pass', () => {
   it('renders empty-state copy when no bookings match the active filter', () => {
     render(<BookingsTable bookings={[]} eventId="evt-1" />)
     expect(screen.getByText(/no bookings found/i)).toBeTruthy()
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// gender abbreviation, rendered inline next to phone in both the desktop
+// Mobile column and the mobile card's Mobile field (docs/SYSTEM-DESIGN-
+// admin-gender-batch-rpc.md §6) — never a new column or `<dt>` row.
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('BookingsTable — gender abbreviation (desktop + mobile, inline with phone)', () => {
+  it.each([
+    ['female', 'F'],
+    ['male', 'M'],
+    ['non_binary', 'NB'],
+  ] as const)('renders "(%s)" as "(%s)" in both the desktop table and mobile card', (gender, code) => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[booking({ profile: { id: 'usr-1', full_name: 'Charlotte Davis', email: 'charlotte@example.com', avatar_url: null, phone_number: '+44 7700 900123', gender } })]}
+        eventId="evt-1"
+      />
+    )
+    const desktopCell = container.querySelector('div.hidden.md\\:block td.hidden.lg\\:table-cell') as HTMLElement
+    const mobileDd = container.querySelector('ul.md\\:hidden dd') as HTMLElement
+    expect(desktopCell.textContent).toContain(`(${code})`)
+    expect(mobileDd.textContent).toContain(`(${code})`)
+  })
+
+  it('renders nothing (no glyph) for a null gender', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[booking({ profile: { id: 'usr-1', full_name: 'Charlotte Davis', email: 'charlotte@example.com', avatar_url: null, phone_number: '+44 7700 900123', gender: null } })]}
+        eventId="evt-1"
+      />
+    )
+    expect(container.textContent).not.toMatch(/\((F|M|NB)\)/)
+  })
+
+  it('renders nothing (no glyph) for prefer_not_to_say', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[booking({ profile: { id: 'usr-1', full_name: 'Charlotte Davis', email: 'charlotte@example.com', avatar_url: null, phone_number: '+44 7700 900123', gender: 'prefer_not_to_say' } })]}
+        eventId="evt-1"
+      />
+    )
+    expect(container.textContent).not.toMatch(/\((F|M|NB)\)/)
+  })
+
+  it('renders nothing (no glyph) when gender is absent from the profile object entirely (undefined)', () => {
+    const { container } = render(
+      <BookingsTable bookings={[booking()]} eventId="evt-1" />
+    )
+    expect(container.textContent).not.toMatch(/\((F|M|NB)\)/)
+  })
+
+  it('exposes the full word to assistive tech via aria-label (e.g. "Female", not just "F")', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[booking({ profile: { id: 'usr-1', full_name: 'Charlotte Davis', email: 'charlotte@example.com', avatar_url: null, phone_number: '+44 7700 900123', gender: 'female' } })]}
+        eventId="evt-1"
+      />
+    )
+    const labelled = container.querySelectorAll('[aria-label="Female"]')
+    expect(labelled.length).toBeGreaterThan(0)
   })
 })
 

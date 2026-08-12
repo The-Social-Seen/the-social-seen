@@ -33,6 +33,7 @@ import type {
   AdminEventBooking,
   BookingStatus,
   EventWithStats,
+  Gender,
   MemberWithStats,
   NotificationRecipient,
   NotificationType,
@@ -107,6 +108,52 @@ async function fetchPhoneMap(
 
   for (const row of (data ?? []) as Array<{ user_id: string; phone_number: string | null }>) {
     map.set(row.user_id, row.phone_number ?? null)
+  }
+
+  return map
+}
+
+/**
+ * Batch-fetches member gender (admin-only PII) via the
+ * `admin_get_user_demographics()` SECURITY DEFINER RPC and returns a
+ * Map<user_id, gender>.
+ *
+ * `gender` was excluded from the `authenticated` SELECT GRANT on
+ * `public.profiles` from the moment the column was introduced
+ * (20260503000001), so it can NOT be read through a `.select()` — the RPC's
+ * in-body admin gate is the authorisation boundary. Callers pass the
+ * user-scoped client from `requireAdmin()` (the RPC carries its own gate; no
+ * service-role needed) and merge the result by id with a `?? null` fallback
+ * — never assume every input id yields a row (soft-deleted or
+ * gender-unset members are absent / null). Exactly ONE RPC round-trip; ids
+ * are de-duped first.
+ *
+ * The RPC also returns `age_range`, which is deliberately NOT surfaced here
+ * — no consumer needs it yet (docs/SYSTEM-DESIGN-admin-gender-batch-rpc.md
+ * §1.2). Extending this map to a richer value type is a same-shape follow-up.
+ */
+async function fetchDemographicsMap(
+  supabase: Awaited<ReturnType<typeof requireAdmin>>['supabase'],
+  userIds: string[]
+): Promise<Map<string, Gender | null>> {
+  const map = new Map<string, Gender | null>()
+  if (userIds.length === 0) return map
+
+  const unique = [...new Set(userIds)]
+  const { data, error } = await supabase.rpc('admin_get_user_demographics', {
+    target_user_ids: unique,
+  })
+
+  if (error) {
+    throw new Error(`Failed to fetch member demographics: ${error.message}`)
+  }
+
+  for (const row of (data ?? []) as Array<{
+    user_id: string
+    gender: Gender | null
+    age_range: string | null
+  }>) {
+    map.set(row.user_id, row.gender ?? null)
   }
 
   return map
@@ -1629,7 +1676,9 @@ export async function getEventBookings(
 
   // NOTE: phone_number is deliberately NOT selected here (revoked from the
   // `authenticated` GRANT in 20260503000002). It is merged below via the
-  // admin_get_user_phones() SECURITY DEFINER RPC.
+  // admin_get_user_phones() SECURITY DEFINER RPC. gender is likewise never
+  // selected (excluded from the GRANT since 20260503000001) and is merged
+  // below via the admin_get_user_demographics() SECURITY DEFINER RPC.
   let query = supabase
     .from('bookings')
     .select(`
@@ -1660,6 +1709,7 @@ export async function getEventBookings(
     .map((b) => extractField<{ id: string }>(b.profile, 'id'))
     .filter((id): id is string => typeof id === 'string')
   const phoneMap = await fetchPhoneMap(supabase, profileIds)
+  const genderMap = await fetchDemographicsMap(supabase, profileIds)
 
   return rows.map((b) => {
     const profile = extractJoin<{
@@ -1671,7 +1721,11 @@ export async function getEventBookings(
     return {
       ...b,
       profile: profile
-        ? { ...profile, phone_number: phoneMap.get(profile.id) ?? null }
+        ? {
+            ...profile,
+            phone_number: phoneMap.get(profile.id) ?? null,
+            gender: genderMap.get(profile.id) ?? null,
+          }
         : null,
     }
   })
