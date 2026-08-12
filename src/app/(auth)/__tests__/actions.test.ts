@@ -118,6 +118,83 @@ describe('signUp', () => {
     expect(result).toHaveProperty('error')
   })
 
+  // ── Two-word full name requirement ────────────────────────────────────────
+  describe('fullName — two-word requirement', () => {
+    it('rejects a single-word name with the exact "first and last name" message', async () => {
+      const result = await signUp({ ...validInput, fullName: 'Charlotte' })
+      expect(result).toHaveProperty('error')
+      if ('error' in result) {
+        expect(result.error).toBe('Please enter your first and last name')
+      }
+      expect(mockSignUp).not.toHaveBeenCalled()
+    })
+
+    it('accepts a two-word name', async () => {
+      mockSignUp.mockResolvedValue({
+        data: { user: { id: 'user-1', identities: [{ id: '1' }] } },
+        error: null,
+      })
+
+      const result = await signUp({ ...validInput, fullName: 'Charlotte Moreau' })
+      expect(result).toEqual({ success: true })
+    })
+
+    it('accepts a multi-word name with irregular internal/leading/trailing whitespace', async () => {
+      mockSignUp.mockResolvedValue({
+        data: { user: { id: 'user-1', identities: [{ id: '1' }] } },
+        error: null,
+      })
+
+      const result = await signUp({
+        ...validInput,
+        fullName: '  Mary   Jane Smith  ',
+      })
+      expect(result).toEqual({ success: true })
+    })
+
+    it('accepts a hyphenated/apostrophe surname as two tokens', async () => {
+      mockSignUp.mockResolvedValue({
+        data: { user: { id: 'user-1', identities: [{ id: '1' }] } },
+        error: null,
+      })
+
+      const result = await signUp({
+        ...validInput,
+        fullName: "Anna-Maria O'Brien",
+      })
+      expect(result).toEqual({ success: true })
+    })
+
+    it('rejects a single word followed by only trailing whitespace (still 1 token)', async () => {
+      const result = await signUp({ ...validInput, fullName: 'Charlotte ' })
+      expect(result).toHaveProperty('error')
+      if ('error' in result) {
+        expect(result.error).toBe('Please enter your first and last name')
+      }
+      expect(mockSignUp).not.toHaveBeenCalled()
+    })
+
+    it('rejects a whitespace-only name (0 tokens)', async () => {
+      const result = await signUp({ ...validInput, fullName: '   ' })
+      expect(result).toHaveProperty('error')
+      expect(mockSignUp).not.toHaveBeenCalled()
+    })
+
+    it('still enforces the max(100) bound on a valid two-word name (refine does not bypass it)', async () => {
+      // Two tokens, but the combined string exceeds 100 characters — the
+      // pre-existing max() check must still fire. issues[0] should be the
+      // length error, not the two-word refine message, so callers see the
+      // length complaint rather than a confusing "add a last name" prompt.
+      const tooLong = 'A'.repeat(60) + ' ' + 'B'.repeat(45)
+      const result = await signUp({ ...validInput, fullName: tooLong })
+      expect(result).toHaveProperty('error')
+      if ('error' in result) {
+        expect(result.error).not.toBe('Please enter your first and last name')
+      }
+      expect(mockSignUp).not.toHaveBeenCalled()
+    })
+  })
+
   it('returns error when email is invalid', async () => {
     const result = await signUp({ ...validInput, email: 'not-an-email' })
     expect(result).toHaveProperty('error')
