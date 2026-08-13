@@ -283,13 +283,19 @@ describe('POST /api/stripe/webhook', () => {
   })
 
   it('ignores payment_status other than "paid"', async () => {
-    // NOTE (zero-total-coupon §6.3a): 'unpaid' is still rejected under the
-    // new triple-gate — a payment is expected but hasn't landed, so
-    // confirming would oversell. This is NOT the comp shape (comp is
-    // 'no_payment_required' + 'complete' + amount_total===0), so this test
-    // does not contradict the new £0-comp behaviour; it pins the
-    // still-rejected 'unpaid' branch. See the dedicated comp suite below
-    // for the £0-complete case that DOES confirm.
+    // NOTE (zero-total-coupon §6.3a; gate redefined by
+    // webhook-comp-detection-fix §3 — see comment block below): 'unpaid'
+    // with status/amount_total both left undefined satisfies neither
+    // isPaidSession (payment_status !== 'paid') nor isCompSession
+    // (status !== 'complete') — a payment is expected but hasn't landed,
+    // so confirming would oversell. This is NOT the comp shape (comp is
+    // status==='complete' && amount_total===0, payment_status no longer
+    // part of that gate as of the 2026-08-13 fix), so this test does not
+    // contradict the £0-comp behaviour; it pins the still-rejected
+    // 'unpaid'-with-no-other-signals case. See the dedicated comp suite
+    // below for the £0-complete case that DOES confirm regardless of
+    // payment_status, and the "genuinely-unpaid, NONZERO amount owed" test
+    // for the real regression guard on a session with money still owed.
     const POST = await importRoute()
 
     supabaseHandle = makeSupabaseMock()
@@ -472,14 +478,29 @@ describe('POST /api/stripe/webhook', () => {
     expect(vi.mocked(sendEmail)).not.toHaveBeenCalled()
   })
 
-  it('genuinely-unpaid (payment_status=unpaid): rejected, no UPDATE, no email, 200', async () => {
-    // Triple-gate sub-case (a): 'unpaid' means payment is expected but
-    // hasn't landed — confirming would oversell. Still rejected.
+  it('genuinely-unpaid, NONZERO amount owed (payment_status=unpaid, amount_total=2060): rejected, no UPDATE, no email, 200', async () => {
+    // webhook-comp-detection-fix §6 case 2 (regression guard for §3.2's
+    // deliberate asymmetry). REWRITTEN 2026-08-13 — the previous version of
+    // this test used compSessionEvent's default amount_total=0, which is a
+    // £0/complete session and — under the REDESIGNED isCompSession gate
+    // (status==='complete' && amount_total===0, no longer ANDed with
+    // payment_status) — now correctly MATCHES isCompSession and gets
+    // confirmed. That was never actually testing "genuinely unpaid"; it was
+    // colliding with the fixed comp path once payment_status stopped being
+    // part of the gate. The REAL risk this test must guard is a session
+    // where money is still owed (a real, nonzero ticket price) and
+    // settlement hasn't landed — that must still be rejected regardless of
+    // the comp-detection relaxation, which is why amount_total is set to a
+    // realistic nonzero ticket price here (not the £0 default).
     const POST = await importRoute()
     supabaseHandle = makeSupabaseMock()
 
     constructEventMock.mockReturnValue(
-      compSessionEvent({ payment_status: 'unpaid', payment_intent: 'pi_x' }),
+      compSessionEvent({
+        payment_status: 'unpaid',
+        amount_total: 2060,
+        payment_intent: 'pi_x',
+      }),
     )
 
     const res = await POST(makeRequest('{}', 't=1,v1=sig'))
@@ -490,9 +511,12 @@ describe('POST /api/stripe/webhook', () => {
   })
 
   it('no_payment_required but status=open (not complete): rejected, no UPDATE, 200', async () => {
-    // Triple-gate sub-case (b): no_payment_required can surface on a
-    // non-complete session mid-lifecycle. We only fulfill a *completed*
-    // session, so status='open' is rejected.
+    // Gate sub-case (b), still correct post webhook-comp-detection-fix §3:
+    // isCompSession requires status==='complete' (unchanged by the fix —
+    // only the payment_status conjunct was dropped). no_payment_required
+    // can surface on a non-complete session mid-lifecycle; we only fulfill
+    // a *completed* session, so status='open' is rejected regardless of
+    // payment_status.
     const POST = await importRoute()
     supabaseHandle = makeSupabaseMock()
 
@@ -507,8 +531,11 @@ describe('POST /api/stripe/webhook', () => {
   })
 
   it('no_payment_required + complete but amount_total>0 (inconsistent): rejected, no UPDATE, 200', async () => {
-    // Triple-gate sub-case (c): amount_total>0 with no_payment_required is
-    // an inconsistent shape — not a genuine full comp. Rejected.
+    // Gate sub-case (c), still correct post webhook-comp-detection-fix §3:
+    // isCompSession requires amount_total===0 (unchanged by the fix).
+    // amount_total>0 alongside payment_status='no_payment_required' is an
+    // inconsistent shape — not a genuine full comp — and payment_status
+    // isn't 'paid' either, so isPaidSession is also false. Rejected.
     const POST = await importRoute()
     supabaseHandle = makeSupabaseMock()
 
@@ -583,6 +610,175 @@ describe('POST /api/stripe/webhook', () => {
     expect(supabaseHandle.chain.update).not.toHaveBeenCalled()
     expect(paymentIntentsRetrieveMock).not.toHaveBeenCalled()
     expect(vi.mocked(sendEmail)).not.toHaveBeenCalled()
+  })
+
+  // ── comp-detection fix (payment_status no longer part of the gate) ────
+  //
+  // docs/SYSTEM-DESIGN-webhook-comp-detection-fix.md §6. Production
+  // evidence: at least 13 genuine £0, 100%-off-promotion-code Checkout
+  // Sessions came back from Stripe with payment_status='paid' (not
+  // 'no_payment_required'), despite amount_total===0 and
+  // payment_intent===null. The old triple-gate (payment_status ===
+  // 'no_payment_required' AND status==='complete' AND amount_total===0)
+  // missed every one of these — they fell through to the isPaidSession
+  // branch, got confirmed, but never had their money columns zeroed. The
+  // fix redefines isCompSession := status==='complete' && amount_total===0,
+  // dropping payment_status entirely from the comp gate. isPaidSession
+  // (payment_status==='paid') is UNCHANGED — see §3.2 of the design doc for
+  // why relaxing that one too would reintroduce a real risk (delayed-
+  // notification payment methods completing the Checkout flow before
+  // settlement actually succeeds or fails).
+
+  it('INVARIANT (the exact 13-row production bug): a £0 session reporting payment_status=paid still takes the comp-zeroing branch, never the bare-paid branch', async () => {
+    // This is the case that was silently missing before the fix and is
+    // exactly what stranded the 13 known production bookings: Stripe
+    // returned payment_status='paid' for a genuine £0 promotion-code
+    // checkout. Before the fix, isCompSession required payment_status===
+    // 'no_payment_required', so this session satisfied ONLY isPaidSession
+    // — confirmed, but price_at_booking/booking_fee_pence left at full
+    // face value. After the fix, isCompSession no longer checks
+    // payment_status at all, so amount_total===0 alone is enough to take
+    // the zeroing branch, regardless of what payment_status says.
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    supabaseHandle.maybeSingle.mockResolvedValue({
+      data: { id: 'b_bug', user_id: 'u1', event_id: 'e1' },
+      error: null,
+    })
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: { full_name: 'Charlotte', email: 'ch@example.com' },
+      error: null,
+    })
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: {
+        title: 'Wine & Wisdom',
+        slug: 'wine-wisdom',
+        date_time: '2026-05-07T19:00:00Z',
+        venue_name: 'Cellar',
+        venue_address: '1 Bank End',
+        venue_revealed: true,
+      },
+      error: null,
+    })
+
+    const consoleInfoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    constructEventMock.mockReturnValue(
+      compSessionEvent({
+        id: 'cs_bug_repro',
+        payment_status: 'paid', // the surprising, misleading signal
+        status: 'complete',
+        amount_total: 0,
+        payment_intent: null, // Stripe never creates a PI for a £0 order
+        metadata: { booking_id: 'b_bug' },
+      }),
+    )
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+
+    // The comp-zeroing branch was taken: both money columns zeroed,
+    // stripe_payment_id null, in the SAME UPDATE payload as the confirm.
+    expect(supabaseHandle.chain.update).toHaveBeenCalledWith({
+      status: 'confirmed',
+      stripe_payment_id: null,
+      waitlist_position: null,
+      price_at_booking: 0,
+      booking_fee_pence: 0,
+      is_admin_hold: false,
+      admin_hold_expires_at: null,
+    })
+
+    // No PaymentIntent was ever created for this session (payment_intent
+    // stayed null) — the fee-capture lookup must never fire.
+    expect(paymentIntentsRetrieveMock).not.toHaveBeenCalled()
+
+    // Diagnostic telemetry (§3.3): the mismatch between amount_total===0
+    // and a non-'no_payment_required' payment_status is logged, not
+    // silently ignored — this is the exact signal that would have caught
+    // the bug immediately had it existed before.
+    const logged = consoleInfoSpy.mock.calls
+      .map((call) => call.join(' '))
+      .join('\n')
+    expect(logged).toMatch(
+      /comp session confirmed via amount_total===0 despite unexpected payment_status/i,
+    )
+    consoleInfoSpy.mockRestore()
+
+    expect(vi.mocked(sendEmail)).toHaveBeenCalledTimes(1)
+  })
+
+  it('normal non-zero PAID session (payment_status=paid, real payment_intent, amount_total>0): records the payment_intent, does NOT zero price columns', async () => {
+    // webhook-comp-detection-fix §6 item 4 / the task's own explicit ask:
+    // confirm the ordinary, by-far-most-common path is unaffected by the
+    // redefinition. Deliberately exercises status/amount_total EXPLICITLY
+    // (unlike the earlier "confirms the matching booking" test, which
+    // leaves them undefined) so this test fails loudly if a future change
+    // ever makes isCompSession accidentally true for a real paid session.
+    const POST = await importRoute()
+    supabaseHandle = makeSupabaseMock()
+
+    supabaseHandle.maybeSingle.mockResolvedValue({
+      data: { id: 'b_paid', user_id: 'u1', event_id: 'e1' },
+      error: null,
+    })
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: { full_name: 'James', email: 'james@example.com' },
+      error: null,
+    })
+    supabaseHandle.single.mockResolvedValueOnce({
+      data: {
+        title: 'Supper Club',
+        slug: 'supper-club',
+        date_time: '2026-06-01T19:00:00Z',
+        venue_name: 'The Kitchen',
+        venue_address: '2 Bank End',
+        venue_revealed: true,
+      },
+      error: null,
+    })
+
+    constructEventMock.mockReturnValue(
+      compSessionEvent({
+        id: 'cs_ordinary_paid',
+        payment_status: 'paid',
+        status: 'complete',
+        amount_total: 2060, // real, nonzero ticket + fee total
+        payment_intent: 'pi_ordinary',
+        metadata: { booking_id: 'b_paid' },
+      }),
+    )
+
+    const res = await POST(makeRequest('{}', 't=1,v1=sig'))
+    expect(res.status).toBe(200)
+
+    expect(supabaseHandle.chain.update).toHaveBeenCalledWith({
+      status: 'confirmed',
+      stripe_payment_id: 'pi_ordinary',
+      waitlist_position: null,
+      is_admin_hold: false,
+      admin_hold_expires_at: null,
+      // No price_at_booking / booking_fee_pence keys — only the comp
+      // branch adds them.
+    })
+    const updatePayload = (supabaseHandle.chain.update as ReturnType<typeof vi.fn>)
+      .mock.calls[0][0] as Record<string, unknown>
+    expect(updatePayload).toEqual(
+      expect.not.objectContaining({ price_at_booking: expect.anything() }),
+    )
+    expect(updatePayload).toEqual(
+      expect.not.objectContaining({ booking_fee_pence: expect.anything() }),
+    )
+
+    // The real PaymentIntent is looked up for fee capture — unaffected by
+    // the comp-detection redefinition.
+    expect(paymentIntentsRetrieveMock).toHaveBeenCalledWith(
+      'pi_ordinary',
+      expect.objectContaining({
+        expand: expect.arrayContaining(['latest_charge.balance_transaction']),
+      }),
+    )
   })
 
   // ── charge.refunded (P2-7b) ────────────────────────────────────────────

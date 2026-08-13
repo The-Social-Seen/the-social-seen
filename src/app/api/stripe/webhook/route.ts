@@ -11,14 +11,21 @@
  *      Reject with 401 on mismatch.
  *   3. Switch on event.type:
  *        - checkout.session.completed → confirm the matching booking.
- *          Paid path: record the PaymentIntent id (idempotent via the
- *          partial UNIQUE index on bookings.stripe_payment_id).
- *          Comp path (100%-off promotion code → £0 total): Stripe sets
- *          payment_status='no_payment_required' and creates NO
- *          PaymentIntent, so we confirm with stripe_payment_id=null and
- *          zero both money columns. Idempotent via the
- *          .eq('status','pending_payment') optimistic guard. See
- *          docs/SYSTEM-DESIGN-zero-total-coupon-bookings.md.
+ *          Paid path: payment_status='paid', record the PaymentIntent id
+ *          (idempotent via the partial UNIQUE index on
+ *          bookings.stripe_payment_id).
+ *          Comp path (100%-off promotion code → £0 total): detected via
+ *          status='complete' && amount_total===0 — NOT payment_status
+ *          (Stripe does not reliably report
+ *          payment_status='no_payment_required' for every genuine £0
+ *          session; see docs/SYSTEM-DESIGN-webhook-comp-detection-fix.md).
+ *          Comp sessions create NO PaymentIntent, so we confirm with
+ *          stripe_payment_id=null and zero both money columns. Idempotent
+ *          via the .eq('status','pending_payment') optimistic guard. See
+ *          docs/SYSTEM-DESIGN-zero-total-coupon-bookings.md (original
+ *          design) and docs/SYSTEM-DESIGN-webhook-comp-detection-fix.md
+ *          (detection-logic fix + backfill for bookings stranded by the
+ *          original payment_status-based gate).
  *        - Everything else → log + ACK 200 so Stripe doesn't retry.
  *   4. Always return 200 after signature verification succeeds, even if
  *      the handler encountered a database error — otherwise Stripe will
@@ -121,28 +128,52 @@ async function handleCheckoutCompleted(
     return
   }
 
-  // Fulfillment eligibility. Two confirmable shapes (per Stripe's
-  // recommended `payment_status != 'unpaid'` gate, tightened for us — see
-  // docs/SYSTEM-DESIGN-zero-total-coupon-bookings.md §2.1):
+  // Fulfillment eligibility. Two confirmable shapes:
   //
   //   1. Paid session — the normal flow. payment_status='paid', a
-  //      PaymentIntent exists.
-  //   2. Comp session — a 100%-off promotion code reduced the total to
-  //      £0. Stripe sets payment_status='no_payment_required', creates NO
-  //      PaymentIntent (session.payment_intent is null), and still fires
-  //      this event with status='complete' / amount_total=0. We require
-  //      all three signals so a genuinely-unpaid/abandoned/expired session
-  //      (which we still reject, exactly as before) can't slip through.
+  //      PaymentIntent exists. UNCHANGED — do not relax this gate. Stripe's
+  //      own recommended fulfillment check (`payment_status != 'unpaid'`,
+  //      https://docs.stripe.com/checkout/fulfillment) exists because
+  //      `session.status` can become 'complete' while `payment_status` is
+  //      still 'unpaid' for delayed-notification payment methods (SEPA
+  //      Debit, Bacs Debit, vouchers) — settlement is asynchronous and can
+  //      still fail after Checkout itself completes. Dropping the strict
+  //      'paid' requirement here would risk prematurely confirming a
+  //      booking for a payment that later fails.
+  //
+  //   2. Comp session — a 100%-off promotion code reduced the total to £0.
+  //      AUTHORITATIVE signal: `status === 'complete' && amount_total ===
+  //      0`. `amount_total` is Stripe's own server-computed final total —
+  //      never client-supplied, never provisional once status is
+  //      'complete'. There is no legitimate Stripe flow where a completed
+  //      session reports amount_total=0 while the customer actually owes
+  //      money.
+  //
+  //      Deliberately does NOT also require payment_status ===
+  //      'no_payment_required'. Production evidence (2026-08-13, see
+  //      docs/SYSTEM-DESIGN-webhook-comp-detection-fix.md) showed at least
+  //      13 genuine £0 promotion-code checkouts where Stripe returned
+  //      payment_status: 'paid' instead of 'no_payment_required', despite
+  //      amount_total=0 and no PaymentIntent ever being created
+  //      (session.payment_intent stayed null). Those sessions fell through
+  //      to the isPaidSession branch instead of the comp-zeroing branch,
+  //      leaving price_at_booking/booking_fee_pence stranded at full face
+  //      value on an already-fully-settled £0 booking. payment_status is
+  //      not part of this gate any more — it's logged as diagnostics only
+  //      (below), never used to decide comp vs. not.
+  //
+  //      This relaxation is safe specifically for the comp path (and only
+  //      the comp path — see point 1): a £0 order has nothing left to
+  //      settle asynchronously, and Checkout doesn't even collect a
+  //      payment method when the total is zero.
   const isPaidSession = session.payment_status === 'paid'
   const isCompSession =
-    session.payment_status === 'no_payment_required' &&
-    session.status === 'complete' &&
-    session.amount_total === 0
+    session.status === 'complete' && session.amount_total === 0
 
   if (!(isPaidSession || isCompSession)) {
     // Genuinely unpaid / abandoned / inconsistent — do nothing. Same
-    // rejection as the old `payment_status !== 'paid'` gate, now also
-    // logging the fields that distinguish a comp from these.
+    // rejection as before, logging the fields that distinguish a comp
+    // from these.
     console.warn(
       '[stripe/webhook] checkout.session.completed not fulfillable:',
       {
@@ -152,6 +183,19 @@ async function handleCheckoutCompleted(
       },
     )
     return
+  }
+
+  // Diagnostics — always log payment_status, never gate on it. This is
+  // the telemetry that would have caught the 2026-08-13 bug immediately:
+  // an isCompSession=true session where payment_status isn't the expected
+  // 'no_payment_required' is now visible in logs going forward, helping
+  // confirm the exact Stripe-side mechanism over future comp redemptions
+  // (see docs/SYSTEM-DESIGN-webhook-comp-detection-fix.md §2).
+  if (isCompSession && session.payment_status !== 'no_payment_required') {
+    console.info(
+      '[stripe/webhook] comp session confirmed via amount_total===0 despite unexpected payment_status:',
+      { payment_status: session.payment_status, session_id: session.id },
+    )
   }
 
   // Resolve the PaymentIntent — present (string) for a paid session, null
