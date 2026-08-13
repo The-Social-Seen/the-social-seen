@@ -1,28 +1,52 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 /**
  * Coverage for `abandonPendingCheckout` (src/app/events/[slug]/actions.ts).
- * This function previously had ZERO test coverage in the repo — this file
- * covers both its pre-existing 'book'/'claim' behaviour (regression
- * safety net), the 'admin_hold' option added by
- * SYSTEM-DESIGN-admin-waitlist-promotion-payment.md §5 site #2, and the
- * 'admin_remediation' option added by that same doc's same-day Addendum
- * (§Addendum-D / fix #2 in the PR description) — THE actual bug that was
- * found and fixed mid-implementation: a generic `from=admin_hold` would
- * have wrongly sent a payment-remediation abandon to `waitlisted` instead
- * of back to `confirmed`, silently recreating the exact
- * confirmed-without-payment incident this whole feature exists to fix.
+ *
+ * ── Why this file was rewritten (again) ─────────────────────────────────
+ *
+ * Round 1: this function trusted the caller-supplied `options.from` string
+ * directly for the rollback decision — a live P0 vulnerability (a member
+ * could spoof `?from=admin_remediation` and get a free confirmed ticket).
+ *
+ * Round 2: fixed by deriving `rollbackStatus` from three tamper-proof
+ * columns (`is_admin_hold`, `cancelled_at`, `waitlist_position`) fetched via
+ * a plain TS SELECT-then-UPDATE against the user-scoped client. That fix's
+ * OWN trust model was then found tamperable via a direct REST `PATCH` of
+ * `is_admin_hold`/`admin_hold_expires_at` — closed by
+ * `20260812171530_revoke_bookings_admin_hold_column_write.sql`, which
+ * REVOKEs UPDATE on those two columns from `authenticated`/`anon`.
+ *
+ * Round 3 (this file): that REVOKE broke Round 2's implementation, because
+ * its UPDATE unconditionally named both revoked columns in its SET clause
+ * via the user-scoped client. The fix moves the ENTIRE lookup + branch +
+ * write into a new `SECURITY DEFINER` RPC, `public.abandon_pending_checkout
+ * (p_user_id uuid, p_event_id uuid)` (see
+ * `supabase/migrations/20260812180000_abandon_pending_checkout_rpc.sql`,
+ * covered separately at the SQL-text level in
+ * `src/lib/supabase/__tests__/migration-abandon-pending-checkout-rpc.test.ts`).
+ *
+ * `abandonPendingCheckout` is now a thin wrapper: auth check, call the RPC,
+ * map its jsonb response onto `ActionResult`, run the (never-trusted)
+ * `options.from` diagnostic comparison, revalidate. This file's job shrinks
+ * to match — it mocks `supabase.rpc('abandon_pending_checkout', ...)`
+ * instead of `.from('bookings')` table calls, and no longer needs to
+ * exercise the 5-way branch logic itself (that's the SQL test file's job
+ * now). The security invariant this file still must defend: the RPC is
+ * called with ONLY `{p_user_id, p_event_id}` — never `options.from` or any
+ * other client-supplied hint — and the RPC's real returned `status` (never
+ * the `from` hint) is what the function returns to the caller.
  */
 
 const mockGetUser = vi.fn()
-const mockFrom = vi.fn()
+const mockRpc = vi.fn()
 
 vi.mock('@/lib/supabase/server', () => ({
   createServerClient: vi.fn(() =>
     Promise.resolve({
       auth: { getUser: mockGetUser },
-      from: mockFrom,
-      rpc: vi.fn(),
+      from: vi.fn(),
+      rpc: mockRpc,
     }),
   ),
 }))
@@ -44,364 +68,279 @@ function unauthenticateUser() {
   })
 }
 
-/**
- * Chainable mock mirroring the PostgREST builder pattern used throughout
- * this codebase's tests. Captures every `.eq(...)` call so tests can
- * assert the exact filter set applied to the UPDATE.
- */
-function mockUpdateChain(response: { data?: unknown; error?: unknown }) {
-  const chain: Record<string, ReturnType<typeof vi.fn>> = {}
-  const methods = ['update', 'eq', 'is']
-  for (const m of methods) {
-    chain[m] = vi.fn().mockReturnValue(chain)
-  }
-  chain.then = vi.fn((resolve: (v: unknown) => void) => resolve(response))
-  mockFrom.mockReturnValue(chain)
-  return chain
-}
-
 beforeEach(() => {
   vi.clearAllMocks()
 })
 
 // ════════════════════════════════════════════════════════════════════════════
-// Input validation / auth
+// Auth
 // ════════════════════════════════════════════════════════════════════════════
 
-describe('abandonPendingCheckout — validation and auth', () => {
-  it('returns an error when eventId is empty', async () => {
-    const result = await abandonPendingCheckout('')
-    expect(result.success).toBe(false)
-    expect(result.error).toBe('Event ID is required')
-    expect(mockFrom).not.toHaveBeenCalled()
-  })
-
-  it('returns an error when the user is not authenticated', async () => {
+describe('abandonPendingCheckout — auth', () => {
+  it('INVARIANT: an unauthenticated caller is rejected before the RPC is ever called', async () => {
     unauthenticateUser()
-    const result = await abandonPendingCheckout('evt-1')
-    expect(result.success).toBe(false)
-    expect(result.error).toBe('Authentication required')
-    expect(mockFrom).not.toHaveBeenCalled()
-  })
-})
-
-// ════════════════════════════════════════════════════════════════════════════
-// Rollback status per `from` value
-// ════════════════════════════════════════════════════════════════════════════
-
-describe('abandonPendingCheckout — rollback status per `from` value', () => {
-  it("from omitted (default) → rolls back to 'cancelled'", async () => {
-    authenticateUser('user-1')
-    const chain = mockUpdateChain({ data: null, error: null })
-
-    const result = await abandonPendingCheckout('evt-1')
-
-    expect(result.success).toBe(true)
-    expect(chain.update).toHaveBeenCalledWith({
-      status: 'cancelled',
-      is_admin_hold: false,
-      admin_hold_expires_at: null,
-    })
-  })
-
-  it("from: 'book' → rolls back to 'cancelled' (explicit form of the default)", async () => {
-    authenticateUser('user-1')
-    const chain = mockUpdateChain({ data: null, error: null })
-
-    await abandonPendingCheckout('evt-1', { from: 'book' })
-
-    expect(chain.update).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'cancelled' }),
-    )
-  })
-
-  it("from: 'claim' → rolls back to 'waitlisted' (preserves waitlist queue position)", async () => {
-    authenticateUser('user-1')
-    const chain = mockUpdateChain({ data: null, error: null })
-
-    await abandonPendingCheckout('evt-1', { from: 'claim' })
-
-    expect(chain.update).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'waitlisted' }),
-    )
-  })
-
-  it("INVARIANT: from: 'admin_hold' → rolls back to 'waitlisted' (NOT 'cancelled') AND clears both hold columns", async () => {
-    // This is the core new-behaviour test (spec §5 site #2). An admin
-    // promoted this member off the waitlist and sent them a payment
-    // link; if they click "← Back" out of Stripe, they must land back on
-    // the waitlist at their frozen position — losing their spot entirely
-    // because Stripe hiccuped (or they just wanted more time to decide)
-    // would be a strictly worse outcome than the bug this whole feature
-    // fixes.
-    authenticateUser('user-1')
-    const chain = mockUpdateChain({ data: null, error: null })
-
-    const result = await abandonPendingCheckout('evt-1', { from: 'admin_hold' })
-
-    expect(result.success).toBe(true)
-    expect(chain.update).toHaveBeenCalledWith({
-      status: 'waitlisted',
-      is_admin_hold: false,
-      admin_hold_expires_at: null,
-    })
-  })
-
-  it("INVARIANT: from: 'admin_reinstate' → rolls back to 'cancelled' (NOT 'waitlisted', NOT 'confirmed') AND clears both hold columns", async () => {
-    // "Gap C" — SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md. This
-    // member's booking was `cancelled` (reaped) this whole cycle — never
-    // waitlisted, never confirmed. If they click "← Back" out of Stripe
-    // after an admin reinstated their booking, the only honest rollback
-    // is 'cancelled': the exact state they were in immediately before the
-    // admin's reinstatement attempt. Rolling back to 'waitlisted' would
-    // put them in a queue they were never actually in this cycle (ahead
-    // of members who genuinely are waitlisted); rolling back to
-    // 'confirmed' would hand them a seat they never held.
-    authenticateUser('user-1')
-    const chain = mockUpdateChain({ data: null, error: null })
-
-    const result = await abandonPendingCheckout('evt-1', { from: 'admin_reinstate' })
-
-    expect(result.success).toBe(true)
-    expect(chain.update).toHaveBeenCalledWith({
-      status: 'cancelled',
-      is_admin_hold: false,
-      admin_hold_expires_at: null,
-    })
-  })
-
-  it("distinguishes 'admin_reinstate' from 'book' (both resolve to 'cancelled' today, but via separate, independently-editable branches — not the same fallback path)", async () => {
-    // The implementation deliberately spells 'admin_reinstate' out as its
-    // own ternary branch rather than folding it into the final `:
-    // 'cancelled'` default (see actions.ts's own comment) so a future
-    // change to one target can't silently affect the other. This test
-    // only pins the CURRENT observable behaviour (both -> 'cancelled')
-    // since that's all a black-box test of the exported function can
-    // verify; it cannot assert which branch of the ternary fired.
-    authenticateUser('user-1')
-
-    const bookChain = mockUpdateChain({ data: null, error: null })
-    await abandonPendingCheckout('evt-1', { from: 'book' })
-    const bookPayload = (bookChain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
-      status: string
-    }
-
-    const reinstateChain = mockUpdateChain({ data: null, error: null })
-    await abandonPendingCheckout('evt-1', { from: 'admin_reinstate' })
-    const reinstatePayload = (reinstateChain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
-      status: string
-    }
-
-    expect(bookPayload.status).toBe('cancelled')
-    expect(reinstatePayload.status).toBe('cancelled')
-  })
-
-  it('an unrecognised `from` string falls back to the default cancelled behaviour (defensive)', async () => {
-    authenticateUser('user-1')
-    const chain = mockUpdateChain({ data: null, error: null })
-
-    // @ts-expect-error — deliberately passing an invalid value to prove
-    // the ternary's fallback branch, not just its two named cases.
-    await abandonPendingCheckout('evt-1', { from: 'something-unexpected' })
-
-    expect(chain.update).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'cancelled' }),
-    )
-  })
-
-  it("INVARIANT: from: 'admin_remediation' -> rolls back to 'confirmed' (NOT 'waitlisted', NOT 'cancelled') AND clears both hold columns", async () => {
-    // THE bug that got fixed mid-implementation (task brief: "a generic
-    // from=admin_hold would have wrongly sent a payment-remediation
-    // abandon to waitlisted instead of back to confirmed"). This member's
-    // booking was CONFIRMED (unpaid) this whole cycle via an admin
-    // payment-remediation hold — they were never on the waitlist. If they
-    // click "<- Back" out of Stripe, rolling back to 'waitlisted' here
-    // would silently recreate a DIFFERENT bad state (a real member with a
-    // real seat, incorrectly told they need to wait for one), and rolling
-    // back to 'cancelled' would take away a seat they are legitimately
-    // entitled to. 'confirmed' (unpaid, exactly where they started) is
-    // the only honest rollback.
-    authenticateUser('user-1')
-    const chain = mockUpdateChain({ data: null, error: null })
 
     const result = await abandonPendingCheckout('evt-1', { from: 'admin_remediation' })
 
-    expect(result.success).toBe(true)
-    expect(chain.update).toHaveBeenCalledWith({
-      status: 'confirmed',
-      is_admin_hold: false,
-      admin_hold_expires_at: null,
+    expect(result).toEqual({ success: false, error: 'Authentication required' })
+    expect(mockRpc).not.toHaveBeenCalled()
+  })
+
+  it('an auth.getUser() error (not just a null user) is also treated as unauthenticated', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: null },
+      error: { message: 'session expired' },
     })
-  })
-
-  it("CROSS-CHECK: all five 'from' values map to genuinely distinct rollback statuses where the spec says so (book/cancelled, claim/waitlisted, admin_hold/waitlisted, admin_remediation/confirmed, admin_reinstate/cancelled)", async () => {
-    // Guards against the specific regression this test file exists to
-    // catch: a copy-paste that leaves 'admin_hold' and 'admin_remediation'
-    // sharing the same rollback status (they must NOT — see the INVARIANT
-    // test above), while 'claim' and 'admin_hold' correctly DO share
-    // 'waitlisted' (that part is intentional, per spec §5 site #2), and
-    // 'admin_reinstate' correctly DOES share 'cancelled' with 'book' (also
-    // intentional — design doc §4.5's own note).
-    authenticateUser('user-1')
-
-    async function rollbackStatusFor(
-      from?: 'book' | 'claim' | 'admin_hold' | 'admin_remediation' | 'admin_reinstate',
-    ) {
-      const chain = mockUpdateChain({ data: null, error: null })
-      await abandonPendingCheckout('evt-1', from ? { from } : undefined)
-      const payload = (chain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
-        status: string
-      }
-      return payload.status
-    }
-
-    expect(await rollbackStatusFor('book')).toBe('cancelled')
-    expect(await rollbackStatusFor('claim')).toBe('waitlisted')
-    expect(await rollbackStatusFor('admin_hold')).toBe('waitlisted')
-    expect(await rollbackStatusFor('admin_remediation')).toBe('confirmed')
-    expect(await rollbackStatusFor('admin_reinstate')).toBe('cancelled')
-
-    // The one pair that must NEVER match — this is the exact bug shape.
-    const claimStatus = await rollbackStatusFor('claim')
-    const remediationStatus = await rollbackStatusFor('admin_remediation')
-    expect(remediationStatus).not.toBe(claimStatus)
-
-    // admin_reinstate must also never collide with either "still active"
-    // destination (waitlisted/confirmed) — only with 'book''s cancelled.
-    const reinstateStatus = await rollbackStatusFor('admin_reinstate')
-    expect(reinstateStatus).not.toBe('waitlisted')
-    expect(reinstateStatus).not.toBe('confirmed')
-  })
-})
-
-// ════════════════════════════════════════════════════════════════════════════
-// Hold-column clearing (chk_bookings_admin_hold_requires_pending_payment
-// safety net) — every branch must clear both columns unconditionally.
-// ════════════════════════════════════════════════════════════════════════════
-
-describe('abandonPendingCheckout — is_admin_hold / admin_hold_expires_at are ALWAYS cleared', () => {
-  it("clears both columns even on the 'book' (default) path, where they were already false/null (harmless no-op)", async () => {
-    authenticateUser('user-1')
-    const chain = mockUpdateChain({ data: null, error: null })
-
-    await abandonPendingCheckout('evt-1', { from: 'book' })
-
-    const payload = (chain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<
-      string,
-      unknown
-    >
-    expect(payload.is_admin_hold).toBe(false)
-    expect(payload.admin_hold_expires_at).toBeNull()
-  })
-
-  it("clears both columns on the 'claim' path too", async () => {
-    authenticateUser('user-1')
-    const chain = mockUpdateChain({ data: null, error: null })
-
-    await abandonPendingCheckout('evt-1', { from: 'claim' })
-
-    const payload = (chain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<
-      string,
-      unknown
-    >
-    expect(payload.is_admin_hold).toBe(false)
-    expect(payload.admin_hold_expires_at).toBeNull()
-  })
-
-  it("clears both columns on the 'admin_remediation' path too (required — the row would otherwise violate chk_bookings_admin_hold_requires_pending_payment the instant status leaves pending_payment)", async () => {
-    authenticateUser('user-1')
-    const chain = mockUpdateChain({ data: null, error: null })
-
-    await abandonPendingCheckout('evt-1', { from: 'admin_remediation' })
-
-    const payload = (chain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<
-      string,
-      unknown
-    >
-    expect(payload.is_admin_hold).toBe(false)
-    expect(payload.admin_hold_expires_at).toBeNull()
-  })
-
-  it("clears both columns on the 'admin_reinstate' path too (same CHECK-constraint reasoning — the row's is_admin_hold=true is only valid while status=pending_payment)", async () => {
-    authenticateUser('user-1')
-    const chain = mockUpdateChain({ data: null, error: null })
-
-    await abandonPendingCheckout('evt-1', { from: 'admin_reinstate' })
-
-    const payload = (chain.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<
-      string,
-      unknown
-    >
-    expect(payload.is_admin_hold).toBe(false)
-    expect(payload.admin_hold_expires_at).toBeNull()
-  })
-})
-
-// ════════════════════════════════════════════════════════════════════════════
-// Row scoping / authorisation
-// ════════════════════════════════════════════════════════════════════════════
-
-describe('abandonPendingCheckout — row scoping', () => {
-  it('INVARIANT: the UPDATE is scoped to the CALLER\'s own user_id — cannot be pointed at another user\'s booking', async () => {
-    authenticateUser('user-1')
-    const chain = mockUpdateChain({ data: null, error: null })
-
-    await abandonPendingCheckout('evt-1')
-
-    expect(chain.eq).toHaveBeenCalledWith('user_id', 'user-1')
-  })
-
-  it('the UPDATE is scoped to the given event_id', async () => {
-    authenticateUser('user-1')
-    const chain = mockUpdateChain({ data: null, error: null })
-
-    await abandonPendingCheckout('evt-42')
-
-    expect(chain.eq).toHaveBeenCalledWith('event_id', 'evt-42')
-  })
-
-  it('the UPDATE is guarded by status = pending_payment (idempotent optimistic guard)', async () => {
-    authenticateUser('user-1')
-    const chain = mockUpdateChain({ data: null, error: null })
-
-    await abandonPendingCheckout('evt-1')
-
-    expect(chain.eq).toHaveBeenCalledWith('status', 'pending_payment')
-  })
-
-  it('the UPDATE excludes soft-deleted rows (deleted_at IS NULL)', async () => {
-    authenticateUser('user-1')
-    const chain = mockUpdateChain({ data: null, error: null })
-
-    await abandonPendingCheckout('evt-1')
-
-    expect(chain.is).toHaveBeenCalledWith('deleted_at', null)
-  })
-})
-
-// ════════════════════════════════════════════════════════════════════════════
-// Idempotency / error handling
-// ════════════════════════════════════════════════════════════════════════════
-
-describe('abandonPendingCheckout — idempotency and errors', () => {
-  it('a repeat call that matches zero rows (already resolved) still returns success (no-op is not an error)', async () => {
-    authenticateUser('user-1')
-    // Supabase resolves with no error even when zero rows match a bare
-    // .update().eq()... chain (no .select() to report affected rows).
-    mockUpdateChain({ data: null, error: null })
-
-    const result = await abandonPendingCheckout('evt-1', { from: 'admin_hold' })
-
-    expect(result).toEqual({ success: true })
-  })
-
-  it('returns a generic error and does not throw when the UPDATE itself errors', async () => {
-    authenticateUser('user-1')
-    mockUpdateChain({ data: null, error: { message: 'db unreachable' } })
 
     const result = await abandonPendingCheckout('evt-1')
 
-    expect(result.success).toBe(false)
-    expect(result.error).toBe('Could not release the booking')
+    expect(result).toEqual({ success: false, error: 'Authentication required' })
+    expect(mockRpc).not.toHaveBeenCalled()
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// Input validation
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('abandonPendingCheckout — input validation', () => {
+  it('returns an error when eventId is empty, without checking auth or calling the RPC', async () => {
+    const result = await abandonPendingCheckout('')
+
+    expect(result).toEqual({ success: false, error: 'Event ID is required' })
+    expect(mockGetUser).not.toHaveBeenCalled()
+    expect(mockRpc).not.toHaveBeenCalled()
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// Happy path — RPC called with the correct, minimal args
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('abandonPendingCheckout — happy path', () => {
+  it('calls the RPC with exactly {p_user_id, p_event_id} — no from/status/hint parameter of any kind', async () => {
+    authenticateUser('user-1')
+    mockRpc.mockResolvedValue({
+      data: { booking_id: 'bk-1', status: 'cancelled' },
+      error: null,
+    })
+
+    await abandonPendingCheckout('evt-1', { from: 'admin_remediation' })
+
+    expect(mockRpc).toHaveBeenCalledTimes(1)
+    expect(mockRpc).toHaveBeenCalledWith('abandon_pending_checkout', {
+      p_user_id: 'user-1',
+      p_event_id: 'evt-1',
+    })
+    // Belt-and-braces: the exact call args object must have exactly these
+    // two keys — a future regression that threads `from` (or anything
+    // else) into the RPC call would be caught here even if it were an
+    // additional, extra key alongside the two required ones.
+    const callArgs = mockRpc.mock.calls[0][1] as Record<string, unknown>
+    expect(Object.keys(callArgs).sort()).toEqual(['p_event_id', 'p_user_id'])
+  })
+
+  it('returns {success: true, status} echoing the RPC-reported status, for each of the three possible statuses', async () => {
+    for (const status of ['cancelled', 'waitlisted', 'confirmed'] as const) {
+      authenticateUser('user-1')
+      mockRpc.mockResolvedValue({
+        data: { booking_id: 'bk-1', status },
+        error: null,
+      })
+
+      const result = await abandonPendingCheckout('evt-1')
+
+      expect(result).toEqual({ success: true, status })
+    }
+  })
+
+  it('scopes the RPC call to the authenticated caller\'s own user id, never anyone else\'s', async () => {
+    authenticateUser('user-42')
+    mockRpc.mockResolvedValue({
+      data: { booking_id: 'bk-1', status: 'cancelled' },
+      error: null,
+    })
+
+    await abandonPendingCheckout('evt-1')
+
+    expect(mockRpc).toHaveBeenCalledWith('abandon_pending_checkout', {
+      p_user_id: 'user-42',
+      p_event_id: 'evt-1',
+    })
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// Idempotent no-op — no matching pending_payment row
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('abandonPendingCheckout — idempotent no-op', () => {
+  it('RPC signals no matching row (booking_id: null, status: null) → returns {success: true} with NO status key', async () => {
+    // This exact contract is depended on by BookingCancelledHandler.tsx,
+    // which falls through to its default "Payment cancelled" toast copy
+    // whenever `result.status` is undefined (see the component's ternary —
+    // `resultStatus === 'waitlisted' ? ... : resultStatus === 'confirmed'
+    // ? ... : <default>`). Returning `status: null` verbatim instead of
+    // omitting the key would still satisfy that ternary today, but the
+    // component test file
+    // (BookingCancelledHandler.test.tsx — "no status on the result...
+    // falls back to the generic 'payment cancelled' toast copy") and this
+    // migration's design doc (§4, "Response mapping") both pin the
+    // no-`status`-key shape explicitly, so we assert it precisely here
+    // rather than merely asserting falsy.
+    authenticateUser('user-1')
+    mockRpc.mockResolvedValue({
+      data: { booking_id: null, status: null },
+      error: null,
+    })
+
+    const result = await abandonPendingCheckout('evt-1', { from: 'admin_remediation' })
+
+    expect(result).toEqual({ success: true })
+    expect('status' in result).toBe(false)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// Errors — transport-level and RPC business-logic errors are surfaced, not
+// swallowed
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('abandonPendingCheckout — error handling', () => {
+  it('a transport-level RPC error (e.g. a Postgres exception) is mapped to a generic, non-leaking error message', async () => {
+    authenticateUser('user-1')
+    mockRpc.mockResolvedValue({
+      data: null,
+      error: { message: 'connection terminated unexpectedly' },
+    })
+
+    const result = await abandonPendingCheckout('evt-1')
+
+    expect(result).toEqual({ success: false, error: 'Could not release the booking' })
+  })
+
+  it('does not throw when the RPC transport error has no message property', async () => {
+    authenticateUser('user-1')
+    mockRpc.mockResolvedValue({ data: null, error: {} })
+
+    await expect(abandonPendingCheckout('evt-1')).resolves.toEqual({
+      success: false,
+      error: 'Could not release the booking',
+    })
+  })
+
+  it('an RPC business-logic error (data.error, e.g. the RPC\'s own auth.uid() mismatch guard) is passed through, not swallowed', async () => {
+    authenticateUser('user-1')
+    mockRpc.mockResolvedValue({
+      data: { error: 'Unauthorised' },
+      error: null,
+    })
+
+    const result = await abandonPendingCheckout('evt-1')
+
+    expect(result).toEqual({ success: false, error: 'Unauthorised' })
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// options.from — diagnostics only, never sent to the RPC, never influences
+// the result
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('abandonPendingCheckout — options.from is diagnostics-only', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    warnSpy.mockRestore()
+  })
+
+  it('logs a console.warn diagnostic when the spoofed from disagrees with the RPC-derived status, but the RETURNED result is driven entirely by the RPC', async () => {
+    // Simulates a member spoofing ?from=admin_remediation (implies
+    // 'confirmed') on an ordinary self-booked row. The RPC (the real
+    // security boundary now) derives 'cancelled' regardless — this test
+    // pins that the TS wrapper echoes the RPC's real value and merely logs
+    // the mismatch, never acts on `from`.
+    authenticateUser('user-1')
+    mockRpc.mockResolvedValue({
+      data: { booking_id: 'bk-1', status: 'cancelled' },
+      error: null,
+    })
+
+    const result = await abandonPendingCheckout('evt-1', { from: 'admin_remediation' })
+
+    expect(result).toEqual({ success: true, status: 'cancelled' })
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[abandonPendingCheckout] client-supplied "from" hint did not match server-derived rollback',
+      expect.objectContaining({
+        from: 'admin_remediation',
+        derivedRollbackStatus: 'cancelled',
+        bookingId: 'bk-1',
+      }),
+    )
+  })
+
+  it('does not warn when the from hint happens to agree with the RPC-derived status', async () => {
+    authenticateUser('user-1')
+    mockRpc.mockResolvedValue({
+      data: { booking_id: 'bk-1', status: 'cancelled' },
+      error: null,
+    })
+
+    await abandonPendingCheckout('evt-1', { from: 'book' })
+
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not warn (and does not throw) when options.from is omitted entirely', async () => {
+    authenticateUser('user-1')
+    mockRpc.mockResolvedValue({
+      data: { booking_id: 'bk-1', status: 'confirmed' },
+      error: null,
+    })
+
+    const result = await abandonPendingCheckout('evt-1')
+
+    expect(result).toEqual({ success: true, status: 'confirmed' })
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not warn on the idempotent no-op branch even with a from hint present (no status to compare against)', async () => {
+    authenticateUser('user-1')
+    mockRpc.mockResolvedValue({
+      data: { booking_id: null, status: null },
+      error: null,
+    })
+
+    const result = await abandonPendingCheckout('evt-1', { from: 'claim' })
+
+    expect(result).toEqual({ success: true })
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  it('SECURITY: from is read for logging only — it is never included in the RPC call args, in ANY branch (happy path, no-op, or error)', async () => {
+    authenticateUser('user-1')
+    for (const rpcResponse of [
+      { data: { booking_id: 'bk-1', status: 'waitlisted' }, error: null },
+      { data: { booking_id: null, status: null }, error: null },
+      { data: { error: 'Unauthorised' }, error: null },
+    ]) {
+      mockRpc.mockClear()
+      mockRpc.mockResolvedValue(rpcResponse)
+
+      await abandonPendingCheckout('evt-1', { from: 'admin_reinstate' })
+
+      expect(mockRpc).toHaveBeenCalledWith('abandon_pending_checkout', {
+        p_user_id: 'user-1',
+        p_event_id: 'evt-1',
+      })
+      const callArgs = mockRpc.mock.calls[0][1] as Record<string, unknown>
+      expect(callArgs).not.toHaveProperty('from')
+      expect(callArgs).not.toHaveProperty('options')
+      expect(callArgs).not.toHaveProperty('status')
+    }
   })
 })

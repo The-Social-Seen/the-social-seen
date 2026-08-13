@@ -48,6 +48,7 @@ vi.mock('@/lib/email/send', () => ({
 
 import {
   createBooking,
+  createPaidCheckout,
   cancelBooking,
   claimWaitlistSpot,
   leaveWaitlist,
@@ -342,6 +343,187 @@ describe('createBooking', () => {
     // Email failure must NOT roll back the booking — user gets a clean success.
     expect(result.success).toBe(true)
     expect(result.bookingId).toBe('bk-3')
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// createPaidCheckout — errorCode / existingBookingId on the "already
+// booked" guard (Decision 2, docs/SYSTEM-DESIGN-paid-checkout-confusion-fix.md §2)
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('createPaidCheckout', () => {
+  it('returns error when eventId is empty', async () => {
+    const result = await createPaidCheckout('')
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('Event ID is required')
+  })
+
+  it('returns error when user is not authenticated', async () => {
+    unauthenticateUser()
+    const result = await createPaidCheckout('evt-1')
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('Authentication required')
+  })
+
+  it('tags a pending_payment conflict with errorCode + existingBookingId + existingBookingCreatedAt', async () => {
+    authenticateUser('user-1')
+    const createdAt = '2026-08-12T18:00:00.000Z'
+    let callCount = 0
+    mockFrom.mockImplementation(() => {
+      callCount++
+      const chain: Record<string, ReturnType<typeof vi.fn>> = {}
+      const methods = ['select', 'eq', 'neq', 'is', 'single', 'maybeSingle', 'order', 'limit']
+      for (const m of methods) chain[m] = vi.fn().mockReturnValue(chain)
+
+      if (callCount === 1) {
+        // Event fetch (for the fee calc)
+        chain.then = vi.fn((resolve: (v: unknown) => void) =>
+          resolve({ data: { title: 'Wine Tasting', slug: 'wine-tasting', price: 3500 }, error: null }),
+        )
+      } else {
+        // Existing-booking lookup on the "Already booked" branch
+        chain.then = vi.fn((resolve: (v: unknown) => void) =>
+          resolve({
+            data: { id: 'booking-existing', status: 'pending_payment', created_at: createdAt },
+            error: null,
+          }),
+        )
+      }
+      return chain
+    })
+    mockRpc.mockResolvedValueOnce({
+      data: { error: 'Already booked for this event' },
+      error: null,
+    })
+
+    const result = await createPaidCheckout('evt-1')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('Already booked for this event')
+    expect(result.errorCode).toBe('already_booked_pending')
+    expect(result.existingBookingId).toBe('booking-existing')
+    expect(result.existingBookingCreatedAt).toBe(createdAt)
+  })
+
+  it('tags a confirmed conflict with errorCode "already_booked_confirmed" and no booking id', async () => {
+    authenticateUser('user-1')
+    let callCount = 0
+    mockFrom.mockImplementation(() => {
+      callCount++
+      const chain: Record<string, ReturnType<typeof vi.fn>> = {}
+      const methods = ['select', 'eq', 'neq', 'is', 'single', 'maybeSingle', 'order', 'limit']
+      for (const m of methods) chain[m] = vi.fn().mockReturnValue(chain)
+
+      if (callCount === 1) {
+        chain.then = vi.fn((resolve: (v: unknown) => void) =>
+          resolve({ data: { title: 'Wine Tasting', slug: 'wine-tasting', price: 3500 }, error: null }),
+        )
+      } else {
+        chain.then = vi.fn((resolve: (v: unknown) => void) =>
+          resolve({
+            data: { id: 'booking-existing', status: 'confirmed', created_at: '2026-08-01T00:00:00.000Z' },
+            error: null,
+          }),
+        )
+      }
+      return chain
+    })
+    mockRpc.mockResolvedValueOnce({
+      data: { error: 'Already booked for this event' },
+      error: null,
+    })
+
+    const result = await createPaidCheckout('evt-1')
+
+    expect(result.success).toBe(false)
+    expect(result.errorCode).toBe('already_booked_confirmed')
+    expect(result.existingBookingId).toBeUndefined()
+  })
+
+  it('tags a waitlisted conflict with errorCode "already_booked_waitlisted"', async () => {
+    authenticateUser('user-1')
+    let callCount = 0
+    mockFrom.mockImplementation(() => {
+      callCount++
+      const chain: Record<string, ReturnType<typeof vi.fn>> = {}
+      const methods = ['select', 'eq', 'neq', 'is', 'single', 'maybeSingle', 'order', 'limit']
+      for (const m of methods) chain[m] = vi.fn().mockReturnValue(chain)
+
+      if (callCount === 1) {
+        chain.then = vi.fn((resolve: (v: unknown) => void) =>
+          resolve({ data: { title: 'Wine Tasting', slug: 'wine-tasting', price: 3500 }, error: null }),
+        )
+      } else {
+        chain.then = vi.fn((resolve: (v: unknown) => void) =>
+          resolve({
+            data: { id: 'booking-existing', status: 'waitlisted', created_at: '2026-08-01T00:00:00.000Z' },
+            error: null,
+          }),
+        )
+      }
+      return chain
+    })
+    mockRpc.mockResolvedValueOnce({
+      data: { error: 'Already booked for this event' },
+      error: null,
+    })
+
+    const result = await createPaidCheckout('evt-1')
+
+    expect(result.success).toBe(false)
+    expect(result.errorCode).toBe('already_booked_waitlisted')
+  })
+
+  it('falls back to the plain generic error with no errorCode when the existing-booking lookup finds nothing (TOCTOU)', async () => {
+    authenticateUser('user-1')
+    let callCount = 0
+    mockFrom.mockImplementation(() => {
+      callCount++
+      const chain: Record<string, ReturnType<typeof vi.fn>> = {}
+      const methods = ['select', 'eq', 'neq', 'is', 'single', 'maybeSingle', 'order', 'limit']
+      for (const m of methods) chain[m] = vi.fn().mockReturnValue(chain)
+
+      if (callCount === 1) {
+        chain.then = vi.fn((resolve: (v: unknown) => void) =>
+          resolve({ data: { title: 'Wine Tasting', slug: 'wine-tasting', price: 3500 }, error: null }),
+        )
+      } else {
+        chain.then = vi.fn((resolve: (v: unknown) => void) => resolve({ data: null, error: null }))
+      }
+      return chain
+    })
+    mockRpc.mockResolvedValueOnce({
+      data: { error: 'Already booked for this event' },
+      error: null,
+    })
+
+    const result = await createPaidCheckout('evt-1')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('Already booked for this event')
+    expect(result.errorCode).toBeUndefined()
+  })
+
+  it('does not run the extra lookup or attach an errorCode for unrelated RPC errors', async () => {
+    authenticateUser('user-1')
+    mockSupabaseChain({
+      data: { title: 'Wine Tasting', slug: 'wine-tasting', price: 3500 },
+      error: null,
+    })
+    mockRpc.mockResolvedValueOnce({
+      data: { error: 'This event is no longer accepting bookings' },
+      error: null,
+    })
+
+    const result = await createPaidCheckout('evt-1')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('This event is no longer accepting bookings')
+    expect(result.errorCode).toBeUndefined()
+    // Only the event-fee lookup ran — no second .from() call for the
+    // existing-booking SELECT, since the error wasn't the "already
+    // booked" guard.
+    expect(mockFrom).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -826,11 +1008,17 @@ describe('leaveWaitlist', () => {
     expect(result.error).toBe('Authentication required')
   })
 
-  it('leaves waitlist successfully and calls recompute RPC', async () => {
+  it('leaves waitlist successfully via the leave_waitlist RPC', async () => {
     authenticateUser('user-1')
 
-    // Mock the recompute_waitlist_positions RPC (W-1 fix: single bulk update)
-    mockRpc.mockResolvedValue({ data: null, error: null })
+    // Cancelling the waitlisted row + recomputing positions now both live
+    // inside the single leave_waitlist SECURITY DEFINER RPC (one atomic
+    // transaction instead of an UPDATE + separate recompute call) — see
+    // docs/SYSTEM-DESIGN-bookings-write-authorization-hardening.md §3.3.
+    mockRpc.mockResolvedValue({
+      data: { booking_id: 'bk-1', event_id: 'evt-1' },
+      error: null,
+    })
 
     let callCount = 0
     mockFrom.mockImplementation(() => {
@@ -847,16 +1035,10 @@ describe('leaveWaitlist', () => {
           data: { id: 'bk-1', user_id: 'user-1', event_id: 'evt-1', status: 'waitlisted' },
           error: null,
         }))
-      } else if (callCount === 2) {
+      } else {
         // Event fetch
         chain.then = vi.fn((resolve: (v: unknown) => void) => resolve({
           data: { date_time: '2027-12-01T19:00:00Z', slug: 'future-event' },
-          error: null,
-        }))
-      } else {
-        // Update (cancel) booking
-        chain.then = vi.fn((resolve: (v: unknown) => void) => resolve({
-          data: { id: 'bk-1' },
           error: null,
         }))
       }
@@ -867,10 +1049,54 @@ describe('leaveWaitlist', () => {
     const result = await leaveWaitlist('bk-1')
 
     expect(result.success).toBe(true)
-    // Verify the bulk recompute RPC was called with correct event ID
-    expect(mockRpc).toHaveBeenCalledWith('recompute_waitlist_positions', {
-      p_event_id: 'evt-1',
+    // INVARIANT: the RPC must be called with the caller's own user id
+    // (from the authenticated session) — never a client-suppliable value
+    // — and the booking id. The RPC itself re-checks p_user_id ===
+    // auth.uid() server-side.
+    expect(mockRpc).toHaveBeenCalledWith('leave_waitlist', {
+      p_user_id: 'user-1',
+      p_booking_id: 'bk-1',
     })
+  })
+
+  it('surfaces an error and does not report success when the leave_waitlist RPC fails', async () => {
+    // INVARIANT: an RPC-level failure (network error, or the RPC's own
+    // "already cancelled or modified" guard) must never be silently
+    // swallowed into a false success.
+    authenticateUser('user-1')
+
+    let callCount = 0
+    mockFrom.mockImplementation(() => {
+      callCount++
+      const chain: Record<string, ReturnType<typeof vi.fn>> = {}
+      const methods = ['select', 'update', 'eq', 'is', 'single', 'neq', 'order', 'limit']
+      for (const m of methods) {
+        chain[m] = vi.fn().mockReturnValue(chain)
+      }
+
+      if (callCount === 1) {
+        chain.then = vi.fn((resolve: (v: unknown) => void) => resolve({
+          data: { id: 'bk-1', user_id: 'user-1', event_id: 'evt-1', status: 'waitlisted' },
+          error: null,
+        }))
+      } else {
+        chain.then = vi.fn((resolve: (v: unknown) => void) => resolve({
+          data: { date_time: '2027-12-01T19:00:00Z', slug: 'future-event' },
+          error: null,
+        }))
+      }
+
+      return chain
+    })
+    mockRpc.mockResolvedValue({
+      data: null,
+      error: { message: 'connection reset' },
+    })
+
+    const result = await leaveWaitlist('bk-1')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/already cancelled|modified/i)
   })
 
   it('returns error when booking belongs to another user', async () => {
