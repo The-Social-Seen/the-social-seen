@@ -239,11 +239,69 @@ describe('JoinForm — Step 1 (Account)', () => {
   })
 
   // Amendment 4.4 validation messages
-  it('shows "We\'ll need your name to get started" when name is empty', async () => {
+  it('shows "Please enter your first and last name" when name is empty', async () => {
+    // Client-side check now runs the same two-word test as the server
+    // (name.trim().split(/\s+/).filter(Boolean).length < 2), which also
+    // catches the empty-string case — the old empty-only copy is retired.
     render(<JoinForm interestTags={[]} />)
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
     await waitFor(() => {
-      expect(screen.getByText("We'll need your name to get started")).toBeTruthy()
+      expect(screen.getByText('Please enter your first and last name')).toBeTruthy()
+    })
+  })
+
+  // ── Two-word full name requirement (client-side) ─────────────────────────
+  describe('full name — two-word requirement', () => {
+    it('shows "Please enter your first and last name" for a single-word name', async () => {
+      render(<JoinForm interestTags={[]} />)
+      fireEvent.change(screen.getByLabelText(/full name/i), { target: { value: 'Charlotte' } })
+      fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: 'test@test.com' } })
+      fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'password123' } })
+      fireEvent.change(screen.getByLabelText(/phone number/i), { target: { value: '07123456789' } })
+      fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText('Please enter your first and last name')).toBeTruthy()
+      })
+      expect(mockSignUp).not.toHaveBeenCalled()
+    })
+
+    it('does not block submission on a two-word name', async () => {
+      mockSignUp.mockResolvedValue({ success: true })
+
+      render(<JoinForm interestTags={[]} />)
+      fillStep1Valid({ name: 'Charlotte Moreau' })
+      fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+
+      await waitFor(() => {
+        expect(mockSignUp).toHaveBeenCalledWith(
+          expect.objectContaining({ fullName: 'Charlotte Moreau' }),
+        )
+      })
+      expect(screen.queryByText('Please enter your first and last name')).toBeNull()
+    })
+
+    it('clears the name error and advances once a second word is added and resubmitted', async () => {
+      mockSignUp.mockResolvedValue({ success: true })
+
+      render(<JoinForm interestTags={[]} />)
+      fireEvent.change(screen.getByLabelText(/full name/i), { target: { value: 'Charlotte' } })
+      fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: 'test@test.com' } })
+      fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'password123' } })
+      fireEvent.change(screen.getByLabelText(/phone number/i), { target: { value: '07123456789' } })
+      fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText('Please enter your first and last name')).toBeTruthy()
+      })
+
+      fireEvent.change(screen.getByLabelText(/full name/i), { target: { value: 'Charlotte Moreau' } })
+      fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { name: /what interests you/i })).toBeTruthy()
+      })
+      expect(screen.queryByText('Please enter your first and last name')).toBeNull()
     })
   })
 

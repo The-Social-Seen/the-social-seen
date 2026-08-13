@@ -13,7 +13,14 @@ import { getCallerIp } from '@/lib/utils/caller-ip'
 // ── Validation schemas ──────────────────────────────────────────────────────
 
 const signUpSchema = z.object({
-  fullName: z.string().min(1, 'Full name is required').max(100),
+  fullName: z
+    .string()
+    .min(1, 'Full name is required')
+    .max(100)
+    .refine(
+      (val) => val.trim().split(/\s+/).filter(Boolean).length >= 2,
+      { message: 'Please enter your first and last name' },
+    ),
   email: z.string().email('Invalid email address'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
   // Accepts international formats (10–15 digits, optional leading +).

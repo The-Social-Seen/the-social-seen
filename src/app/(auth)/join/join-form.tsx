@@ -587,7 +587,12 @@ export function JoinForm({ interestTags }: JoinFormProps) {
   /* ---- Step 1 submit ---- */
   async function handleAccountSubmit() {
     const errors: Record<string, string> = {}
-    if (!name.trim()) errors.name = "We'll need your name to get started"
+    // Require first + last name (at least two words), matching the
+    // server-side Zod refinement in ../actions.ts so the same rule
+    // and copy applies whether the error surfaces client- or server-side.
+    if (name.trim().split(/\s+/).filter(Boolean).length < 2) {
+      errors.name = 'Please enter your first and last name'
+    }
     if (!email.trim()) errors.email = 'Enter your email to create your account'
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.email = 'Enter your email to create your account'
     if (!password.trim() || password.length < 8) errors.password = 'Choose a password (at least 8 characters)'
