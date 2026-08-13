@@ -25,6 +25,10 @@ interface BookingRow {
   waitlist_position: number | null
   booked_at: string
   created_at: string
+  // Pence snapshot at booking time; 0 for a genuinely free event or a
+  // booking correctly settled at £0 (e.g. a 100%-off coupon) — used to
+  // gate showSendPaymentLink so it never appears when nothing is owed.
+  price_at_booking: number
   // P2-7b: payment + refund audit columns. All nullable.
   stripe_payment_id?: string | null
   stripe_refund_id?: string | null
@@ -264,8 +268,17 @@ export default function BookingsTable({
                   const profile = Array.isArray(booking.profile)
                     ? booking.profile[0]
                     : booking.profile
+                  // isPaidEvent alone isn't enough — a booking can be
+                  // correctly settled at £0 on a paid event (a 100%-off
+                  // coupon; see fix/webhook-zero-total-coupon-detection),
+                  // in which case price_at_booking is zeroed and nothing
+                  // is actually owed. Gate on the booking's own price, not
+                  // just the event's.
                   const showSendPaymentLink =
-                    isPaidEvent && booking.status === 'confirmed' && !booking.stripe_payment_id
+                    isPaidEvent &&
+                    booking.status === 'confirmed' &&
+                    !booking.stripe_payment_id &&
+                    booking.price_at_booking > 0
                   // NARROWED (SYSTEM-DESIGN-admin-reinstate-cancelled-booking.md
                   // §4.8 — required, not optional): a cancelled-reinstatement
                   // hold (Gap C) is ALSO is_admin_hold===true &&
@@ -361,8 +374,17 @@ export default function BookingsTable({
               const showPromote = booking.status === 'waitlisted'
               const showNoShow = isPastEvent && booking.status === 'confirmed'
               const showUndoNoShow = isPastEvent && booking.status === 'no_show'
+              // isPaidEvent alone isn't enough — a booking can be
+              // correctly settled at £0 on a paid event (a 100%-off
+              // coupon; see fix/webhook-zero-total-coupon-detection), in
+              // which case price_at_booking is zeroed and nothing is
+              // actually owed. Gate on the booking's own price, not just
+              // the event's.
               const showSendPaymentLink =
-                isPaidEvent && booking.status === 'confirmed' && !booking.stripe_payment_id
+                isPaidEvent &&
+                booking.status === 'confirmed' &&
+                !booking.stripe_payment_id &&
+                booking.price_at_booking > 0
               // NARROWED — see the desktop-table copy of this boolean above
               // for the full explanation (SYSTEM-DESIGN-admin-reinstate-
               // cancelled-booking.md §4.8, required not optional).

@@ -56,6 +56,8 @@ interface TestBooking {
   waitlist_position: number | null
   booked_at: string
   created_at: string
+  // Mirrors the real BookingRow shape's new field.
+  price_at_booking: number
   stripe_payment_id?: string | null
   stripe_refund_id?: string | null
   refunded_amount_pence?: number | null
@@ -79,6 +81,7 @@ const booking = (overrides: Partial<TestBooking> = {}): TestBooking => ({
   waitlist_position: null,
   booked_at: '2026-04-10T12:00:00.000Z',
   created_at: '2026-04-10T12:00:00.000Z',
+  price_at_booking: 1000,
   is_admin_hold: false,
   admin_hold_expires_at: null,
   profile: {
