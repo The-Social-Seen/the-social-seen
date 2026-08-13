@@ -1678,7 +1678,19 @@ export async function getEventBookings(
   // admin_get_user_phones() SECURITY DEFINER RPC. gender is likewise never
   // selected (excluded from the GRANT since 20260503000001) and is merged
   // below via the admin_get_user_demographics() SECURITY DEFINER RPC.
-  let query = supabase
+  //
+  // Deliberately NOT filtering by status at the query level (even when
+  // `statusFilter` is passed) — a person can have multiple rows for the
+  // same event (e.g. cancelled a paid checkout, then rebooked and got
+  // confirmed), each preserving its own Stripe/refund trail. Filtering by
+  // status here, before collapsing to one row per attendee below, would
+  // show the SAME PERSON under two different tabs (their stale cancelled
+  // attempt under "Cancelled" and their current booking under
+  // "Confirmed") — confusing, since only their most recent attempt
+  // reflects where they actually stand. Fetch everything, collapse to one
+  // row per attendee (latest `created_at` wins), THEN apply the status
+  // filter to that collapsed list.
+  const { data, error } = await supabase
     .from('bookings')
     .select(`
       id, status, waitlist_position, price_at_booking, booking_fee_pence,
@@ -1690,12 +1702,6 @@ export async function getEventBookings(
     .eq('event_id', eventId)
     .is('deleted_at', null)
     .order('created_at', { ascending: true })
-
-  if (statusFilter && statusFilter !== 'all') {
-    query = query.eq('status', statusFilter)
-  }
-
-  const { data, error } = await query
 
   if (error) throw new Error(`Failed to fetch bookings: ${error.message}`)
 
@@ -1710,7 +1716,7 @@ export async function getEventBookings(
   const phoneMap = await fetchPhoneMap(supabase, profileIds)
   const genderMap = await fetchDemographicsMap(supabase, profileIds)
 
-  return rows.map((b) => {
+  const merged = rows.map((b) => {
     const profile = extractJoin<{
       id: string
       full_name: string
@@ -1728,6 +1734,28 @@ export async function getEventBookings(
         : null,
     }
   })
+
+  // Collapse to one row per attendee — their most recent booking attempt
+  // for this event, which is the only one that reflects their current
+  // standing. Earlier attempts (e.g. a cancelled checkout before a
+  // successful rebook) still exist in the DB with their own Stripe/refund
+  // trail intact — this only affects what the admin list displays, never
+  // the underlying rows. Rows already come sorted `created_at` ascending
+  // (the query above), so the LAST row seen per profile id is the latest
+  // — a plain Map insertion-order overwrite gets this for free with no
+  // extra sort. Rows with no resolvable profile (deleted/missing) are
+  // never collapsed against each other — each keeps its own booking id
+  // as a distinct key so it still displays.
+  const latestPerAttendee = new Map<string, (typeof merged)[number]>()
+  for (const b of merged) {
+    latestPerAttendee.set(b.profile?.id ?? `__no-profile-${b.id}`, b)
+  }
+  const collapsed = Array.from(latestPerAttendee.values())
+
+  if (statusFilter && statusFilter !== 'all') {
+    return collapsed.filter((b) => b.status === statusFilter)
+  }
+  return collapsed
 }
 
 /**
