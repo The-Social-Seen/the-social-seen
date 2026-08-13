@@ -184,12 +184,13 @@ describe('BookingsTable — mobile pass', () => {
 })
 
 // ════════════════════════════════════════════════════════════════════════════
-// gender abbreviation, rendered inline next to phone in both the desktop
-// Mobile column and the mobile card's Mobile field (docs/SYSTEM-DESIGN-
-// admin-gender-batch-rpc.md §6) — never a new column or `<dt>` row.
+// gender abbreviation, rendered inline next to the attendee's name in both
+// the desktop Name column and the mobile card's name line (moved from next
+// to the phone number — gender describes the person, not their phone
+// number) — never a new column or `<dt>` row.
 // ════════════════════════════════════════════════════════════════════════════
 
-describe('BookingsTable — gender abbreviation (desktop + mobile, inline with phone)', () => {
+describe('BookingsTable — gender abbreviation (desktop + mobile, inline with name)', () => {
   it.each([
     ['female', 'F'],
     ['male', 'M'],
@@ -201,10 +202,14 @@ describe('BookingsTable — gender abbreviation (desktop + mobile, inline with p
         eventId="evt-1"
       />
     )
-    const desktopCell = container.querySelector('div.hidden.md\\:block td.hidden.lg\\:table-cell') as HTMLElement
-    const mobileDd = container.querySelector('ul.md\\:hidden dd') as HTMLElement
+    const desktopCell = container.querySelector(
+      'div.hidden.md\\:block td.font-medium.text-text-primary'
+    ) as HTMLElement
+    const mobileName = container.querySelector(
+      'ul.md\\:hidden p.font-medium.text-text-primary'
+    ) as HTMLElement
     expect(desktopCell.textContent).toContain(`(${code})`)
-    expect(mobileDd.textContent).toContain(`(${code})`)
+    expect(mobileName.textContent).toContain(`(${code})`)
   })
 
   it('renders nothing (no glyph) for a null gender', () => {

@@ -63,11 +63,14 @@ const GENDER_SHORT_CODE: Partial<Record<Gender, { code: string; label: string }>
 }
 
 /**
- * Short accessible gender abbreviation rendered inline next to the phone
- * number, in both the desktop Mobile column and the mobile card's Mobile
- * field (docs/SYSTEM-DESIGN-admin-gender-batch-rpc.md §6) — never its own
- * column or `<dt>` row, since the table already drops two columns below
- * `lg:` and the mobile `<dl>` is already tight at 375px. `null`,
+ * Short accessible gender abbreviation rendered inline next to the
+ * attendee's name, in both the desktop Name column and the mobile card's
+ * name line — never its own column or `<dt>` row, since the table already
+ * drops two columns below `lg:` and the mobile `<dl>` is already tight at
+ * 375px. Originally placed next to the phone number (see
+ * docs/SYSTEM-DESIGN-admin-gender-batch-rpc.md §6), moved next to the name
+ * instead — gender describes the person, not their phone number, and the
+ * original placement read as attached to the wrong field. `null`,
  * `undefined`, and `'prefer_not_to_say'` all render nothing — absence
  * should be silent, not add visual noise (most rows will have skipped the
  * demographics banner). `title` + `aria-label` mirror this file's existing
@@ -293,6 +296,7 @@ export default function BookingsTable({
                     <tr key={booking.id} className="hover:bg-bg-secondary/50 transition-colors">
                       <td className="py-3 pr-4 font-medium text-text-primary">
                         {profile?.full_name ?? 'Unknown'}
+                        <GenderTag gender={profile?.gender} />
                       </td>
                       <td className="py-3 pr-4 text-text-secondary">
                         {profile?.email ?? '—'}
@@ -302,7 +306,6 @@ export default function BookingsTable({
                           phoneNumber={profile?.phone_number ?? null}
                           name={profile?.full_name ?? 'this attendee'}
                         />
-                        <GenderTag gender={profile?.gender} />
                       </td>
                       <td className="py-3 pr-4">
                         {statusBadge(booking.status)}
@@ -395,6 +398,7 @@ export default function BookingsTable({
                       <div className="min-w-0 flex-1">
                         <p className="font-medium text-text-primary truncate">
                           {profile?.full_name ?? 'Unknown'}
+                          <GenderTag gender={profile?.gender} />
                         </p>
                         {profile?.email && (
                           <p
@@ -421,7 +425,6 @@ export default function BookingsTable({
                             name={profile?.full_name ?? 'this attendee'}
                             variant="card"
                           />
-                          <GenderTag gender={profile?.gender} />
                         </dd>
                       </div>
                       {payBadge && (
