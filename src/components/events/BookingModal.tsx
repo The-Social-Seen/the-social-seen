@@ -13,13 +13,24 @@ import {
   AlertTriangle,
   ChevronDown,
   Loader2,
+  Clock,
+  CheckCircle,
 } from "lucide-react";
-import { formatDateModal, formatTime } from "@/lib/utils/dates";
+import {
+  formatDateModal,
+  formatTime,
+  getPendingPaymentDeadline,
+} from "@/lib/utils/dates";
 import { formatPrice, formatPriceExact } from "@/lib/utils/currency";
 import { calculateBookingFeePence } from "@/lib/utils/booking-fee";
 import { downloadIcsFile } from "@/lib/utils/calendar";
 import { buildEventShareUrl, buildShareText, nativeShareOrCopy } from "@/lib/utils/share";
-import { createBooking, createPaidCheckout } from "@/app/events/[slug]/actions";
+import {
+  createBooking,
+  createPaidCheckout,
+  abandonPendingCheckout,
+} from "@/app/events/[slug]/actions";
+import { resumePendingCheckout } from "@/app/(member)/bookings/actions";
 import type { EventDetail, BookingStatus } from "@/types";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -36,6 +47,12 @@ interface BookingResult {
   status: BookingStatus;
   waitlistPosition: number | null;
 }
+
+type AlreadyBookedErrorCode =
+  | "already_booked_pending"
+  | "already_booked_confirmed"
+  | "already_booked_waitlisted"
+  | "already_booked_other";
 
 // ── Main component ───────────────────────────────────────────────────────────
 
@@ -55,9 +72,26 @@ export default function BookingModal({
 
   const [step, setStep] = useState(1);
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<AlreadyBookedErrorCode | undefined>(undefined);
+  const [existingBookingId, setExistingBookingId] = useState<string | null>(null);
+  const [existingBookingCreatedAt, setExistingBookingCreatedAt] = useState<string | null>(null);
   const [bookingResult, setBookingResult] = useState<BookingResult | null>(null);
   const [isMobile, setIsMobile] = useState(false);
   const [isPending, startTransition] = useTransition();
+
+  // "Redirecting" lock state (Decision 1 of SYSTEM-DESIGN-paid-checkout-
+  // confusion-fix.md / UX-booking-confusion-fix.md §2). Set the instant a
+  // checkoutUrl is received, NEVER reset back to false from this render
+  // tree — the page is leaving for Stripe. Closes F2 (the CTA re-arming
+  // itself before the browser has actually navigated away).
+  const [isRedirecting, setIsRedirecting] = useState(false);
+  const [redirectUrl, setRedirectUrl] = useState<string | null>(null);
+  const [showRedirectFallback, setShowRedirectFallback] = useState(false);
+
+  // Bottom-pill toast, reusing BookingResumeErrorHandler's exact pattern.
+  // Used both for the "Start Over" success confirmation and the close-
+  // from-recovery-variant reassurance (UX spec §3/§5).
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Detect mobile for bottom sheet vs centered modal
   useEffect(() => {
@@ -67,12 +101,58 @@ export default function BookingModal({
     return () => window.removeEventListener("resize", check);
   }, []);
 
-  const handleClose = useCallback(() => {
-    setStep(1);
+  // Reveal the "stuck redirect" escape hatch 8s after entering the
+  // redirecting state (UX spec §2). Never fires if the browser actually
+  // navigates away first (the whole tree unmounts on real navigation).
+  useEffect(() => {
+    if (!isRedirecting) return;
+    const timer = window.setTimeout(() => {
+      // One-shot timer callback tied to a state transition the user just
+      // triggered — not a render-loop risk. Matches this codebase's
+      // established URL-param-handler pattern for deliberate, one-time
+      // setState-in-effect calls.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setShowRedirectFallback(true);
+    }, 8000);
+    return () => window.clearTimeout(timer);
+  }, [isRedirecting]);
+
+  const clearBookingError = useCallback(() => {
     setError(null);
+    setErrorCode(undefined);
+    setExistingBookingId(null);
+    setExistingBookingCreatedAt(null);
+  }, []);
+
+  // Close (X / backdrop / Escape) is a no-op while a redirect to Stripe
+  // is in flight and the 8s escape hatch hasn't appeared yet — mirrors
+  // the CTA's own locked state. Once the fallback link is visible, a
+  // genuinely stuck user must always be able to back out.
+  const handleClose = useCallback(() => {
+    if (isRedirecting && !showRedirectFallback) return;
+
+    // UX spec §5: closing FROM the "Your Spot's on Hold" recovery
+    // variant specifically gets a non-blocking reassurance toast (the
+    // pending row is still visible/discoverable on /bookings + the
+    // reminder email — this is not the invisible F7 state anymore).
+    // Plain closes and the already-confirmed variant's close do not.
+    if (errorCode === "already_booked_pending") {
+      const deadline = existingBookingCreatedAt
+        ? getPendingPaymentDeadline(existingBookingCreatedAt)
+        : null;
+      setToastMessage(
+        deadline
+          ? `We’re holding your spot until ${formatTime(deadline)} — resume anytime from your bookings.`
+          : "We’re holding your spot — resume anytime from your bookings.",
+      );
+      window.setTimeout(() => setToastMessage(null), 5000);
+    }
+
+    setStep(1);
+    clearBookingError();
     setBookingResult(null);
     onClose();
-  }, [onClose]);
+  }, [onClose, isRedirecting, showRedirectFallback, errorCode, existingBookingCreatedAt, clearBookingError]);
 
   // Close on Escape key
   useEffect(() => {
@@ -84,6 +164,25 @@ export default function BookingModal({
     return () => document.removeEventListener("keydown", handleEscape);
   }, [isOpen, handleClose]);
 
+  // Shared by the happy-path checkout redirect AND the recovery panel's
+  // "Resume Checkout" — both end the same way: lock the CTA and navigate
+  // to a Stripe-hosted URL. Wrapped in try/catch per the architect's
+  // defensive note: checkoutUrl always comes from Stripe's own
+  // session.url so this should never throw, but if it ever does, don't
+  // leave the user stuck on a locked button with no escape.
+  const redirectToCheckout = useCallback((checkoutUrl: string) => {
+    setRedirectUrl(checkoutUrl);
+    setIsRedirecting(true);
+    try {
+      window.location.href = checkoutUrl;
+    } catch {
+      setIsRedirecting(false);
+      setShowRedirectFallback(false);
+      setRedirectUrl(null);
+      setError("Something went wrong redirecting to payment. Please try again.");
+    }
+  }, []);
+
   // Submit booking via Server Action.
   //
   // Free event: createBooking() inserts a confirmed/waitlisted row;
@@ -93,7 +192,13 @@ export default function BookingModal({
   // a Stripe-hosted URL; navigate away. If the paid event is full the
   // RPC falls to 'waitlisted' (no Stripe) — same as free waitlist flow.
   function handleBook() {
-    setError(null);
+    // Defense-in-depth against double-submission: the CTA's own
+    // disabled={isPending || isRedirecting} attribute already prevents
+    // this in practice, but guard the handler itself too so a stray
+    // synthetic/duplicate event can never fire two overlapping
+    // createBooking/createPaidCheckout calls.
+    if (isPending || isRedirecting) return;
+    clearBookingError();
     startTransition(async () => {
       const result = isFree
         ? await createBooking(event.id)
@@ -101,13 +206,16 @@ export default function BookingModal({
 
       if (!result.success) {
         setError(result.error ?? "Something went wrong. Please try again.");
+        setErrorCode(result.errorCode);
+        setExistingBookingId(result.existingBookingId ?? null);
+        setExistingBookingCreatedAt(result.existingBookingCreatedAt ?? null);
         return;
       }
 
       // Paid-event happy path: redirect to Stripe. The user leaves this
       // modal entirely — Stripe returns them to /events/[slug]/booking-success.
       if (result.checkoutUrl) {
-        window.location.href = result.checkoutUrl;
+        redirectToCheckout(result.checkoutUrl);
         return;
       }
 
@@ -121,119 +229,145 @@ export default function BookingModal({
     });
   }
 
+  function handleStartOverSuccess() {
+    clearBookingError();
+    setToastMessage("Started over — you can book again whenever you’re ready.");
+    window.setTimeout(() => setToastMessage(null), 5000);
+  }
+
   // Determine which step triggers booking
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 z-50 flex items-end justify-center md:items-center md:p-4"
-        >
-          {/* Backdrop */}
+    <>
+      <AnimatePresence>
+        {isOpen && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={handleClose}
-          />
-
-          {/* Modal / Bottom Sheet */}
-          <motion.div
-            initial={
-              isMobile
-                ? { y: "100%", opacity: 1 }
-                : { opacity: 0, scale: 0.95, y: 20 }
-            }
-            animate={
-              isMobile ? { y: 0, opacity: 1 } : { opacity: 1, scale: 1, y: 0 }
-            }
-            exit={
-              isMobile
-                ? { y: "100%", opacity: 1 }
-                : { opacity: 0, scale: 0.95, y: 20 }
-            }
-            transition={
-              isMobile
-                ? { duration: 0.3, ease: "easeOut" }
-                : { type: "spring", damping: 25, stiffness: 300 }
-            }
-            className={cn(
-              "relative z-10 w-full overflow-hidden bg-bg-card shadow-2xl",
-              isMobile
-                ? "max-h-[85vh] overflow-y-auto rounded-t-2xl"
-                : "max-w-md rounded-3xl"
-            )}
-            style={
-              isMobile
-                ? { paddingBottom: "env(safe-area-inset-bottom)" }
-                : undefined
-            }
+            className="fixed inset-0 z-50 flex items-end justify-center md:items-center md:p-4"
           >
-            {/* Drag handle (mobile only) */}
-            {isMobile && (
-              <div className="flex justify-center pt-3 pb-1">
-                <div className="h-1 w-10 rounded-full bg-border-light" />
-              </div>
-            )}
-
-            {/* Close button */}
-            <button
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
               onClick={handleClose}
-              className="absolute top-4 right-4 z-20 rounded-full bg-bg-primary p-2 transition-colors hover:bg-blush/50"
-              aria-label="Close booking modal"
+            />
+
+            {/* Modal / Bottom Sheet */}
+            <motion.div
+              initial={
+                isMobile
+                  ? { y: "100%", opacity: 1 }
+                  : { opacity: 0, scale: 0.95, y: 20 }
+              }
+              animate={
+                isMobile ? { y: 0, opacity: 1 } : { opacity: 1, scale: 1, y: 0 }
+              }
+              exit={
+                isMobile
+                  ? { y: "100%", opacity: 1 }
+                  : { opacity: 0, scale: 0.95, y: 20 }
+              }
+              transition={
+                isMobile
+                  ? { duration: 0.3, ease: "easeOut" }
+                  : { type: "spring", damping: 25, stiffness: 300 }
+              }
+              className={cn(
+                "relative z-10 w-full overflow-hidden bg-bg-card shadow-2xl",
+                isMobile
+                  ? "max-h-[85vh] overflow-y-auto rounded-t-2xl"
+                  : "max-w-md rounded-3xl"
+              )}
+              style={
+                isMobile
+                  ? { paddingBottom: "env(safe-area-inset-bottom)" }
+                  : undefined
+              }
             >
-              <X className="h-4 w-4 text-text-primary" />
-            </button>
+              {/* Drag handle (mobile only) */}
+              {isMobile && (
+                <div className="flex justify-center pt-3 pb-1">
+                  <div className="h-1 w-10 rounded-full bg-border-light" />
+                </div>
+              )}
 
-            {/* Progress bar */}
-            <div className="flex gap-1.5 px-6 pt-5" data-testid="progress-bar">
-              {Array.from({ length: totalSteps }).map((_, i) => (
-                <div
-                  key={i}
-                  className={cn(
-                    "h-1 flex-1 rounded-full transition-all duration-300",
-                    i < step
-                      ? "bg-gold"
-                      : i === step - 1
-                        ? "bg-charcoal"
-                        : "bg-blush/50"
+              {/* Close button — inert (not just visually) while a Stripe
+                  redirect is in flight and the 8s escape hatch hasn't
+                  appeared yet. No visual restyling per UX spec §2 — this
+                  window is normally sub-2s. */}
+              <button
+                onClick={handleClose}
+                disabled={isRedirecting && !showRedirectFallback}
+                aria-disabled={isRedirecting && !showRedirectFallback}
+                className="absolute top-4 right-4 z-20 rounded-full bg-bg-primary p-2 transition-colors hover:bg-blush/50"
+                aria-label="Close booking modal"
+              >
+                <X className="h-4 w-4 text-text-primary" />
+              </button>
+
+              {/* Progress bar */}
+              <div className="flex gap-1.5 px-6 pt-5" data-testid="progress-bar">
+                {Array.from({ length: totalSteps }).map((_, i) => (
+                  <div
+                    key={i}
+                    className={cn(
+                      "h-1 flex-1 rounded-full transition-all duration-300",
+                      i < step
+                        ? "bg-gold"
+                        : i === step - 1
+                          ? "bg-charcoal"
+                          : "bg-blush/50"
+                    )}
+                  />
+                ))}
+              </div>
+
+              {/* Steps */}
+              <div className="p-6">
+                <AnimatePresence mode="wait">
+                  {step === 1 && (
+                    <ConfirmStep
+                      key="confirm"
+                      event={event}
+                      isFree={isFree}
+                      error={error}
+                      errorCode={errorCode}
+                      existingBookingId={existingBookingId}
+                      existingBookingCreatedAt={existingBookingCreatedAt}
+                      isPending={isPending}
+                      isRedirecting={isRedirecting}
+                      showRedirectFallback={showRedirectFallback}
+                      redirectUrl={redirectUrl}
+                      onSubmit={handleBook}
+                      onRedirectToCheckout={redirectToCheckout}
+                      onStartOverSuccess={handleStartOverSuccess}
+                      onCloseFromConfirmed={handleClose}
+                    />
                   )}
-                />
-              ))}
-            </div>
 
-            {/* Steps */}
-            <div className="p-6">
-              <AnimatePresence mode="wait">
-                {step === 1 && (
-                  <ConfirmStep
-                    key="confirm"
-                    event={event}
-                    isFree={isFree}
-                    error={error}
-                    isPending={isPending}
-                    onSubmit={handleBook}
-                  />
-                )}
-
-                {step === totalSteps && bookingResult && (
-                  <TicketCard
-                    key="ticket"
-                    event={event}
-                    result={bookingResult}
-                    userName={userName}
-                    onClose={handleClose}
-                  />
-                )}
-              </AnimatePresence>
-            </div>
+                  {step === totalSteps && bookingResult && (
+                    <TicketCard
+                      key="ticket"
+                      event={event}
+                      result={bookingResult}
+                      userName={userName}
+                      onClose={handleClose}
+                    />
+                  )}
+                </AnimatePresence>
+              </div>
+            </motion.div>
           </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+        )}
+      </AnimatePresence>
+
+      {/* Bottom-pill toast — lives outside AnimatePresence so it can
+          still be seen after the modal itself has closed. */}
+      {toastMessage && <BottomToast message={toastMessage} />}
+    </>
   );
 }
 
@@ -243,16 +377,45 @@ function ConfirmStep({
   event,
   isFree,
   error,
+  errorCode,
+  existingBookingId,
+  existingBookingCreatedAt,
   isPending,
+  isRedirecting,
+  showRedirectFallback,
+  redirectUrl,
   onSubmit,
+  onRedirectToCheckout,
+  onStartOverSuccess,
+  onCloseFromConfirmed,
 }: {
   event: EventDetail;
   isFree: boolean;
   error: string | null;
+  errorCode: AlreadyBookedErrorCode | undefined;
+  existingBookingId: string | null;
+  existingBookingCreatedAt: string | null;
   isPending: boolean;
+  isRedirecting: boolean;
+  showRedirectFallback: boolean;
+  redirectUrl: string | null;
   onSubmit: () => void;
+  onRedirectToCheckout: (checkoutUrl: string) => void;
+  onStartOverSuccess: () => void;
+  onCloseFromConfirmed: () => void;
 }) {
   const [showRequirements, setShowRequirements] = useState(false);
+
+  // UX-booking-confusion-fix.md §1: each of the three "already have a
+  // booking" conflict types (pending / confirmed / waitlisted) gets its
+  // OWN dedicated screen content, replacing the default form + generic
+  // ErrorAlert entirely — there is never a moment where a red warning
+  // and an unrelated live gold CTA are both on screen (the exact
+  // contradiction this fix closes). 'already_booked_other' is the
+  // deliberate generic fallback and still uses the ErrorAlert path below.
+  const isRecovery = errorCode === "already_booked_pending" && existingBookingId != null;
+  const isAlreadyConfirmed = errorCode === "already_booked_confirmed";
+  const isWaitlistConflict = errorCode === "already_booked_waitlisted";
 
   return (
     <motion.div
@@ -268,7 +431,7 @@ function ConfirmStep({
         Review your booking before confirming
       </p>
 
-      {/* Event summary card */}
+      {/* Event summary card — unchanged, always shown */}
       <div className="mb-6 space-y-4 rounded-2xl bg-bg-primary p-5">
         <div>
           <p className="font-semibold text-text-primary">{event.title}</p>
@@ -297,61 +460,316 @@ function ConfirmStep({
         </div>
       </div>
 
-      {/* Special requirements (collapsible) */}
-      <div className="mb-6">
-        <button
-          onClick={() => setShowRequirements(!showRequirements)}
-          className="flex items-center gap-1 text-sm text-text-primary/50 transition-colors hover:text-text-primary"
-        >
-          Special requirements
-          <ChevronDown
-            className={cn(
-              "h-3.5 w-3.5 transition-transform",
-              showRequirements && "rotate-180"
+      {isRecovery ? (
+        <RecoveryPanel
+          eventId={event.id}
+          bookingId={existingBookingId!}
+          createdAt={existingBookingCreatedAt}
+          onRedirectToCheckout={onRedirectToCheckout}
+          onStartOverSuccess={onStartOverSuccess}
+        />
+      ) : isAlreadyConfirmed ? (
+        <AlreadyConfirmedPanel onClose={onCloseFromConfirmed} />
+      ) : isWaitlistConflict ? (
+        <WaitlistConflictPanel onClose={onCloseFromConfirmed} />
+      ) : (
+        <>
+          {/* Special requirements (collapsible) */}
+          <div className="mb-6">
+            <button
+              onClick={() => setShowRequirements(!showRequirements)}
+              className="flex items-center gap-1 text-sm text-text-primary/50 transition-colors hover:text-text-primary"
+            >
+              Special requirements
+              <ChevronDown
+                className={cn(
+                  "h-3.5 w-3.5 transition-transform",
+                  showRequirements && "rotate-180"
+                )}
+              />
+            </button>
+            {showRequirements && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                transition={{ duration: 0.2 }}
+              >
+                <textarea
+                  placeholder="Dietary needs, accessibility, etc."
+                  rows={3}
+                  className="mt-2 w-full rounded-xl border border-blush/60 bg-bg-card px-4 py-3 text-sm text-text-primary placeholder:text-text-primary/30 focus:border-gold focus:outline-none focus:ring-2 focus:ring-gold/20"
+                />
+              </motion.div>
             )}
-          />
-        </button>
-        {showRequirements && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            transition={{ duration: 0.2 }}
+          </div>
+
+          {/* Error alert — genuine "try again" errors only (sold out,
+              network failure, validation). Never shown alongside the
+              recovery/already-confirmed panels above. */}
+          {error && <ErrorAlert message={error} />}
+
+          {/* CTA */}
+          <button
+            onClick={onSubmit}
+            disabled={isPending || isRedirecting}
+            aria-disabled={isPending || isRedirecting}
+            aria-live="polite"
+            className="w-full rounded-2xl bg-gold py-4 text-sm font-semibold text-white transition-all hover:bg-gold-dark active:scale-[0.98] disabled:opacity-60"
           >
-            <textarea
-              placeholder="Dietary needs, accessibility, etc."
-              rows={3}
-              className="mt-2 w-full rounded-xl border border-blush/60 bg-bg-card px-4 py-3 text-sm text-text-primary placeholder:text-text-primary/30 focus:border-gold focus:outline-none focus:ring-2 focus:ring-gold/20"
-            />
-          </motion.div>
-        )}
-      </div>
+            {isRedirecting ? (
+              <span className="flex items-center justify-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Redirecting to payment…
+              </span>
+            ) : isPending ? (
+              <span className="flex items-center justify-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Reserving…
+              </span>
+            ) : isFree ? (
+              "Reserve My Spot"
+            ) : (
+              "Continue to Payment"
+            )}
+          </button>
 
-      {/* Error alert */}
-      {error && <ErrorAlert message={error} />}
-
-      {/* CTA */}
-      <button
-        onClick={onSubmit}
-        disabled={isPending}
-        className="w-full rounded-2xl bg-gold py-4 text-sm font-semibold text-white transition-all hover:bg-gold-dark active:scale-[0.98] disabled:opacity-60"
-      >
-        {isPending ? (
-          <span className="flex items-center justify-center gap-2">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Reserving…
-          </span>
-        ) : isFree ? (
-          "Reserve My Spot"
-        ) : (
-          "Continue to Payment"
-        )}
-      </button>
+          {/* Escape hatch for a genuinely stuck redirect — reserves its
+              line height from the moment redirecting starts so the fade-
+              in at 8s never causes a layout shift (UX spec §2). */}
+          {isRedirecting && (
+            <p
+              className={cn(
+                "mt-3 text-center text-xs transition-opacity duration-300",
+                showRedirectFallback ? "opacity-100" : "opacity-0"
+              )}
+              aria-hidden={!showRedirectFallback}
+            >
+              <span className="text-text-primary/50">Taking longer than expected? </span>
+              {redirectUrl && (
+                <a
+                  href={redirectUrl}
+                  className="text-gold underline underline-offset-2"
+                >
+                  Continue to Stripe →
+                </a>
+              )}
+            </p>
+          )}
+        </>
+      )}
     </motion.div>
   );
 }
 
 // P2-7a: the mocked in-modal PaymentStep was removed — the paid flow now
 // redirects to Stripe-hosted Checkout. See handleBook() above.
+
+// ── Recovery panel: "Your Spot's on Hold" ────────────────────────────────────
+//
+// UX-booking-confusion-fix.md §3 — the core fix. Replaces the generic
+// ErrorAlert + live retry CTA with a single, coherent, non-accusatory
+// screen when the server reports the caller already has a pending_payment
+// booking for this event (their own in-flight or abandoned first attempt).
+// Reuses the exact "urgent-but-positive" container pattern already
+// established by BookingSidebar's waitlist claim banner
+// (`rounded-xl border border-gold/40 bg-gold/5 p-4`) — no new visual
+// language.
+
+function RecoveryPanel({
+  eventId,
+  bookingId,
+  createdAt,
+  onRedirectToCheckout,
+  onStartOverSuccess,
+}: {
+  eventId: string;
+  bookingId: string;
+  createdAt: string | null;
+  onRedirectToCheckout: (checkoutUrl: string) => void;
+  onStartOverSuccess: () => void;
+}) {
+  const [isResuming, startResumeTransition] = useTransition();
+  const [isStartingOver, startStartOverTransition] = useTransition();
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const deadline = createdAt ? getPendingPaymentDeadline(createdAt) : null;
+  const busy = isResuming || isStartingOver;
+
+  function handleResume() {
+    setActionError(null);
+    startResumeTransition(async () => {
+      const result = await resumePendingCheckout(bookingId);
+      if (!result.success) {
+        setActionError(result.error ?? "Something went wrong. Please try again.");
+        return;
+      }
+      if (result.checkoutUrl) {
+        onRedirectToCheckout(result.checkoutUrl);
+      }
+    });
+  }
+
+  function handleStartOver() {
+    setActionError(null);
+    startStartOverTransition(async () => {
+      // abandonPendingCheckout derives the rollback status entirely from
+      // server-side, tamper-proof columns on the row (is_admin_hold /
+      // waitlist_position) — no `from` hint is passed here, so this can
+      // only ever land the row on 'cancelled' (the safe default for a
+      // plain self-service checkout), never 'confirmed'/'waitlisted'.
+      const result = await abandonPendingCheckout(eventId);
+      if (!result.success) {
+        setActionError(result.error ?? "Something went wrong. Please try again.");
+        return;
+      }
+      onStartOverSuccess();
+    });
+  }
+
+  return (
+    <div className="mb-6">
+      <div className="rounded-xl border border-gold/40 bg-gold/5 p-4">
+        <div className="mb-1 flex items-center gap-2">
+          <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-gold/10 text-gold">
+            <Clock className="h-3.5 w-3.5" />
+          </span>
+          <p className="text-sm font-semibold text-text-primary">
+            Your Spot&rsquo;s on Hold
+          </p>
+        </div>
+        <p className="mb-3 text-xs text-text-primary/70">
+          Looks like you started checking out for this event a moment ago —
+          it isn&rsquo;t confirmed yet.
+        </p>
+        {deadline && (
+          <p className="mb-3 flex items-center gap-1.5 text-xs font-medium text-gold">
+            <Clock className="h-3.5 w-3.5 flex-shrink-0" />
+            Complete payment by {formatTime(deadline)} to keep it.
+          </p>
+        )}
+        {actionError && <ErrorAlert message={actionError} />}
+        <button
+          onClick={handleResume}
+          disabled={busy}
+          aria-live="polite"
+          className="block w-full rounded-2xl bg-gold py-4 text-sm font-semibold text-white transition-all hover:bg-gold-dark active:scale-[0.98] disabled:opacity-60"
+        >
+          {isResuming ? "Opening secure checkout…" : "Resume Checkout"}
+        </button>
+      </div>
+
+      <div className="mt-4 text-center">
+        <button
+          onClick={handleStartOver}
+          disabled={busy}
+          className="inline-flex min-h-[44px] items-center justify-center px-4 text-sm font-medium text-text-primary/60 underline underline-offset-2 transition-colors hover:text-text-primary disabled:opacity-60"
+        >
+          {isStartingOver ? "Starting over…" : "Start Over"}
+        </button>
+        <p className="mt-1 text-xs text-text-primary/50">
+          No charge either way — this hold releases on its own if you
+          don&rsquo;t complete it.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── Already-confirmed panel (defensive edge case) ────────────────────────────
+//
+// UX-booking-confusion-fix.md §4. Rare — a stale client / a double-submit
+// racing the webhook shouldn't reach this in the intended flow, but a
+// member who's already successfully booked and paid must never be told
+// something went wrong. Success framing, no urgency.
+
+function AlreadyConfirmedPanel({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="mb-6">
+      <div className="rounded-xl border border-gold/40 bg-gold/5 p-4">
+        <div className="mb-1 flex items-center gap-2">
+          <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-gold/10 text-gold">
+            <CheckCircle className="h-3.5 w-3.5" />
+          </span>
+          <p className="text-sm font-semibold text-text-primary">
+            You&rsquo;re Already Booked
+          </p>
+        </div>
+        <p className="mb-3 text-xs text-text-primary/70">
+          Good news — you already have a confirmed spot for this event. No
+          further action needed.
+        </p>
+        <Link
+          href="/bookings"
+          className="block w-full rounded-2xl bg-gold py-4 text-center text-sm font-semibold text-white transition-all hover:bg-gold-dark active:scale-[0.98]"
+        >
+          View My Booking
+        </Link>
+      </div>
+
+      <div className="mt-4 text-center">
+        <button
+          onClick={onClose}
+          className="inline-flex min-h-[44px] items-center justify-center px-4 text-sm font-medium text-text-primary/60 underline underline-offset-2 transition-colors hover:text-text-primary"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Waitlist-conflict panel ───────────────────────────────────────────────────
+//
+// Handles errorCode: 'already_booked_waitlisted' — the third and final
+// already_booked_* conflict type (see createPaidCheckout in
+// src/app/events/[slug]/actions.ts). Reachable when a rapid second tap
+// hits the "you already have a booking" guard after the first tap's
+// createPaidCheckout call already succeeded with status: 'waitlisted'
+// (the paid event's capacity filled between the check and the insert).
+// This is NOT an error — the member IS successfully on the waitlist.
+// Per CLAUDE.md's locked component patterns ("Waitlist" badge is gold
+// accent text, NOT red — waitlist is positive), this gets the same
+// positive, non-accusatory treatment as AlreadyConfirmedPanel, not the
+// generic red ErrorAlert. Simpler than RecoveryPanel — there's no stuck
+// pending payment to resume or abandon, so a single "View My Booking"
+// CTA (same destination as AlreadyConfirmedPanel, since a waitlisted
+// booking is also visible on /bookings) is all that's needed.
+
+function WaitlistConflictPanel({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="mb-6">
+      <div className="rounded-xl border border-gold/40 bg-gold/5 p-4">
+        <div className="mb-1 flex items-center gap-2">
+          <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-gold/10 text-gold">
+            <CheckCircle className="h-3.5 w-3.5" />
+          </span>
+          <p className="text-sm font-semibold text-text-primary">
+            You&rsquo;re Already on the List
+          </p>
+        </div>
+        <p className="mb-3 text-xs text-text-primary/70">
+          Good news — you&rsquo;re already on the waitlist for this event.
+          We&rsquo;ll notify you the moment a spot opens up.
+        </p>
+        <Link
+          href="/bookings"
+          className="block w-full rounded-2xl bg-gold py-4 text-center text-sm font-semibold text-white transition-all hover:bg-gold-dark active:scale-[0.98]"
+        >
+          View My Booking
+        </Link>
+      </div>
+
+      <div className="mt-4 text-center">
+        <button
+          onClick={onClose}
+          className="inline-flex min-h-[44px] items-center justify-center px-4 text-sm font-medium text-text-primary/60 underline underline-offset-2 transition-colors hover:text-text-primary"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ── Price breakdown (paid events) ────────────────────────────────────────────
 //
@@ -469,7 +887,7 @@ function TicketCard({
 
         {/* Heading */}
         <h3 className="mb-5 font-serif text-2xl font-bold text-text-primary">
-          {isWaitlisted ? "You\u2019re on the List" : "See You There"}
+          {isWaitlisted ? "You’re on the List" : "See You There"}
         </h3>
 
         {/* Event details */}
@@ -568,7 +986,7 @@ function TicketCard({
                 className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-blush/60 py-3.5 text-sm font-semibold text-text-primary transition-all hover:bg-bg-primary"
               >
                 <CalendarPlus className="h-4 w-4" />
-                {calendarAdded ? "Added \u2713" : "Add to Calendar"}
+                {calendarAdded ? "Added ✓" : "Add to Calendar"}
               </button>
               <button
                 onClick={handleShare}
@@ -576,9 +994,9 @@ function TicketCard({
               >
                 <Share2 className="h-4 w-4" />
                 {shareOutcome === 'shared'
-                  ? "Shared \u2713"
+                  ? "Shared ✓"
                   : shareOutcome === 'copied'
-                  ? "Link Copied \u2713"
+                  ? "Link Copied ✓"
                   : "Share"}
               </button>
             </div>
@@ -609,5 +1027,23 @@ function ErrorAlert({ message }: { message: string }) {
       <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600 dark:text-red-300" />
       <p className="text-sm text-red-700 dark:text-red-300">{message}</p>
     </motion.div>
+  );
+}
+
+// ── Bottom-pill toast ────────────────────────────────────────────────────────
+//
+// Reuses BookingResumeErrorHandler's exact classes
+// (src/components/profile/BookingResumeErrorHandler.tsx) — same family of
+// non-blocking, auto-dismissing status pill used elsewhere in this
+// codebase. No new visual pattern.
+
+function BottomToast({ message }: { message: string }) {
+  return (
+    <div
+      role="status"
+      className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full border border-blush/60 bg-bg-card px-5 py-3 text-sm text-text-primary shadow-lg"
+    >
+      {message}
+    </div>
   );
 }

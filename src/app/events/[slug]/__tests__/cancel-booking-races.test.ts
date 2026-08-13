@@ -26,13 +26,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockGetUser = vi.fn()
 const mockFrom = vi.fn()
+const mockRpc = vi.fn()
 
 vi.mock('@/lib/supabase/server', () => ({
   createServerClient: vi.fn(() =>
     Promise.resolve({
       auth: { getUser: mockGetUser },
       from: mockFrom,
-      rpc: vi.fn(),
+      rpc: mockRpc,
     }),
   ),
 }))
@@ -104,14 +105,17 @@ function authenticateUser(userId = 'user-1') {
 }
 
 /**
- * Stub the 3-call Supabase chain (booking fetch → event fetch → update).
- * Per-call data passed in, with optional update-call response so we can
- * exercise the "update-fails-but-refund-succeeded" branch.
+ * Stub the 2-call Supabase `.from()` chain (booking fetch → event fetch).
+ * The final atomic write is no longer a third `.from().update()` call —
+ * it's the `cancel_confirmed_booking` SECURITY DEFINER RPC (see
+ * docs/SYSTEM-DESIGN-bookings-write-authorization-hardening.md §3.2) —
+ * so its outcome is stubbed separately via `rpcResult` on `mockRpc`.
  */
 function stubCancelSequence(opts: {
   booking: Record<string, unknown>
   event: { date_time: string; slug: string; refund_window_hours?: number }
-  updateResult?: { data: unknown; error: unknown }
+  /** Stubs the cancel_confirmed_booking RPC's `{ data, error }` response. */
+  rpcResult?: { data: unknown; error: unknown }
 }) {
   const eventWithDefaults = {
     refund_window_hours: 48,
@@ -130,19 +134,17 @@ function stubCancelSequence(opts: {
       chain.then = vi.fn((resolve: (v: unknown) => void) =>
         resolve({ data: opts.booking, error: null }),
       )
-    } else if (callCount === 2) {
+    } else {
       // event fetch
       chain.then = vi.fn((resolve: (v: unknown) => void) =>
         resolve({ data: eventWithDefaults, error: null }),
       )
-    } else {
-      // update (third+ call). Use the override if provided.
-      chain.then = vi.fn((resolve: (v: unknown) => void) =>
-        resolve(opts.updateResult ?? { data: { id: 'bk-1' }, error: null }),
-      )
     }
     return chain
   })
+  mockRpc.mockResolvedValue(
+    opts.rpcResult ?? { data: { booking_id: 'bk-1' }, error: null },
+  )
 }
 
 beforeEach(() => {
@@ -260,15 +262,28 @@ describe('cancelBooking — double-cancel race idempotency', () => {
         date_time: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
         slug: 'wine',
       },
-      // Optimistic UPDATE returns no row — the first cancel won the
-      // race and the row is already cancelled.
-      updateResult: { data: null, error: null },
+      // The RPC's row lock finds no matching confirmed row — the first
+      // cancel won the race and the row is already cancelled. Mirrors
+      // cancel_confirmed_booking's own `jsonb_build_object('error', ...)`
+      // shape (not a thrown/network-level error).
+      rpcResult: {
+        data: { error: 'Booking was already cancelled or modified' },
+        error: null,
+      },
     })
 
     const result = await cancelBooking('bk-double')
 
     expect(result.success).toBe(false)
     expect(result.error).toMatch(/already cancelled|modified/i)
+    // INVARIANT: the RPC must be called with the caller's own user id
+    // from the authenticated session — never a client-suppliable value.
+    expect(mockRpc).toHaveBeenCalledWith('cancel_confirmed_booking', {
+      p_user_id: 'user-1',
+      p_booking_id: 'bk-double',
+      p_refunded_amount_pence: 0,
+      p_stripe_refund_id: null,
+    })
   })
 })
 
@@ -310,8 +325,9 @@ describe('cancelBooking — refund-reconcile Sentry breadcrumb', () => {
         slug: 'wine',
       },
       // The catastrophic case: Stripe took the money out but our DB
-      // couldn't record it. Operator MUST be paged.
-      updateResult: {
+      // couldn't record it (RPC-level error, not the RPC's own jsonb
+      // `error` key). Operator MUST be paged.
+      rpcResult: {
         data: null,
         error: { message: 'db connection lost mid-write' },
       },

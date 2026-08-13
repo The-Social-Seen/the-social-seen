@@ -1,0 +1,183 @@
+-- Migration: revoke_bookings_admin_hold_column_write
+--
+-- ── Vulnerability this closes ───────────────────────────────────────────
+-- Follow-up to the `abandonPendingCheckout` P0 fix (src/app/events/[slug]/
+-- actions.ts). That fix made the rollback status of an abandoned checkout
+-- derive entirely from three columns read fresh off the caller's own
+-- booking row: `is_admin_hold`, `cancelled_at`, `waitlist_position`
+-- (see the security comment above `abandonPendingCheckout`). Reading from
+-- the DB instead of trusting a client-supplied URL param closed the
+-- original exploit (free confirmed tickets via URL spoofing) — but only
+-- if those three columns are themselves trustworthy.
+--
+-- `is_admin_hold` and `admin_hold_expires_at` were NOT trustworthy. The
+-- `bookings_update` RLS policy (`supabase/migrations/
+-- 20260402000006_create_bookings.sql`, ~lines 59-66) allows any
+-- authenticated member to UPDATE their own row:
+--
+--   CREATE POLICY "bookings_update"
+--     ON public.bookings FOR UPDATE
+--     USING (user_id = auth.uid() OR <admin>);
+--
+-- This has no WITH CHECK clause restricting which columns may change, and
+-- no column-level REVOKE existed anywhere in supabase/migrations/ for
+-- `is_admin_hold` / `admin_hold_expires_at` (confirmed via
+-- `grep -rn "REVOKE" supabase/migrations/*.sql | grep -i bookings` —
+-- zero hits before this migration). Net effect: a member could start a
+-- genuine paid checkout (creating a real `pending_payment` row with
+-- `is_admin_hold=false`), then issue a direct
+-- `PATCH {SUPABASE_URL}/rest/v1/bookings?id=eq.<their own booking id>`
+-- request with their own session token setting
+-- `{"is_admin_hold": true}`. RLS accepts it (it's their own row) and
+-- nothing blocks the column write. Triggering `abandonPendingCheckout`
+-- afterwards (e.g. hitting "back" from Stripe) then reads
+-- `is_admin_hold=true, cancelled_at=null, waitlist_position=null` — the
+-- exact signature the code treats as an "admin payment-remediation hold"
+-- — and rolls the booking to `status='confirmed'`. Free ticket, zero
+-- payment: same severity as the original bug, different door.
+--
+-- This migration closes that door at the grant layer:
+--
+--   REVOKE UPDATE (is_admin_hold, admin_hold_expires_at)
+--     ON public.bookings FROM authenticated, anon;
+--
+-- With this in place, any UPDATE issued by the `authenticated` or `anon`
+-- Postgres role (i.e. anything going through the user-scoped
+-- PostgREST/Supabase client — which is what every RLS-governed REST call
+-- and Server Action using `createServerClient()` executes as) that
+-- includes either of these two columns in its SET list is rejected with
+-- a permission-denied error, regardless of the value being written and
+-- regardless of whether the row belongs to the caller. Column-level
+-- UPDATE privilege checks in Postgres are based on which columns appear
+-- in the SET clause, not on whether RLS's USING clause would otherwise
+-- allow the row — see "Idempotency & mechanics" below.
+--
+-- ── Why `cancelled_at` and `waitlist_position` are deliberately NOT
+--    included in this REVOKE ─────────────────────────────────────────────
+-- Both columns are legitimately written directly (i.e. NOT via a
+-- SECURITY DEFINER RPC) by the user-scoped client in two self-service
+-- flows, confirmed by reading both call sites before writing this
+-- migration:
+--
+--   1. `cancelBooking` (src/app/events/[slug]/actions.ts, function starts
+--      ~line 854). Its status UPDATE (~lines 973-984) writes
+--      `cancelled_at: now.toISOString()` (alongside `status: 'cancelled'`,
+--      `refunded_amount_pence`, `refunded_at`, `stripe_refund_id`) using
+--      the request-scoped `createServerClient()` — i.e. as the
+--      `authenticated` Postgres role. Revoking `cancelled_at` would break
+--      every user-initiated cancellation with a refund.
+--
+--   2. `leaveWaitlist` (src/app/events/[slug]/actions.ts, ~lines
+--      1126-1183). Its status UPDATE (~line 1180) writes
+--      `waitlist_position: null` alongside `status: 'cancelled'`, again
+--      via the user-scoped client. Revoking `waitlist_position` would
+--      break every user-initiated "leave the waitlist" action.
+--
+--   3. (Additional confirmation, not required by the reviewer but
+--      checked for completeness.) `deleteMyAccount`
+--      (src/app/(member)/profile/privacy-actions.ts, ~line 260) also
+--      writes `cancelled_at` on account deletion, but does so via
+--      `createAdminClient()` (the `service_role` key), which is unaffected
+--      by any REVOKE against `authenticated`/`anon` regardless — this
+--      confirms including `cancelled_at` in the REVOKE was never necessary
+--      to protect that path either.
+--
+-- Revoking `cancelled_at` / `waitlist_position` would therefore break
+-- real, legitimate self-service flows. Only `is_admin_hold` and
+-- `admin_hold_expires_at` are revoked — those two are exclusively meant
+-- to be set by admin-triggered, server-side logic (see below), never by
+-- a member's own direct table write.
+--
+-- ── Confirmed non-impact on the SECURITY DEFINER admin-hold RPCs ───────
+-- Every writer of `is_admin_hold = true` (and its release counterparts
+-- that write `is_admin_hold = false` as part of an admin-driven
+-- transition) is a `SECURITY DEFINER` Postgres function, not a direct
+-- table UPDATE from the user-scoped client. SECURITY DEFINER functions
+-- execute with the privileges of the function OWNER (the migration-role/
+-- `postgres` superuser that created them), not the privileges of the
+-- calling `authenticated`/`anon` role — so a column-level REVOKE against
+-- `authenticated`/`anon` has no effect on what these functions can write
+-- internally. Confirmed by grepping each of the following files for
+-- `LANGUAGE plpgsql SECURITY DEFINER`, all of which matched:
+--
+--   • supabase/migrations/20260713000002_admin_promote_waitlist_to_hold_rpc.sql
+--       - public.admin_promote_waitlist_to_hold(...)   [sets is_admin_hold = true,  line ~213/224]
+--       - public.reap_stale_pending_bookings()          [reads is_admin_hold, unaffected]
+--   • supabase/migrations/20260713000004_admin_hold_confirmed_booking_and_release_rpcs.sql
+--       - public.admin_hold_confirmed_booking_for_payment(...) [sets is_admin_hold = true,  line ~255/267]
+--       - public.admin_revert_hold_to_waitlist(...)             [sets is_admin_hold = false, line ~334/364]
+--   • supabase/migrations/20260808000003_admin_reinstate_cancelled_booking_rpcs.sql
+--       - public.admin_reinstate_cancelled_booking_for_payment(...) [sets is_admin_hold = true,  line ~300/306]
+--       - public.admin_release_reinstated_hold_to_cancelled(...)    [sets is_admin_hold = false, line ~359/368]
+--       - public.admin_revert_hold_to_waitlist(...)                 [sets is_admin_hold = false, line ~454/478]
+--
+-- All six are declared `$$ LANGUAGE plpgsql SECURITY DEFINER`. None of
+-- them are affected by this REVOKE. Each is separately gated by its own
+-- `REVOKE EXECUTE ... FROM PUBLIC` / `GRANT EXECUTE ... TO authenticated`
+-- (admin-role-checked internally) or admin-only invocation path, per
+-- their own migration headers — that authorization model is unchanged
+-- by this migration.
+--
+-- ── KNOWN OPEN RISK — flagged for the planner / code-reviewer, NOT fixed
+--    here (out of scope per this task's explicit instruction not to
+--    touch `abandonPendingCheckout`) ──────────────────────────────────────
+-- `abandonPendingCheckout` itself (src/app/events/[slug]/actions.ts,
+-- ~lines 660-775) also performs a direct table UPDATE via the
+-- user-scoped `createServerClient()` (NOT a SECURITY DEFINER RPC) whose
+-- payload UNCONDITIONALLY includes both `is_admin_hold: false` and
+-- `admin_hold_expires_at: null` on every single invocation (see the
+-- `updatePayload` object, ~lines 733-745, and the comment above it:
+-- "Unconditionally clear the admin-hold flag ... required on every
+-- admin-hold origin"). Because Postgres column-level UPDATE privilege is
+-- checked against columns appearing in the SET clause — irrespective of
+-- whether the value actually changes — this REVOKE will cause EVERY call
+-- to `abandonPendingCheckout` to fail with a permission-denied error for
+-- column "is_admin_hold" once this migration is applied, not just the
+-- exploit path. This is a real regression of the just-shipped P0 fix,
+-- not merely a theoretical one, and must be resolved (most likely by
+-- moving the admin-hold-clearing step behind a small SECURITY DEFINER
+-- RPC, mirroring `admin_revert_hold_to_waitlist` /
+-- `admin_release_reinstated_hold_to_cancelled`) before this migration is
+-- deployed alongside the current `abandonPendingCheckout` implementation.
+-- Surfaced explicitly in this migration's author's HANDOVER — routing
+-- back to code-reviewer/architect before merge.
+--
+-- ── RESOLVED ─────────────────────────────────────────────────────────────
+-- See supabase/migrations/20260812180000_abandon_pending_checkout_rpc.sql
+-- and docs/SYSTEM-DESIGN-abandon-checkout-rpc.md. `abandonPendingCheckout`
+-- (src/app/events/[slug]/actions.ts) no longer performs a direct table
+-- UPDATE via the user-scoped client; the lookup + branch + write moved
+-- into a new `abandon_pending_checkout` SECURITY DEFINER RPC, which
+-- executes as its owner and is therefore unaffected by this migration's
+-- REVOKE. Both migrations must still ship in the same PR / same
+-- `supabase db push --include-all --linked` run as the accompanying
+-- `actions.ts` change — see that spec's §7 for the staggered-deploy risk
+-- this note originally flagged.
+--
+-- ── Idempotency & mechanics ─────────────────────────────────────────────
+-- REVOKE is naturally idempotent in Postgres: revoking a privilege that
+-- has already been revoked (or was never granted) is not an error — it
+-- simply has no effect on subsequent runs. Safe to re-run this migration
+-- file, and safe if applied more than once across environments.
+--
+-- ── Post-merge (this repo's convention — CI only applies migrations to
+--    local/CI Supabase, not to the linked production project) ──────────
+-- This migration could NOT be tested against a live Supabase instance in
+-- this sandbox (no Docker available, confirmed by a prior agent session
+-- — `supabase start` requires a local Docker daemon). After merge, a
+-- human must run:
+--
+--   supabase db push --include-all --linked
+--
+-- and then manually verify the REVOKE actually landed, e.g. via the SQL
+-- editor / `psql` against the linked project:
+--
+--   SELECT has_column_privilege('authenticated', 'bookings', 'is_admin_hold', 'UPDATE');
+--   -- expected: false
+--
+-- (Also worth spot-checking `admin_hold_expires_at` and `anon` the same
+-- way if paranoid, though `anon` should already be unable to UPDATE
+-- bookings at all via RLS — this REVOKE is defense-in-depth for that
+-- role.)
+
+REVOKE UPDATE (is_admin_hold, admin_hold_expires_at) ON public.bookings FROM authenticated, anon;

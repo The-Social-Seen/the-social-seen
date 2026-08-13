@@ -600,7 +600,14 @@ describe('softDeleteEvent', () => {
 
 describe('promoteFromWaitlist', () => {
   it('promotes a waitlisted booking to confirmed', async () => {
-    mockRpc.mockResolvedValue({ error: null })
+    // Capacity check + status transition + waitlist recompute now all
+    // live inside the admin_promote_waitlist_to_confirmed SECURITY
+    // DEFINER RPC (one row-locked transaction) — see
+    // docs/SYSTEM-DESIGN-bookings-write-authorization-hardening.md §3.4.
+    mockRpc.mockResolvedValue({
+      data: { booking_id: 'bk-1', user_id: 'u-1', status: 'confirmed' },
+      error: null,
+    })
     mockAdminWithSequence([
       // fetch booking
       { data: { id: 'bk-1', event_id: 'evt-1', user_id: 'u-1', status: 'waitlisted' } },
@@ -611,10 +618,6 @@ describe('promoteFromWaitlist', () => {
       // exercise (see actions-promote-waitlist-paid.test.ts for paid-path
       // coverage).
       { data: { id: 'evt-1', slug: 'test-event', capacity: 20, price: 0 } },
-      // count confirmed
-      { count: 15 },
-      // update booking
-      { error: null },
       // get promoted user name
       { data: { full_name: 'Charlotte' } },
     ])
@@ -623,7 +626,12 @@ describe('promoteFromWaitlist', () => {
 
     expect(result.success).toBe(true)
     expect(result.promotedName).toBe('Charlotte')
-    expect(mockRpc).toHaveBeenCalledWith('recompute_waitlist_positions', { p_event_id: 'evt-1' })
+    // INVARIANT: the RPC must be called with only the booking id — never
+    // a client-suppliable user id or status — since the RPC derives the
+    // caller's admin role from auth.uid() itself.
+    expect(mockRpc).toHaveBeenCalledWith('admin_promote_waitlist_to_confirmed', {
+      p_booking_id: 'bk-1',
+    })
   })
 
   it('rejects promote for non-waitlisted booking', async () => {
@@ -637,6 +645,14 @@ describe('promoteFromWaitlist', () => {
   })
 
   it('rejects promote when event is at full capacity', async () => {
+    // The capacity check is now SQL-side, inside
+    // admin_promote_waitlist_to_confirmed (row-locked, same predicate as
+    // before: IN ('confirmed', 'pending_payment') >= capacity). The TS
+    // caller just surfaces whatever error the RPC returns verbatim.
+    mockRpc.mockResolvedValue({
+      data: { error: 'Event is at full capacity — cannot promote' },
+      error: null,
+    })
     mockAdminWithSequence([
       { data: { id: 'bk-1', event_id: 'evt-1', user_id: 'u-1', status: 'waitlisted' } },
       // price: 0 — free branch (see comment in the test above). The
@@ -644,12 +660,30 @@ describe('promoteFromWaitlist', () => {
       // lives in the migration static/skip tests (it's SQL-side, inside
       // admin_promote_waitlist_to_hold, not TS-side for paid events).
       { data: { id: 'evt-1', slug: 'test-event', capacity: 20, price: 0 } },
-      { count: 20 },
     ])
 
     const result = await promoteFromWaitlist('bk-1')
 
     expect(result.error).toContain('full capacity')
+  })
+
+  it('surfaces a transport-level RPC error (network failure) rather than silently succeeding', async () => {
+    // INVARIANT: a network-level failure calling the RPC (distinct from
+    // the RPC's own jsonb `{error: ...}` business-logic response) must
+    // still be surfaced to the admin, not swallowed into a false success.
+    mockRpc.mockResolvedValue({
+      data: null,
+      error: { message: 'connection reset by peer' },
+    })
+    mockAdminWithSequence([
+      { data: { id: 'bk-1', event_id: 'evt-1', user_id: 'u-1', status: 'waitlisted' } },
+      { data: { id: 'evt-1', slug: 'test-event', capacity: 20, price: 0 } },
+    ])
+
+    const result = await promoteFromWaitlist('bk-1')
+
+    expect(result).toEqual({ error: 'connection reset by peer' })
+    expect(result).not.toHaveProperty('success')
   })
 
   it('rejects promote for non-existent booking', async () => {
