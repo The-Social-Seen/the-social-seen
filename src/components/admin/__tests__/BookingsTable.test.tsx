@@ -26,6 +26,10 @@ interface TestBooking {
   waitlist_position: number | null
   booked_at: string
   created_at: string
+  // Mirrors the real BookingRow shape's new field — gates
+  // showSendPaymentLink so it never shows on a booking correctly
+  // settled at £0.
+  price_at_booking: number
   stripe_payment_id?: string | null
   stripe_refund_id?: string | null
   refunded_amount_pence?: number | null
@@ -55,6 +59,10 @@ const booking = (overrides: Partial<TestBooking> = {}): TestBooking => ({
   waitlist_position: null,
   booked_at: '2026-04-10T12:00:00.000Z',
   created_at: '2026-04-10T12:00:00.000Z',
+  // Nonzero default so existing showSendPaymentLink-on tests keep their
+  // intended behavior; tests exercising the £0-settled case override
+  // this explicitly.
+  price_at_booking: 1000,
   is_admin_hold: false,
   admin_hold_expires_at: null,
   profile: {
@@ -309,6 +317,19 @@ describe('BookingsTable — showSendPaymentLink visibility (isPaidEvent && confi
     const { container } = render(
       <BookingsTable
         bookings={[booking({ status: 'cancelled', stripe_payment_id: null })]}
+        eventId="evt-1"
+        isPaidEvent
+      />,
+    )
+    expect(container.textContent).not.toContain('Send Payment Link')
+  })
+
+  it('does NOT render "Send Payment Link" for a booking correctly settled at £0 on a paid event (e.g. a 100%-off coupon — fix/webhook-zero-total-coupon-detection) even though the event itself is paid and stripe_payment_id is null', () => {
+    const { container } = render(
+      <BookingsTable
+        bookings={[
+          booking({ status: 'confirmed', stripe_payment_id: null, price_at_booking: 0 }),
+        ]}
         eventId="evt-1"
         isPaidEvent
       />,
